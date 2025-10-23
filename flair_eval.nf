@@ -344,7 +344,7 @@ process RunAlignQC {
 
     input:
     tuple val(datasetName), val(datasetSpec), val(commandIdx),
-        path(stdoutFile), path(stderrFile), path(metadataFile)
+        path(stdoutFile), path(stderrFile), path(metadataFile), path(alignQcScript)
 
     output:
     tuple val(datasetName), val(datasetSpec), val(commandIdx), path('align_qc.tsv')
@@ -354,11 +354,12 @@ process RunAlignQC {
     def stdoutName = stdoutFile.getFileName().toString()
     def stderrName = stderrFile.getFileName().toString()
     def metadataName = metadataFile.getFileName().toString()
+    def alignQcPath = alignQcScript.toString()
 
     """
     |set -euo pipefail
     |
-    |python ${projectDir}/bin/align_qc.py \\
+    |python ${alignQcPath} \\
     |    --dataset '${datasetEsc}' \\
     |    --command-idx ${commandIdx} \\
     |    --stdout '${stdoutName}' \\
@@ -454,7 +455,7 @@ process RunRegionalizeQC {
 
     input:
     tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
-        path(stdoutFile), path(stderrFile), path(metadataFile), val(regionDetailsRef)
+        path(stdoutFile), path(stderrFile), path(metadataFile), val(regionDetailsRef), path(regionalizeQcScript)
 
     output:
     tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
@@ -469,6 +470,7 @@ process RunRegionalizeQC {
     def stdoutName = stdoutFile.getFileName().toString()
     def stderrName = stderrFile.getFileName().toString()
     def metadataName = metadataFile.getFileName().toString()
+    def regionalizeQcPath = regionalizeQcScript.toString()
     def regionDetailsPath = null
     if (regionDetailsRef) {
         if (regionDetailsRef instanceof Collection && !regionDetailsRef.isEmpty()) {
@@ -480,7 +482,6 @@ process RunRegionalizeQC {
     }
 
     List<String> argsList = [
-        "python ${projectDir}/bin/regionalize_qc.py",
         "--dataset '${datasetEsc}'",
         "--align-idx ${alignIdx}",
         "--region-idx ${regionIdx}",
@@ -494,12 +495,13 @@ process RunRegionalizeQC {
         argsList << "--region-details '${escapeForSingleQuotes(regionDetailsPath)}'"
     }
     argsList << "--output 'regionalize_qc.tsv'"
-    def cmd = argsList.join(" \\\n    ")
+    def options = argsList.join(" \\\n    ")
 
     """
     |set -euo pipefail
     |
-    |${cmd}
+    |python ${regionalizeQcPath} \\
+    |    ${options}
     """.stripMargin().trim()
 }
 
@@ -604,7 +606,8 @@ workflow flair_eval {
                 def stdoutFile = values[5]
                 def stderrFile = values[6]
                 def metadataFile = values[7]
-                tuple(datasetName, datasetSpec, alignIdx, stdoutFile, stderrFile, metadataFile)
+                def alignQcScript = file("${projectDir}/bin/align_qc.py")
+                tuple(datasetName, datasetSpec, alignIdx, stdoutFile, stderrFile, metadataFile, alignQcScript)
             }
             align_qc_results_channel = RunAlignQC(align_qc_inputs)
         }
@@ -701,7 +704,8 @@ workflow flair_eval {
                 def stderrFile = values[6]
                 def metadataFile = values[7]
                 def regionDetails = values.size() > 8 ? values[8] : null
-                tuple(datasetName, datasetSpec, alignIdx, regionIdx, regionSpec, stdoutFile, stderrFile, metadataFile, regionDetails)
+                def regionalizeQcScript = file("${projectDir}/bin/regionalize_qc.py")
+                tuple(datasetName, datasetSpec, alignIdx, regionIdx, regionSpec, stdoutFile, stderrFile, metadataFile, regionDetails, regionalizeQcScript)
             }
             regionalize_qc_results_channel = RunRegionalizeQC(regionalize_qc_inputs)
 
