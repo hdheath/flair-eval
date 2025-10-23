@@ -336,6 +336,38 @@ process RunFlairAlign {
     """.stripMargin().trim()
 }
 
+process RunAlignQC {
+    tag { "${datasetName}::${commandIdx}" }
+    conda RESOLVED_CONDA_ENV
+    publishDir { "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${commandIdx}" }, mode: 'copy'
+    storeDir { "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${commandIdx}/qc" }
+
+    input:
+    tuple val(datasetName), val(datasetSpec), val(commandIdx),
+        path(stdoutFile), path(stderrFile), path(metadataFile)
+
+    output:
+    tuple val(datasetName), val(datasetSpec), val(commandIdx), path('align_qc.tsv')
+
+    script:
+    def datasetEsc = escapeForSingleQuotes(datasetName)
+    def stdoutName = stdoutFile.getFileName().toString()
+    def stderrName = stderrFile.getFileName().toString()
+    def metadataName = metadataFile.getFileName().toString()
+
+    """
+    |set -euo pipefail
+    |
+    |python ${projectDir}/bin/align_qc.py \\
+    |    --dataset '${datasetEsc}' \\
+    |    --command-idx ${commandIdx} \\
+    |    --stdout '${stdoutName}' \\
+    |    --stderr '${stderrName}' \\
+    |    --metadata '${metadataName}' \\
+    |    --output 'align_qc.tsv'
+    """.stripMargin().trim()
+}
+
 process RunFlairRegionalize {
     tag { "${datasetName}::align${alignIdx}::region${regionIdx}" }
     conda RESOLVED_CONDA_ENV
@@ -414,6 +446,63 @@ process RunFlairRegionalize {
     """.stripMargin().trim()
 }
 
+process RunRegionalizeQC {
+    tag { "${datasetName}::align${alignIdx}::region${regionIdx}" }
+    conda RESOLVED_CONDA_ENV
+    publishDir { "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}/flair_regionalize${regionIdx}" }, mode: 'copy'
+    storeDir { "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}/flair_regionalize${regionIdx}/qc" }
+
+    input:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        path(stdoutFile), path(stderrFile), path(metadataFile), val(regionDetailsRef)
+
+    output:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        path('regionalize_qc.tsv')
+
+    script:
+    def datasetEsc = escapeForSingleQuotes(datasetName)
+    def modeValue = regionSpec?.mode?.toString() ?: 'unknown'
+    def modeEsc = escapeForSingleQuotes(modeValue)
+    def commandText = regionSpec?.command_text?.toString() ?: ''
+    def commandEsc = escapeForSingleQuotes(commandText)
+    def stdoutName = stdoutFile.getFileName().toString()
+    def stderrName = stderrFile.getFileName().toString()
+    def metadataName = metadataFile.getFileName().toString()
+    def regionDetailsPath = null
+    if (regionDetailsRef) {
+        if (regionDetailsRef instanceof Collection && !regionDetailsRef.isEmpty()) {
+            def first = regionDetailsRef[0]
+            regionDetailsPath = first ? first.toString() : null
+        } else if (!(regionDetailsRef instanceof Collection)) {
+            regionDetailsPath = regionDetailsRef.toString()
+        }
+    }
+
+    List<String> argsList = [
+        "python ${projectDir}/bin/regionalize_qc.py",
+        "--dataset '${datasetEsc}'",
+        "--align-idx ${alignIdx}",
+        "--region-idx ${regionIdx}",
+        "--mode '${modeEsc}'",
+        "--command-text '${commandEsc}'",
+        "--stdout '${stdoutName}'",
+        "--stderr '${stderrName}'",
+        "--metadata '${metadataName}'"
+    ]
+    if (regionDetailsPath) {
+        argsList << "--region-details '${escapeForSingleQuotes(regionDetailsPath)}'"
+    }
+    argsList << "--output 'regionalize_qc.tsv'"
+    def cmd = argsList.join(" \\\n    ")
+
+    """
+    |set -euo pipefail
+    |
+    |${cmd}
+    """.stripMargin().trim()
+}
+
 workflow flair_eval {
     take:
         // none
@@ -458,7 +547,8 @@ workflow flair_eval {
             commandEntries << [idx + 1, cmd]
         }
 
-        def align_results_channel = Channel.empty()
+        def align_payloads = Channel.empty()
+        def align_qc_results_channel = Channel.empty()
         if (commandEntries) {
             def align_inputs = dataset_for_commands.flatMap { datasetName, spec ->
                 commandEntries.collect { info ->
@@ -468,44 +558,59 @@ workflow flair_eval {
                     tuple(datasetName, spec, commandIdx, template, rendered)
                 }
             }
-            align_results_channel = RunFlairAlign(align_inputs)
-        }
-        def align_payloads = align_results_channel.map { values ->
-            def datasetName = values[0]
-            def datasetSpec = values[1]
-            def alignIdx = values[2]
-            def commandTemplate = values[3]
-            def renderedCommand = values[4]
-            def stdoutFile = values[5]
-            def stderrFile = values[6]
-            def metadataFile = values[7]
-            def bamPaths = values.size() > 8 ? values[8] : []
-            def bedPaths = values.size() > 9 ? values[9] : []
-            def bamFiles = flattenPathList(bamPaths)
-                .findAll { it.getFileName().toString().toLowerCase().endsWith('.bam') && !it.getFileName().toString().toLowerCase().endsWith('.bam.bai') }
-            def bedFiles = flattenPathList(bedPaths)
-                .findAll { it.getFileName().toString().toLowerCase().endsWith('.bed') }
-            if (bamFiles.isEmpty()) {
-                throw new IllegalStateException("Align command ${alignIdx} for dataset ${datasetName} did not produce a BAM file.")
+            def raw_align_results = RunFlairAlign(align_inputs)
+            def align_results_for_payload = raw_align_results.map { it }
+            def align_results_for_qc = raw_align_results.map { it }
+
+            align_payloads = align_results_for_payload.map { values ->
+                def datasetName = values[0]
+                def datasetSpec = values[1]
+                def alignIdx = values[2]
+                def commandTemplate = values[3]
+                def renderedCommand = values[4]
+                def stdoutFile = values[5]
+                def stderrFile = values[6]
+                def metadataFile = values[7]
+                def bamPaths = values.size() > 8 ? values[8] : []
+                def bedPaths = values.size() > 9 ? values[9] : []
+                def bamFiles = flattenPathList(bamPaths)
+                    .findAll { it.getFileName().toString().toLowerCase().endsWith('.bam') && !it.getFileName().toString().toLowerCase().endsWith('.bam.bai') }
+                def bedFiles = flattenPathList(bedPaths)
+                    .findAll { it.getFileName().toString().toLowerCase().endsWith('.bed') }
+                if (bamFiles.isEmpty()) {
+                    throw new IllegalStateException("Align command ${alignIdx} for dataset ${datasetName} did not produce a BAM file.")
+                }
+                if (bedFiles.isEmpty()) {
+                    throw new IllegalStateException("Align command ${alignIdx} for dataset ${datasetName} did not produce a BED file.")
+                }
+                [
+                    datasetName    : datasetName,
+                    datasetSpec    : datasetSpec,
+                    alignIndex     : alignIdx,
+                    commandTemplate: commandTemplate,
+                    renderedCommand: renderedCommand,
+                    stdoutPath     : stdoutFile,
+                    stderrPath     : stderrFile,
+                    metadataPath   : metadataFile,
+                    bamFiles       : bamFiles,
+                    bedFiles       : bedFiles
+                ]
             }
-            if (bedFiles.isEmpty()) {
-                throw new IllegalStateException("Align command ${alignIdx} for dataset ${datasetName} did not produce a BED file.")
+
+            def align_qc_inputs = align_results_for_qc.map { values ->
+                def datasetName = values[0]
+                def datasetSpec = values[1]
+                def alignIdx = values[2]
+                def stdoutFile = values[5]
+                def stderrFile = values[6]
+                def metadataFile = values[7]
+                tuple(datasetName, datasetSpec, alignIdx, stdoutFile, stderrFile, metadataFile)
             }
-            [
-                datasetName    : datasetName,
-                datasetSpec    : datasetSpec,
-                alignIndex     : alignIdx,
-                commandTemplate: commandTemplate,
-                renderedCommand: renderedCommand,
-                stdoutPath     : stdoutFile,
-                stderrPath     : stderrFile,
-                metadataPath   : metadataFile,
-                bamFiles       : bamFiles,
-                bedFiles       : bedFiles
-            ]
+            align_qc_results_channel = RunAlignQC(align_qc_inputs)
         }
 
         align_results = align_payloads
+        align_qc_results = align_qc_results_channel
 
         def regionalizeCommandsRaw = normalizeCommands(params.regionalize_commands)
         if (!regionalizeCommandsRaw) {
@@ -520,6 +625,7 @@ workflow flair_eval {
         }
 
         def regionalize_results_channel = Channel.empty()
+        def regionalize_qc_results_channel = Channel.empty()
         if (commandEntries && !regionalizeSpecs.isEmpty()) {
             def requests = align_payloads.flatMap { payload ->
                 regionalizeSpecs.collect { spec ->
@@ -541,23 +647,26 @@ workflow flair_eval {
             def run_requests = requests.filter { it.mode != 'all' }
             def bypass_requests = requests.filter { it.mode == 'all' }
 
-            def run_results = RunFlairRegionalize(
-                run_requests.map { req ->
-                    def alignPayload = req.alignPayload
-                    def bam = alignPayload.bamFiles[0]
-                    def bed = alignPayload.bedFiles[0]
-                    tuple(
-                        req.datasetName,
-                        req.datasetSpec,
-                        req.alignIndex,
-                        req.regionIndex,
-                        req.regionSpec,
-                        bam,
-                        bed,
-                        alignPayload.metadataPath
-                    )
-                }
-            ).map { values ->
+            def run_inputs = run_requests.map { req ->
+                def alignPayload = req.alignPayload
+                def bam = alignPayload.bamFiles[0]
+                def bed = alignPayload.bedFiles[0]
+                tuple(
+                    req.datasetName,
+                    req.datasetSpec,
+                    req.alignIndex,
+                    req.regionIndex,
+                    req.regionSpec,
+                    bam,
+                    bed,
+                    alignPayload.metadataPath
+                )
+            }
+            def raw_run_results = RunFlairRegionalize(run_inputs)
+            def run_results_for_map = raw_run_results.map { it }
+            def run_results_for_qc = raw_run_results.map { it }
+
+            def run_results = run_results_for_map.map { values ->
                 def regionSpec = new LinkedHashMap<String, Object>(values[4])
                 def alignPayload = regionSpec.remove('_align_payload')
                 [
@@ -580,6 +689,21 @@ workflow flair_eval {
                     alignPayload : alignPayload
                 ]
             }
+
+            def regionalize_qc_inputs = run_results_for_qc.map { values ->
+                def datasetName = values[0]
+                def datasetSpec = values[1]
+                def alignIdx = values[2]
+                def regionIdx = values[3]
+                def regionSpec = new LinkedHashMap<String, Object>(values[4])
+                regionSpec.remove('_align_payload')
+                def stdoutFile = values[5]
+                def stderrFile = values[6]
+                def metadataFile = values[7]
+                def regionDetails = values.size() > 8 ? values[8] : null
+                tuple(datasetName, datasetSpec, alignIdx, regionIdx, regionSpec, stdoutFile, stderrFile, metadataFile, regionDetails)
+            }
+            regionalize_qc_results_channel = RunRegionalizeQC(regionalize_qc_inputs)
 
             def bypass_results = bypass_requests.map { req ->
                 def regionSpec = new LinkedHashMap<String, Object>(req.regionSpec)
@@ -608,11 +732,14 @@ workflow flair_eval {
             regionalize_results_channel = run_results.mix(bypass_results)
         }
         regionalize_results = regionalize_results_channel
+        regionalize_qc_results = regionalize_qc_results_channel
 
     emit:
         dataset_manifests
         align_results
+        align_qc_results
         regionalize_results
+        regionalize_qc_results
 }
 
 workflow {
