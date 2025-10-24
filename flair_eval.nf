@@ -236,7 +236,7 @@ final String RESOLVED_CONDA_ENV_LABEL = deriveCondaEnvLabel(RESOLVED_CONDA_ENV)
 process MaterializeDatasetSpec {
     tag { datasetName }
     conda RESOLVED_CONDA_ENV
-    publishDir { "results/datasets/${datasetName}" }, mode: 'copy'
+    publishDir "results/datasets/${datasetName}", mode: 'copy'
     storeDir { "cache/datasets/${datasetName}" }
 
     input:
@@ -278,7 +278,7 @@ process MaterializeDatasetSpec {
 process RunFlairAlign {
     tag { "${datasetName}::${commandIdx}" }
     conda RESOLVED_CONDA_ENV
-    publishDir { "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${commandIdx}" }, mode: 'copy'
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${commandIdx}", mode: 'copy'
     storeDir { "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${commandIdx}" }
 
     input:
@@ -339,7 +339,7 @@ process RunFlairAlign {
 process RunAlignQC {
     tag { "${datasetName}::${commandIdx}" }
     conda RESOLVED_CONDA_ENV
-    publishDir { "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${commandIdx}" }, mode: 'copy'
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${commandIdx}", mode: 'copy'
     storeDir { "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${commandIdx}/qc" }
 
     input:
@@ -372,7 +372,7 @@ process RunAlignQC {
 process RunFlairRegionalize {
     tag { "${datasetName}::align${alignIdx}::region${regionIdx}" }
     conda RESOLVED_CONDA_ENV
-    publishDir { "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}/flair_regionalize${regionIdx}" }, mode: 'copy'
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}/flair_regionalize${regionIdx}", mode: 'copy'
     storeDir { "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}/flair_regionalize${regionIdx}" }
 
     input:
@@ -450,7 +450,7 @@ process RunFlairRegionalize {
 process RunRegionalizeQC {
     tag { "${datasetName}::align${alignIdx}::region${regionIdx}" }
     conda RESOLVED_CONDA_ENV
-    publishDir { "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}/flair_regionalize${regionIdx}" }, mode: 'copy'
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}/flair_regionalize${regionIdx}", mode: 'copy'
     storeDir { "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}/flair_regionalize${regionIdx}/qc" }
 
     input:
@@ -505,6 +505,194 @@ process RunRegionalizeQC {
     """.stripMargin().trim()
 }
 
+process RunFlairCorrect {
+    tag {
+        def parts = ["${datasetName}", "align${alignIdx}"]
+        parts << ((mode == 'region') ? "region${regionIdx}" : mode)
+        parts << "correct${commandIdx}"
+        parts.join("::")
+    }
+    conda RESOLVED_CONDA_ENV
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/correct/flair_correct${commandIdx}", mode: 'copy'
+    storeDir "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/correct/flair_correct${commandIdx}"
+
+    input:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        val(mode), val(regionTag), val(commandIdx), val(commandTemplate), val(renderedCommand),
+        path(correctInputBed),
+        val(correctInputBam),
+        val(alignMetadata),
+        val(alignPayload)
+
+    output:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        val(mode), val(regionTag), val(commandIdx), val(commandTemplate), val(renderedCommand),
+        path('correct_stdout.txt'), path('correct_stderr.txt'), path('correct_metadata.json'),
+        path('*_all_corrected.bed', optional: true),
+        path('*_all_inconsistent.bed', optional: true),
+        path('*_cannot_verify.bed', optional: true),
+        val(alignPayload)
+
+    script:
+    def bedPath = correctInputBed as Path
+    def bamPath = correctInputBam ? (correctInputBam as Path) : null
+    def alignMetaPath = alignMetadata ? (alignMetadata as Path) : null
+
+    def bedName = bedPath.getFileName().toString()
+    def bedNameEsc = escapeForSingleQuotes(bedName)
+    def bamName = bamPath ? bamPath.getFileName().toString() : null
+    def bamSourceEsc = bamPath ? escapeForSingleQuotes(bamPath.toAbsolutePath().toString()) : null
+    def bamNameEsc = bamName ? escapeForSingleQuotes(bamName) : null
+    def alignMetaName = alignMetaPath ? alignMetaPath.getFileName().toString() : null
+    def alignMetaSourceEsc = alignMetaPath ? escapeForSingleQuotes(alignMetaPath.toAbsolutePath().toString()) : null
+    def alignMetaNameEsc = alignMetaName ? escapeForSingleQuotes(alignMetaName) : null
+    def bedStem = bedName.toLowerCase().endsWith('.bed') ? bedName.substring(0, bedName.length() - 4) : bedName
+    def cannotVerifyName = "${bedStem}_cannot_verify.bed"
+    def cannotVerifyNameEsc = escapeForSingleQuotes(cannotVerifyName)
+
+    def metadataMap = [
+        dataset          : datasetName,
+        align_index      : alignIdx,
+        region_index     : regionIdx,
+        region_mode      : mode,
+        region_tag       : regionTag,
+        command_index    : commandIdx,
+        command_template : commandTemplate,
+        command_rendered : renderedCommand,
+        correct_input_bed: bedName,
+        correct_input_bam: bamName,
+        align_metadata   : alignMetaName,
+        region_spec      : regionSpec,
+        runtime          : [
+            conda_env      : RESOLVED_CONDA_ENV,
+            conda_env_label: RESOLVED_CONDA_ENV_LABEL
+        ]
+    ]
+    def metadataJson = JsonOutput.prettyPrint(JsonOutput.toJson(metadataMap))
+
+    """
+    |set -euo pipefail
+    |
+    |if [ ${bamSourceEsc ? 1 : 0} -eq 1 ]; then
+    |    ln -sf '${bamSourceEsc}' '${bamNameEsc}'
+    |fi
+    |if [ ${alignMetaSourceEsc ? 1 : 0} -eq 1 ]; then
+    |    ln -sf '${alignMetaSourceEsc}' '${alignMetaNameEsc}'
+    |fi
+    |
+    |cat <<'CMD' > command_to_run.sh
+    |#!/usr/bin/env bash
+    |set -euo pipefail
+    |${renderedCommand}
+    |CMD
+    |
+    |chmod +x command_to_run.sh
+    |
+    |./command_to_run.sh > correct_stdout.txt 2> correct_stderr.txt
+    |
+    |if [ ! -f '${cannotVerifyNameEsc}' ]; then
+    |    : > '${cannotVerifyNameEsc}'
+    |fi
+    |
+    |cat <<'EOF' > correct_metadata.json
+    |${metadataJson}
+    |EOF
+    |
+    |python - <<'PY'
+    |from pathlib import Path
+    |import json
+    |
+    |meta = Path('correct_metadata.json')
+    |data = json.loads(meta.read_text())
+    |stage = Path('.')
+    |expected = {
+    |    "corrected": "_all_corrected.bed",
+    |    "inconsistent": "_all_inconsistent.bed",
+    |    "cannot_verify": "_cannot_verify.bed",
+    |}
+    |observed = {}
+    |for key, suffix in expected.items():
+    |    files = sorted(p.name for p in stage.glob(f"*{suffix}"))
+    |    observed[key] = files
+    |    if key in ("corrected", "inconsistent") and not files:
+    |        raise SystemExit(f"Expected output matching '*{suffix}' not produced.")
+    |data["observed_outputs"] = observed
+    |meta.write_text(json.dumps(data, indent=2))
+    |PY
+    """.stripMargin().trim()
+}
+
+process RunCorrectQC {
+    tag {
+        def parts = ["${datasetName}", "align${alignIdx}"]
+        parts << ((mode == 'region') ? "region${regionIdx}" : mode)
+        parts << "correct${commandIdx}"
+        parts.join("::")
+    }
+    conda RESOLVED_CONDA_ENV
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/correct/flair_correct${commandIdx}", mode: 'copy'
+    storeDir "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/correct/flair_correct${commandIdx}/qc"
+
+    input:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        val(mode), val(regionTag), val(commandIdx),
+        path(stdoutFile), path(stderrFile), path(metadataFile),
+        val(correctedBed), val(inconsistentBed), val(cannotVerifyBed),
+        val(correctQcScript)
+
+    output:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx),
+        val(mode), val(regionTag), val(commandIdx), path('correct_qc.tsv')
+
+    script:
+    def stdoutPath = stdoutFile as Path
+    def stderrPath = stderrFile as Path
+    def metadataPath = metadataFile as Path
+    def correctedPath = correctedBed ? (correctedBed as Path) : null
+    def inconsistentPath = inconsistentBed ? (inconsistentBed as Path) : null
+    def cannotVerifyPath = cannotVerifyBed ? (cannotVerifyBed as Path) : null
+
+    def datasetEsc = escapeForSingleQuotes(datasetName)
+    def modeEsc = escapeForSingleQuotes(mode?.toString() ?: '')
+    def regionTagEsc = escapeForSingleQuotes(regionTag?.toString() ?: '')
+    def stdoutNameEsc = escapeForSingleQuotes(stdoutPath.getFileName().toString())
+    def stderrNameEsc = escapeForSingleQuotes(stderrPath.getFileName().toString())
+    def metadataNameEsc = escapeForSingleQuotes(metadataPath.getFileName().toString())
+    def correctedEsc = correctedPath ? escapeForSingleQuotes(correctedPath.toAbsolutePath().toString()) : null
+    def inconsistentEsc = inconsistentPath ? escapeForSingleQuotes(inconsistentPath.toAbsolutePath().toString()) : null
+    def cannotVerifyEsc = cannotVerifyPath ? escapeForSingleQuotes(cannotVerifyPath.toAbsolutePath().toString()) : null
+    def correctQcPathEsc = escapeForSingleQuotes((correctQcScript as Path).toAbsolutePath().toString())
+
+    List<String> argsList = [
+        "--dataset '${datasetEsc}'",
+        "--align-idx ${alignIdx}",
+        "--region-idx ${regionIdx != null ? regionIdx : 0}",
+        "--mode '${modeEsc}'",
+        "--region-tag '${regionTagEsc}'",
+        "--stdout '${stdoutNameEsc}'",
+        "--stderr '${stderrNameEsc}'",
+        "--metadata '${metadataNameEsc}'",
+        "--output 'correct_qc.tsv'"
+    ]
+    if (correctedEsc) {
+        argsList << "--corrected '${correctedEsc}'"
+    }
+    if (inconsistentEsc) {
+        argsList << "--inconsistent '${inconsistentEsc}'"
+    }
+    if (cannotVerifyEsc) {
+        argsList << "--cannot-verify '${cannotVerifyEsc}'"
+    }
+    def options = argsList.join(" \\\n    ")
+
+    """
+    |set -euo pipefail
+    |
+    |python ${correctQcPathEsc} \\
+    |    ${options}
+    """.stripMargin().trim()
+}
+
 workflow flair_eval {
     take:
         // none
@@ -539,9 +727,9 @@ workflow flair_eval {
 
         dataset_manifests = MaterializeDatasetSpec(dataset_for_manifest)
 
-        def flairCommands = normalizeCommands(params.flair_commands)
+        def flairCommands = normalizeCommands(params.flair_align_commands)
         if (!flairCommands) {
-            log.info("No --flair_commands supplied; skipping flair align runs.")
+            log.info("No --flair_align_commands supplied; skipping flair align runs.")
         }
 
         def commandEntries = []
@@ -738,12 +926,170 @@ workflow flair_eval {
         regionalize_results = regionalize_results_channel
         regionalize_qc_results = regionalize_qc_results_channel
 
+        def correctCommandsRaw = normalizeCommands(params.flair_correct_commands)
+        if (!correctCommandsRaw) {
+            log.info("No --flair_correct_commands supplied; skipping flair correct runs.")
+        }
+
+        def correctCommandEntries = []
+        correctCommandsRaw.eachWithIndex { cmd, idx ->
+            correctCommandEntries << [idx + 1, cmd]
+        }
+
+        def correct_results_channel = Channel.empty()
+        def correct_qc_results_channel = Channel.empty()
+        if (!correctCommandEntries.isEmpty()) {
+            def correct_inputs = regionalize_results.flatMap { payload ->
+                correctCommandEntries.collect { info ->
+                    def commandIdx = info[0] as int
+                    def template = info[1] as String
+
+                    def regionSpec = new LinkedHashMap<String, Object>(payload.regionSpec ?: [:])
+                    def alignPayload = payload.alignPayload
+
+                    List<Path> bedCandidates = flattenPathList(payload.bedFiles ?: [])
+                    if (!bedCandidates && alignPayload) {
+                        bedCandidates = flattenPathList(alignPayload.bedFiles ?: [])
+                    }
+                    if (!bedCandidates) {
+                        throw new IllegalStateException("Correct stage requires a BED file for dataset ${payload.datasetName}, align ${payload.alignIndex}, region ${payload.regionIndex}.")
+                    }
+                    Path bedFile = null
+                    if (payload.mode == 'region') {
+                        bedFile = bedCandidates.find { it.getFileName().toString() ==~ /(?i)[A-Za-z0-9._-]+_\d+_\d+\.bed$/ }
+                    }
+                    bedFile = bedFile ?: bedCandidates.find { it.getFileName().toString().toLowerCase().endsWith('.bed') }
+                    if (!bedFile) {
+                        throw new IllegalStateException("Correct stage could not select a BED file for dataset ${payload.datasetName}, align ${payload.alignIndex}, region ${payload.regionIndex}.")
+                    }
+                    def regionTagRaw = bedFile.getFileName().toString()
+                    def regionTag = regionTagRaw.toLowerCase().endsWith('.bed')
+                        ? regionTagRaw.substring(0, regionTagRaw.length() - 4)
+                        : regionTagRaw
+
+                    List<Path> bamCandidates = flattenPathList(payload.bamFiles ?: [])
+                    if (!bamCandidates && alignPayload) {
+                        bamCandidates = flattenPathList(alignPayload.bamFiles ?: [])
+                    }
+                    Path bamFile = null
+                    if (payload.mode == 'region') {
+                        bamFile = bamCandidates.find { it.getFileName().toString() ==~ /(?i)[A-Za-z0-9._-]+_\d+_\d+\.bam$/ }
+                    }
+                    bamFile = bamFile ?: (bamCandidates ? bamCandidates[0] : null)
+
+                    def substitution = new LinkedHashMap<String, Object>(payload.datasetSpec ?: [:])
+                    substitution['correct_bed'] = bedFile.getFileName().toString()
+                    substitution['correct_bam'] = bamFile ? bamFile.getFileName().toString() : null
+                    substitution['correct_output_prefix'] = regionTag
+                    substitution['correct_mode'] = payload.mode
+                    substitution['correct_region'] = regionTag
+                    substitution['align_index'] = payload.alignIndex
+                    substitution['region_index'] = payload.regionIndex
+                    def rendered = renderFlairCommand(template, substitution, payload.datasetName)
+
+                    def alignMetadata = alignPayload?.metadataPath
+                    tuple(
+                        payload.datasetName,
+                        payload.datasetSpec,
+                        payload.alignIndex,
+                        payload.regionIndex,
+                        regionSpec,
+                        payload.mode,
+                        regionTag,
+                        commandIdx,
+                        template,
+                        rendered,
+                        bedFile,
+                        bamFile,
+                        alignMetadata,
+                        alignPayload
+                    )
+                }
+            }
+            def raw_correct_results = RunFlairCorrect(correct_inputs)
+            def correct_results_for_map = raw_correct_results.map { it }
+            def correct_results_for_qc = raw_correct_results.map { it }
+
+            correct_results_channel = correct_results_for_map.map { values ->
+                def datasetName = values[0]
+                def datasetSpec = values[1]
+                def alignIdx = values[2]
+                def regionIdx = values[3]
+                def regionSpec = values[4]
+                def mode = values[5]
+                def regionTag = values[6]
+                def commandIdx = values[7]
+                def commandTemplate = values[8]
+                def renderedCommand = values[9]
+                def stdoutFile = values[10]
+                def stderrFile = values[11]
+                def metadataFile = values[12]
+                def correctedPaths = flattenPathList(values.size() > 13 ? values[13] : [])
+                def inconsistentPaths = flattenPathList(values.size() > 14 ? values[14] : [])
+                def cannotVerifyPaths = flattenPathList(values.size() > 15 ? values[15] : [])
+                def alignPayload = values[16]
+                [
+                    datasetName      : datasetName,
+                    datasetSpec      : datasetSpec,
+                    alignIndex       : alignIdx,
+                    regionIndex      : regionIdx,
+                    regionSpec       : regionSpec,
+                    mode             : mode,
+                    regionTag        : regionTag,
+                    commandIndex     : commandIdx,
+                    commandTemplate  : commandTemplate,
+                    renderedCommand  : renderedCommand,
+                    stdoutPath       : stdoutFile,
+                    stderrPath       : stderrFile,
+                    metadataPath     : metadataFile,
+                    correctedBeds    : correctedPaths,
+                    inconsistentBeds : inconsistentPaths,
+                    cannotVerifyBeds : cannotVerifyPaths,
+                    alignPayload     : alignPayload
+                ]
+            }
+
+            def correct_qc_inputs = correct_results_for_qc.map { values ->
+                def datasetName = values[0]
+                def datasetSpec = values[1]
+                def alignIdx = values[2]
+                def regionIdx = values[3]
+                def regionSpec = values[4]
+                def mode = values[5]
+                def regionTag = values[6]
+                def commandIdx = values[7]
+                def stdoutFile = values[10]
+                def stderrFile = values[11]
+                def metadataFile = values[12]
+                def extractSinglePath = { obj ->
+                    if (!obj) {
+                        return null
+                    }
+                    if (obj instanceof Collection) {
+                        def first = obj.find { it }
+                        return first ?: null
+                    }
+                    obj
+                }
+                def corrected = extractSinglePath(values.size() > 13 ? values[13] : null)
+                def inconsistent = extractSinglePath(values.size() > 14 ? values[14] : null)
+                def cannotVerify = extractSinglePath(values.size() > 15 ? values[15] : null)
+                def correctQcScript = file("${projectDir}/bin/correct_qc.py")
+                tuple(datasetName, datasetSpec, alignIdx, regionIdx, regionSpec, mode, regionTag, commandIdx, stdoutFile, stderrFile, metadataFile, corrected, inconsistent, cannotVerify, correctQcScript)
+            }
+            correct_qc_results_channel = RunCorrectQC(correct_qc_inputs)
+        }
+        correct_results = correct_results_channel
+        correct_qc_results = correct_qc_results_channel
+
     emit:
         dataset_manifests
         align_results
         align_qc_results
         regionalize_results
         regionalize_qc_results
+        correct_results
+        correct_qc_results
 }
 
 workflow {
