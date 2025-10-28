@@ -522,6 +522,7 @@ process RunFlairCorrect {
         path(correctInputBed),
         val(correctInputBam),
         val(alignMetadata),
+        val(regionalizePayload),
         val(alignPayload)
 
     output:
@@ -531,6 +532,7 @@ process RunFlairCorrect {
         path('*_all_corrected.bed', optional: true),
         path('*_all_inconsistent.bed', optional: true),
         path('*_cannot_verify.bed', optional: true),
+        val(regionalizePayload),
         val(alignPayload)
 
     script:
@@ -540,6 +542,8 @@ process RunFlairCorrect {
 
     def bedName = bedPath.getFileName().toString()
     def bedNameEsc = escapeForSingleQuotes(bedName)
+    def bedEmpty = !bedPath.toFile().exists() || bedPath.toFile().length() == 0L
+    def bedEmptyFlag = bedEmpty ? 1 : 0
     def bamName = bamPath ? bamPath.getFileName().toString() : null
     def bamSourceEsc = bamPath ? escapeForSingleQuotes(bamPath.toAbsolutePath().toString()) : null
     def bamNameEsc = bamName ? escapeForSingleQuotes(bamName) : null
@@ -619,6 +623,416 @@ process RunFlairCorrect {
     |data["observed_outputs"] = observed
     |meta.write_text(json.dumps(data, indent=2))
     |PY
+    """.stripMargin().trim()
+}
+
+process RunFlairTranscriptome {
+    tag {
+        def parts = ["${datasetName}", "align${alignIdx}"]
+        parts << ((mode == 'region') ? "region${regionIdx}" : mode)
+        parts << "transcriptome${commandIdx}"
+        parts.join("::")
+    }
+    conda RESOLVED_CONDA_ENV
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/transcriptome/flair_transcriptome${commandIdx}", mode: 'copy'
+    storeDir "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/transcriptome/flair_transcriptome${commandIdx}"
+
+    input:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        val(mode), val(regionTag), val(commandIdx), val(commandTemplate), val(renderedCommand),
+        path(transcriptomeInputBam),
+        val(regionalizeMetadata),
+        val(alignMetadata),
+        val(regionalizePayload),
+        val(alignPayload)
+
+    output:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        val(mode), val(regionTag), val(commandIdx), val(commandTemplate), val(renderedCommand),
+        path('transcriptome_stdout.txt'), path('transcriptome_stderr.txt'), path('transcriptome_metadata.json'),
+        path('flair.isoforms.bed'), path('flair.isoforms.gtf'), path('flair.isoforms.fa'), path('flair.read.map.txt'),
+        path('transcriptome_exit_code.txt'), path('transcriptome_error.log', optional: true),
+        val(regionalizePayload), val(alignPayload)
+
+    script:
+    def bamPath = transcriptomeInputBam as Path
+    def bamName = bamPath.getFileName().toString()
+    def bamNameEsc = escapeForSingleQuotes(bamName)
+    def bamSourceEsc = escapeForSingleQuotes(bamPath.toAbsolutePath().toString())
+
+    def regionMetaPath = regionalizeMetadata ? (regionalizeMetadata as Path) : null
+    def regionMetaName = regionMetaPath ? regionMetaPath.getFileName().toString() : null
+    def regionMetaSourceEsc = regionMetaPath ? escapeForSingleQuotes(regionMetaPath.toAbsolutePath().toString()) : null
+    def regionMetaNameEsc = regionMetaName ? escapeForSingleQuotes(regionMetaName) : null
+
+    def alignMetaPath = alignMetadata ? (alignMetadata as Path) : null
+    def alignMetaName = alignMetaPath ? alignMetaPath.getFileName().toString() : null
+    def alignMetaSourceEsc = alignMetaPath ? escapeForSingleQuotes(alignMetaPath.toAbsolutePath().toString()) : null
+    def alignMetaNameEsc = alignMetaName ? escapeForSingleQuotes(alignMetaName) : null
+
+    def genomePath = datasetSpec?.genome?.toString()
+    if (!genomePath) {
+        throw new IllegalArgumentException("Dataset '${datasetName}' is missing 'genome' required for transcriptome.")
+    }
+
+    def exitCodeName = 'transcriptome_exit_code.txt'
+    def exitCodeNameEsc = escapeForSingleQuotes(exitCodeName)
+    def errorLogName = 'transcriptome_error.log'
+    def errorLogNameEsc = escapeForSingleQuotes(errorLogName)
+
+    def metadataMap = [
+        dataset              : datasetName,
+        align_index          : alignIdx,
+        region_index         : regionIdx,
+        region_mode          : mode,
+        region_tag           : regionTag,
+        command_index        : commandIdx,
+        command_template     : commandTemplate,
+        command_rendered     : renderedCommand,
+        transcriptome_input_bam: bamName,
+        genome               : genomePath,
+        regionalize_metadata : regionMetaName,
+        align_metadata       : alignMetaName,
+        region_spec          : regionSpec,
+        runtime              : [
+            conda_env      : RESOLVED_CONDA_ENV,
+            conda_env_label: RESOLVED_CONDA_ENV_LABEL
+        ]
+    ]
+    def metadataJson = JsonOutput.prettyPrint(JsonOutput.toJson(metadataMap))
+
+    """
+    |set -euo pipefail
+    |
+    |ln -sf '${bamSourceEsc}' '${bamNameEsc}'
+    |if [ ${regionMetaSourceEsc ? 1 : 0} -eq 1 ]; then
+    |    ln -sf '${regionMetaSourceEsc}' '${regionMetaNameEsc}'
+    |fi
+    |if [ ${alignMetaSourceEsc ? 1 : 0} -eq 1 ]; then
+    |    ln -sf '${alignMetaSourceEsc}' '${alignMetaNameEsc}'
+    |fi
+    |
+    |cat <<'CMD' > command_to_run.sh
+    |#!/usr/bin/env bash
+    |set -euo pipefail
+    |${renderedCommand}
+    |CMD
+    |
+    |chmod +x command_to_run.sh
+    |
+    |set +e
+    |./command_to_run.sh > transcriptome_stdout.txt 2> transcriptome_stderr.txt
+    |status=\$?
+    |set -euo pipefail
+    |
+    |echo "\${status}" > ${exitCodeNameEsc}
+    |if [ "\${status}" -ne 0 ]; then
+    |    printf 'Transcriptome command failed with exit code %s\n' "\${status}" > ${errorLogNameEsc}
+    |    touch flair.isoforms.bed flair.isoforms.gtf flair.isoforms.fa flair.read.map.txt
+    |fi
+    |
+    |cat <<'EOF' > transcriptome_metadata.json
+    |${metadataJson}
+    |EOF
+    |
+    |python - <<'PY'
+    |from pathlib import Path
+    |import json
+    |
+    |meta = Path('transcriptome_metadata.json')
+    |data = json.loads(meta.read_text())
+    |stage = Path('.')
+    |exit_code_path = Path('${exitCodeName}')
+    |exit_code = 0
+    |if exit_code_path.exists():
+    |    try:
+    |        exit_code = int(exit_code_path.read_text().strip())
+    |    except ValueError:
+    |        exit_code = 0
+    |data["exit_code"] = exit_code
+    |expected = {
+    |    "isoforms_bed": "flair.isoforms.bed",
+    |    "isoforms_gtf": "flair.isoforms.gtf",
+    |    "isoforms_fa": "flair.isoforms.fa",
+    |    "read_map": "flair.read.map.txt",
+    |}
+    |observed = {}
+    |missing = []
+    |for key, name in expected.items():
+    |    path = stage / name
+    |    if not path.exists():
+    |        observed[key] = None
+    |        if exit_code == 0:
+    |            missing.append(name)
+    |    else:
+    |        observed[key] = name
+    |if missing:
+    |    raise SystemExit(f"Expected output(s) {', '.join(missing)} not produced.")
+    |data["observed_outputs"] = observed
+    |meta.write_text(json.dumps(data, indent=2))
+    |PY
+    """.stripMargin().trim()
+}
+
+process RunTranscriptomeQC {
+    tag {
+        def parts = ["${datasetName}", "align${alignIdx}"]
+        parts << ((mode == 'region') ? "region${regionIdx}" : mode)
+        parts << "transcriptome${commandIdx}"
+        parts.join("::")
+    }
+    conda RESOLVED_CONDA_ENV
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/transcriptome/flair_transcriptome${commandIdx}", mode: 'copy'
+    storeDir "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/transcriptome/flair_transcriptome${commandIdx}/qc"
+
+    input:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        val(mode), val(regionTag), val(commandIdx),
+        path(stdoutFile), path(stderrFile), path(metadataFile),
+        path(isoformsBed), path(isoformsGtf), path(isoformsFa), path(readMap),
+        path(qcScript)
+
+    output:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx),
+        val(mode), val(regionTag), val(commandIdx), path('transcriptome_qc.tsv')
+
+    script:
+    def datasetEsc = escapeForSingleQuotes(datasetName)
+    def modeEsc = escapeForSingleQuotes(mode?.toString() ?: '')
+    def regionTagEsc = escapeForSingleQuotes(regionTag?.toString() ?: '')
+    def stdoutNameEsc = escapeForSingleQuotes(stdoutFile.getFileName().toString())
+    def stderrNameEsc = escapeForSingleQuotes(stderrFile.getFileName().toString())
+    def metadataNameEsc = escapeForSingleQuotes(metadataFile.getFileName().toString())
+    def isoformsBedEsc = escapeForSingleQuotes(isoformsBed.getFileName().toString())
+    def isoformsGtfEsc = escapeForSingleQuotes(isoformsGtf.getFileName().toString())
+    def isoformsFaEsc = escapeForSingleQuotes(isoformsFa.getFileName().toString())
+    def readMapEsc = escapeForSingleQuotes(readMap.getFileName().toString())
+    def qcScriptEsc = escapeForSingleQuotes(qcScript.toString())
+
+    """
+    |set -euo pipefail
+    |
+    |python ${qcScriptEsc} \\
+    |    --dataset '${datasetEsc}' \\
+    |    --align-idx ${alignIdx} \\
+    |    --region-idx ${regionIdx != null ? regionIdx : 0} \\
+    |    --mode '${modeEsc}' \\
+    |    --region-tag '${regionTagEsc}' \\
+    |    --stdout '${stdoutNameEsc}' \\
+    |    --stderr '${stderrNameEsc}' \\
+    |    --metadata '${metadataNameEsc}' \\
+    |    --isoforms-bed '${isoformsBedEsc}' \\
+    |    --isoforms-gtf '${isoformsGtfEsc}' \\
+    |    --isoforms-fa '${isoformsFaEsc}' \\
+    |    --read-map '${readMapEsc}' \\
+    |    --output 'transcriptome_qc.tsv'
+    """.stripMargin().trim()
+}
+
+process RunFlairCollapse {
+    tag {
+        def parts = ["${datasetName}", "align${alignIdx}"]
+        parts << ((mode == 'region') ? "region${regionIdx}" : mode)
+        parts << "collapse${commandIdx}"
+        parts.join("::")
+    }
+    conda RESOLVED_CONDA_ENV
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/collapse/flair_collapse${commandIdx}", mode: 'copy'
+    storeDir "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/collapse/flair_collapse${commandIdx}"
+
+    input:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        val(mode), val(regionTag), val(commandIdx), val(commandTemplate), val(renderedCommand),
+        path(collapseInputBed),
+        val(readsPath),
+        val(regionalizePayload),
+        val(alignPayload)
+
+    output:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        val(mode), val(regionTag), val(commandIdx), val(commandTemplate), val(renderedCommand),
+        path('collapse_stdout.txt'), path('collapse_stderr.txt'), path('collapse_metadata.json'),
+        path('collapse_exit_code.txt'), path('collapse_error.log', optional: true),
+        path('isoforms.bed'), path('isoforms.gtf'), path('isoforms.fa'),
+        val(regionalizePayload), val(alignPayload)
+
+    script:
+    def bedPath = collapseInputBed as Path
+    def bedName = bedPath.getFileName().toString()
+    def bedNameEsc = escapeForSingleQuotes(bedName)
+
+    def bedFile = bedPath.toFile()
+    def bedEmpty = !bedFile.exists() || bedFile.length() == 0L
+    def bedEmptyFlag = bedEmpty ? 1 : 0
+
+    def readsPathValue = readsPath ? readsPath.toString().trim() : null
+    if (!readsPathValue) {
+        throw new IllegalArgumentException("Collapse stage requires a reads input for dataset '${datasetName}', align ${alignIdx}, region ${regionIdx}.")
+    }
+    def readsFile = new File(readsPathValue)
+    if (!readsFile.exists()) {
+        throw new IllegalArgumentException("Collapse reads input '${readsPathValue}' does not exist for dataset '${datasetName}'.")
+    }
+    def readsName = readsFile.name ?: "collapse_reads_input"
+    def readsNameEsc = escapeForSingleQuotes(readsName)
+    def readsSourceEsc = escapeForSingleQuotes(readsFile.toPath().toAbsolutePath().toString())
+
+    def metadataMap = [
+        dataset            : datasetName,
+        align_index        : alignIdx,
+        region_index       : regionIdx,
+        region_mode        : mode,
+        region_tag         : regionTag,
+        command_index      : commandIdx,
+        command_template   : commandTemplate,
+        command_rendered   : renderedCommand,
+        collapse_input_bed : bedName,
+        collapse_reads     : readsName,
+        collapse_reads_path: readsPathValue,
+        collapse_input_empty: bedEmpty,
+        region_spec        : regionSpec,
+        runtime            : [
+            conda_env      : RESOLVED_CONDA_ENV,
+            conda_env_label: RESOLVED_CONDA_ENV_LABEL
+        ]
+    ]
+    def metadataJson = JsonOutput.prettyPrint(JsonOutput.toJson(metadataMap))
+
+    """
+    |set -euo pipefail
+    |
+    |status=0
+    |if [ ${bedEmptyFlag} -eq 1 ]; then
+    |    printf 'Collapse input bed is empty; skipping flair collapse.\n' > collapse_stdout.txt
+    |    : > collapse_stderr.txt
+    |else
+    |    ln -sf '${readsSourceEsc}' '${readsNameEsc}'
+    |
+    |    cat <<'CMD' > command_to_run.sh
+    |#!/usr/bin/env bash
+    |set -euo pipefail
+    |${renderedCommand}
+    |CMD
+    |
+    |    chmod +x command_to_run.sh
+    |
+    |    set +e
+    |    ./command_to_run.sh > collapse_stdout.txt 2> collapse_stderr.txt
+    |    status=\$?
+    |    set -euo pipefail
+    |fi
+    |
+    |echo "\${status}" > collapse_exit_code.txt
+    |if [ "\${status}" -ne 0 ]; then
+    |    printf 'Collapse command failed with exit code %s\n' "\${status}" > collapse_error.log
+    |elif [ ${bedEmptyFlag} -eq 1 ]; then
+    |    printf 'Collapse skipped: input bed was empty.\n' > collapse_error.log
+    |else
+    |    printf 'Collapse completed successfully.\n' > collapse_error.log
+    |fi
+    |
+    |cat <<'EOF' > collapse_metadata.json
+    |${metadataJson}
+    |EOF
+    |
+    |python - <<'PY'
+    |from pathlib import Path
+    |import json
+    |
+    |meta = Path('collapse_metadata.json')
+    |data = json.loads(meta.read_text())
+    |stage = Path('.')
+    |exit_code_path = stage / 'collapse_exit_code.txt'
+    |exit_code = 0
+    |if exit_code_path.exists():
+    |    try:
+    |        exit_code = int(exit_code_path.read_text().strip())
+    |    except ValueError:
+    |        exit_code = 0
+    |data['exit_code'] = exit_code
+    |error_log_path = stage / 'collapse_error.log'
+    |data['error_log'] = error_log_path.name if error_log_path.exists() else None
+    |bed_empty = bool(data.get('collapse_input_empty'))
+    |expected = {
+    |    'isoforms_bed': 'isoforms.bed',
+    |    'isoforms_gtf': 'isoforms.gtf',
+    |    'isoforms_fa': 'isoforms.fa',
+    |}
+    |observed = {}
+    |missing = []
+    |placeholder = []
+    |for key, name in expected.items():
+    |    path = stage / name
+    |    if not path.exists():
+    |        if exit_code != 0 or bed_empty:
+    |            path.touch()
+    |            observed[key] = name
+    |            placeholder.append(name)
+    |        else:
+    |            missing.append(name)
+    |            observed[key] = None
+    |    else:
+    |        observed[key] = name
+    |if missing:
+    |    raise SystemExit(f"Expected output(s) {', '.join(missing)} not produced.")
+    |if placeholder:
+    |    data['placeholder_outputs'] = placeholder
+    |data['observed_outputs'] = observed
+    |meta.write_text(json.dumps(data, indent=2))
+    |PY
+    """.stripMargin().trim()
+}
+
+process RunCollapseQC {
+    tag {
+        def parts = ["${datasetName}", "align${alignIdx}"]
+        parts << ((mode == 'region') ? "region${regionIdx}" : mode)
+        parts << "collapse${commandIdx}"
+        parts.join("::")
+    }
+    conda RESOLVED_CONDA_ENV
+    publishDir "results/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/collapse/flair_collapse${commandIdx}", mode: 'copy'
+    storeDir "cache/${RESOLVED_CONDA_ENV_LABEL}/${datasetName}/flair_align${alignIdx}${(mode == 'region') ? "/flair_regionalize${regionIdx}" : ""}/collapse/flair_collapse${commandIdx}/qc"
+
+    input:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx), val(regionSpec),
+        val(mode), val(regionTag), val(commandIdx),
+        path(stdoutFile), path(stderrFile), path(metadataFile),
+        path(isoformsBed), path(isoformsGtf), path(isoformsFa),
+        path(qcScript)
+
+    output:
+    tuple val(datasetName), val(datasetSpec), val(alignIdx), val(regionIdx),
+        val(mode), val(regionTag), val(commandIdx), path('collapse_qc.tsv')
+
+    script:
+    def datasetEsc = escapeForSingleQuotes(datasetName)
+    def modeEsc = escapeForSingleQuotes(mode?.toString() ?: '')
+    def regionTagEsc = escapeForSingleQuotes(regionTag?.toString() ?: '')
+    def stdoutNameEsc = escapeForSingleQuotes(stdoutFile.getFileName().toString())
+    def stderrNameEsc = escapeForSingleQuotes(stderrFile.getFileName().toString())
+    def metadataNameEsc = escapeForSingleQuotes(metadataFile.getFileName().toString())
+    def isoformsBedEsc = escapeForSingleQuotes(isoformsBed.getFileName().toString())
+    def isoformsGtfEsc = escapeForSingleQuotes(isoformsGtf.getFileName().toString())
+    def isoformsFaEsc = escapeForSingleQuotes(isoformsFa.getFileName().toString())
+    def qcScriptEsc = escapeForSingleQuotes(qcScript.toString())
+
+    """
+    |set -euo pipefail
+    |
+    |python ${qcScriptEsc} \\
+    |    --dataset '${datasetEsc}' \\
+    |    --align-idx ${alignIdx} \\
+    |    --region-idx ${regionIdx != null ? regionIdx : 0} \\
+    |    --mode '${modeEsc}' \\
+    |    --region-tag '${regionTagEsc}' \\
+    |    --stdout '${stdoutNameEsc}' \\
+    |    --stderr '${stderrNameEsc}' \\
+    |    --metadata '${metadataNameEsc}' \\
+    |    --isoforms-bed '${isoformsBedEsc}' \\
+    |    --isoforms-gtf '${isoformsGtfEsc}' \\
+    |    --isoforms-fa '${isoformsFaEsc}' \\
+    |    --output 'collapse_qc.tsv'
     """.stripMargin().trim()
 }
 
@@ -923,8 +1337,166 @@ workflow flair_eval {
 
             regionalize_results_channel = run_results.mix(bypass_results)
         }
-        regionalize_results = regionalize_results_channel
+        def regionalize_results_for_transcriptome = regionalize_results_channel.map { it }
+        def regionalize_results_for_correct = regionalize_results_channel.map { it }
+        regionalize_results = regionalize_results_channel.map { it }
         regionalize_qc_results = regionalize_qc_results_channel
+
+        def transcriptomeCommandsRaw = normalizeCommands(params.flair_transcriptome_commands)
+        if (!transcriptomeCommandsRaw) {
+            log.info("No --flair_transcriptome_commands supplied; skipping flair transcriptome runs.")
+        }
+
+        def transcriptomeCommandEntries = []
+        transcriptomeCommandsRaw.eachWithIndex { cmd, idx ->
+            transcriptomeCommandEntries << [idx + 1, cmd]
+        }
+
+        def transcriptome_results_channel = Channel.empty()
+        def transcriptome_qc_results_channel = Channel.empty()
+        if (!transcriptomeCommandEntries.isEmpty()) {
+            def transcriptome_inputs = regionalize_results_for_transcriptome.flatMap { payload ->
+                transcriptomeCommandEntries.collect { info ->
+                    def commandIdx = info[0] as int
+                    def template = info[1] as String
+
+                    def regionSpec = new LinkedHashMap<String, Object>(payload.regionSpec ?: [:])
+                    def alignPayload = payload.alignPayload
+
+                    List<Path> bamCandidates = flattenPathList(payload.bamFiles ?: [])
+                    if (!bamCandidates && alignPayload) {
+                        bamCandidates = flattenPathList(alignPayload.bamFiles ?: [])
+                    }
+                    if (!bamCandidates) {
+                        throw new IllegalStateException("Transcriptome stage requires a BAM file for dataset ${payload.datasetName}, align ${payload.alignIndex}, region ${payload.regionIndex}.")
+                    }
+                    Path bamFile = null
+                    if (payload.mode == 'region') {
+                        bamFile = bamCandidates.find { it.getFileName().toString() ==~ /(?i)[A-Za-z0-9._-]+_\d+_\d+\.bam$/ }
+                    }
+                    bamFile = bamFile ?: bamCandidates[0]
+
+                    def regionTag = payload.regionTag
+                    if (!regionTag) {
+                        if (payload.mode == 'region' && payload.regionIndex != null) {
+                            regionTag = "align${payload.alignIndex}_region${payload.regionIndex}"
+                        } else {
+                            regionTag = "align${payload.alignIndex}_all"
+                        }
+                    }
+
+                    def genomePath = payload.datasetSpec?.genome?.toString()
+                    if (!genomePath) {
+                        throw new IllegalStateException("Transcriptome stage requires 'genome' in dataset specification for dataset ${payload.datasetName}.")
+                    }
+
+                    def substitution = new LinkedHashMap<String, Object>(payload.datasetSpec ?: [:])
+                    substitution['transcriptome_bam'] = bamFile.getFileName().toString()
+                    substitution['transcriptome_bam_path'] = bamFile.toAbsolutePath().toString()
+                    substitution['transcriptome_output_prefix'] = regionTag
+                    substitution['transcriptome_mode'] = payload.mode
+                    substitution['transcriptome_region'] = regionTag
+                    substitution['align_index'] = payload.alignIndex
+                    substitution['region_index'] = payload.regionIndex
+                    def rendered = renderFlairCommand(template, substitution, payload.datasetName)
+
+                    def regionalizeMetadata = payload.metadataPath
+                    def alignMetadata = alignPayload?.metadataPath
+
+                    tuple(
+                        payload.datasetName,
+                        payload.datasetSpec,
+                        payload.alignIndex,
+                        payload.regionIndex,
+                        regionSpec,
+                        payload.mode,
+                        regionTag,
+                        commandIdx,
+                        template,
+                        rendered,
+                        bamFile,
+                        regionalizeMetadata,
+                        alignMetadata,
+                        payload,
+                        alignPayload
+                    )
+                }
+            }
+
+            def raw_transcriptome_results = RunFlairTranscriptome(transcriptome_inputs)
+            def transcriptome_results_for_map = raw_transcriptome_results.map { it }
+            def transcriptome_results_for_qc = raw_transcriptome_results.map { it }
+
+            transcriptome_results_channel = transcriptome_results_for_map.map { values ->
+                def datasetName = values[0]
+                def datasetSpec = values[1]
+                def alignIdx = values[2]
+                def regionIdx = values[3]
+                def regionSpec = values[4]
+                def mode = values[5]
+                def regionTag = values[6]
+                def commandIdx = values[7]
+                def commandTemplate = values[8]
+                def renderedCommand = values[9]
+                def stdoutFile = values[10]
+                def stderrFile = values[11]
+                def metadataFile = values[12]
+                def isoformsBed = values[13]
+                def isoformsGtf = values[14]
+                def isoformsFa = values[15]
+                def readMap = values[16]
+                def exitCodePath = values[17]
+                def errorLogPath = (values.size() > 18) ? values[18] : null
+                def regionalizePayload = values.size() > 19 ? values[19] : null
+                def alignPayload = values.size() > 20 ? values[20] : null
+                [
+                    datasetName       : datasetName,
+                    datasetSpec       : datasetSpec,
+                    alignIndex        : alignIdx,
+                    regionIndex       : regionIdx,
+                    regionSpec        : regionSpec,
+                    mode              : mode,
+                    regionTag         : regionTag,
+                    commandIndex      : commandIdx,
+                    commandTemplate   : commandTemplate,
+                    renderedCommand   : renderedCommand,
+                    stdoutPath        : stdoutFile,
+                    stderrPath        : stderrFile,
+                    metadataPath      : metadataFile,
+                    isoformsBedPath   : isoformsBed,
+                    isoformsGtfPath   : isoformsGtf,
+                    isoformsFaPath    : isoformsFa,
+                    readMapPath       : readMap,
+                    exitCodePath      : exitCodePath,
+                    errorLogPath      : errorLogPath,
+                    regionalizePayload: regionalizePayload,
+                    alignPayload      : alignPayload
+                ]
+            }
+
+            def transcriptome_qc_inputs = transcriptome_results_for_qc.map { values ->
+                def datasetName = values[0]
+                def datasetSpec = values[1]
+                def alignIdx = values[2]
+                def regionIdx = values[3]
+                def regionSpec = values[4]
+                def mode = values[5]
+                def regionTag = values[6]
+                def commandIdx = values[7]
+                def stdoutFile = values[10]
+                def stderrFile = values[11]
+                def metadataFile = values[12]
+                def isoformsBed = values[13]
+                def isoformsGtf = values[14]
+                def isoformsFa = values[15]
+                def readMap = values[16]
+                def qcScript = file("${projectDir}/bin/transcriptome_qc.py")
+                tuple(datasetName, datasetSpec, alignIdx, regionIdx, regionSpec, mode, regionTag, commandIdx, stdoutFile, stderrFile, metadataFile, isoformsBed, isoformsGtf, isoformsFa, readMap, qcScript)
+            }
+            transcriptome_qc_results_channel = RunTranscriptomeQC(transcriptome_qc_inputs)
+        }
+        transcriptome_results = transcriptome_results_channel
+        transcriptome_qc_results = transcriptome_qc_results_channel
 
         def correctCommandsRaw = normalizeCommands(params.flair_correct_commands)
         if (!correctCommandsRaw) {
@@ -938,8 +1510,9 @@ workflow flair_eval {
 
         def correct_results_channel = Channel.empty()
         def correct_qc_results_channel = Channel.empty()
+        def correct_results_for_collapse = Channel.empty()
         if (!correctCommandEntries.isEmpty()) {
-            def correct_inputs = regionalize_results.flatMap { payload ->
+            def correct_inputs = regionalize_results_for_correct.flatMap { payload ->
                 correctCommandEntries.collect { info ->
                     def commandIdx = info[0] as int
                     def template = info[1] as String
@@ -1002,6 +1575,7 @@ workflow flair_eval {
                         bedFile,
                         bamFile,
                         alignMetadata,
+                        payload,
                         alignPayload
                     )
                 }
@@ -1009,6 +1583,7 @@ workflow flair_eval {
             def raw_correct_results = RunFlairCorrect(correct_inputs)
             def correct_results_for_map = raw_correct_results.map { it }
             def correct_results_for_qc = raw_correct_results.map { it }
+            correct_results_for_collapse = raw_correct_results.map { it }
 
             correct_results_channel = correct_results_for_map.map { values ->
                 def datasetName = values[0]
@@ -1027,7 +1602,8 @@ workflow flair_eval {
                 def correctedPaths = flattenPathList(values.size() > 13 ? values[13] : [])
                 def inconsistentPaths = flattenPathList(values.size() > 14 ? values[14] : [])
                 def cannotVerifyPaths = flattenPathList(values.size() > 15 ? values[15] : [])
-                def alignPayload = values[16]
+                def regionalizePayload = values.size() > 16 ? values[16] : null
+                def alignPayload = values.size() > 17 ? values[17] : null
                 [
                     datasetName      : datasetName,
                     datasetSpec      : datasetSpec,
@@ -1045,6 +1621,7 @@ workflow flair_eval {
                     correctedBeds    : correctedPaths,
                     inconsistentBeds : inconsistentPaths,
                     cannotVerifyBeds : cannotVerifyPaths,
+                    regionalizePayload: regionalizePayload,
                     alignPayload     : alignPayload
                 ]
             }
@@ -1082,12 +1659,162 @@ workflow flair_eval {
         correct_results = correct_results_channel
         correct_qc_results = correct_qc_results_channel
 
+        def collapseCommandsRaw = normalizeCommands(params.flair_collapse_commands)
+        if (!collapseCommandsRaw) {
+            log.info("No --flair_collapse_commands supplied; skipping flair collapse runs.")
+        }
+
+        def collapseCommandEntries = []
+        collapseCommandsRaw.eachWithIndex { cmd, idx ->
+            collapseCommandEntries << [idx + 1, cmd]
+        }
+
+        def collapse_results_channel = Channel.empty()
+        def collapse_qc_results_channel = Channel.empty()
+        if (!collapseCommandEntries.isEmpty()) {
+            def collapse_inputs = correct_results_for_collapse.flatMap { values ->
+                collapseCommandEntries.collect { info ->
+                    def commandIdx = info[0] as int
+                    def template = info[1] as String
+
+                    def datasetName = values[0]
+                    def datasetSpec = values[1]
+                    def alignIdx = values[2]
+                    def regionIdx = values[3]
+                    def regionSpec = values[4]
+                    def mode = values[5]
+                    def regionTag = values[6]
+                    def correctedBeds = flattenPathList(values.size() > 13 ? values[13] : [])
+                    if (!correctedBeds) {
+                        throw new IllegalStateException("Collapse stage requires a corrected BED file for dataset ${datasetName}, align ${alignIdx}, region ${regionIdx}.")
+                    }
+                    Path correctedBed = correctedBeds[0]
+
+                    def regionalizePayload = values.size() > 16 ? values[16] : null
+                    def alignPayload = values.size() > 17 ? values[17] : null
+
+                    def readsPath = datasetSpec?.reads?.toString()
+                    if (!readsPath && alignPayload) {
+                        readsPath = alignPayload?.datasetSpec?.reads?.toString()
+                    }
+                    if (!readsPath && regionalizePayload) {
+                        readsPath = regionalizePayload?.datasetSpec?.reads?.toString()
+                    }
+                    if (!readsPath) {
+                        throw new IllegalStateException("Collapse stage requires 'reads' in dataset specification for dataset ${datasetName}.")
+                    }
+
+                    def substitution = new LinkedHashMap<String, Object>(datasetSpec ?: [:])
+                    substitution['collapse_bed'] = correctedBed.getFileName().toString()
+                    substitution['collapse_reads'] = new File(readsPath).name
+                    substitution['collapse_output_prefix'] = regionTag ?: "align${alignIdx}${(mode == 'region' && regionIdx != null) ? "_region${regionIdx}" : "_all"}"
+                    substitution['collapse_mode'] = mode
+                    substitution['collapse_region'] = regionTag ?: ''
+                    substitution['align_index'] = alignIdx
+                    substitution['region_index'] = regionIdx
+                    def rendered = renderFlairCommand(template, substitution, datasetName)
+
+                    tuple(
+                        datasetName,
+                        datasetSpec,
+                        alignIdx,
+                        regionIdx,
+                        regionSpec,
+                        mode,
+                        regionTag,
+                        commandIdx,
+                        template,
+                        rendered,
+                        correctedBed,
+                        readsPath,
+                        regionalizePayload,
+                        alignPayload
+                    )
+                }
+            }
+
+            def raw_collapse_results = RunFlairCollapse(collapse_inputs)
+            def collapse_results_for_map = raw_collapse_results.map { it }
+            def collapse_results_for_qc = raw_collapse_results.map { it }
+
+            collapse_results_channel = collapse_results_for_map.map { values ->
+                def datasetName = values[0]
+                def datasetSpec = values[1]
+                def alignIdx = values[2]
+                def regionIdx = values[3]
+                def regionSpec = values[4]
+                def mode = values[5]
+                def regionTag = values[6]
+                def commandIdx = values[7]
+                def commandTemplate = values[8]
+                def renderedCommand = values[9]
+                def stdoutFile = values[10]
+                def stderrFile = values[11]
+                def metadataFile = values[12]
+                def exitCodeFile = values[13]
+                def errorLogFile = values[14]
+                def isoformsBed = values[15]
+                def isoformsGtf = values[16]
+                def isoformsFa = values[17]
+                def regionalizePayload = values.size() > 18 ? values[18] : null
+                def alignPayload = values.size() > 19 ? values[19] : null
+                [
+                    datasetName       : datasetName,
+                    datasetSpec       : datasetSpec,
+                    alignIndex        : alignIdx,
+                    regionIndex       : regionIdx,
+                    regionSpec        : regionSpec,
+                    mode              : mode,
+                    regionTag         : regionTag,
+                    commandIndex      : commandIdx,
+                    commandTemplate   : commandTemplate,
+                    renderedCommand   : renderedCommand,
+                    stdoutPath        : stdoutFile,
+                    stderrPath        : stderrFile,
+                    metadataPath      : metadataFile,
+                    exitCodePath      : exitCodeFile,
+                    errorLogPath      : errorLogFile,
+                    isoformsBedPath   : isoformsBed,
+                    isoformsGtfPath   : isoformsGtf,
+                    isoformsFaPath    : isoformsFa,
+                    regionalizePayload: regionalizePayload,
+                    alignPayload      : alignPayload
+                ]
+            }
+
+            def collapse_qc_inputs = collapse_results_for_qc.map { values ->
+                def datasetName = values[0]
+                def datasetSpec = values[1]
+                def alignIdx = values[2]
+                def regionIdx = values[3]
+                def regionSpec = values[4]
+                def mode = values[5]
+                def regionTag = values[6]
+                def commandIdx = values[7]
+                def stdoutFile = values[10]
+                def stderrFile = values[11]
+                def metadataFile = values[12]
+                def isoformsBed = values[15]
+                def isoformsGtf = values[16]
+                def isoformsFa = values[17]
+                def qcScript = file("${projectDir}/bin/collapse_qc.py")
+                tuple(datasetName, datasetSpec, alignIdx, regionIdx, regionSpec, mode, regionTag, commandIdx, stdoutFile, stderrFile, metadataFile, isoformsBed, isoformsGtf, isoformsFa, qcScript)
+            }
+            collapse_qc_results_channel = RunCollapseQC(collapse_qc_inputs)
+        }
+        collapse_results = collapse_results_channel
+        collapse_qc_results = collapse_qc_results_channel
+
     emit:
         dataset_manifests
         align_results
         align_qc_results
         regionalize_results
         regionalize_qc_results
+        transcriptome_results
+        transcriptome_qc_results
+        collapse_results
+        collapse_qc_results
         correct_results
         correct_qc_results
 }
