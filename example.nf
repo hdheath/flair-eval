@@ -65,6 +65,12 @@ process FlairTranscriptome {
         --genome ${genome} \\
         ${trans_args} \\
         --output ${sample}_${align_label}_${trans_label}
+    
+    # Create empty files for outputs if they don't exist
+    touch ${sample}_${align_label}_${trans_label}.bed
+    touch ${sample}_${align_label}_${trans_label}.gtf
+    touch ${sample}_${align_label}_${trans_label}.fa
+    touch ${sample}_${align_label}_${trans_label}.txt
     """
 }
 
