@@ -69,11 +69,48 @@ process FlairTranscriptome {
     """
 }
 
+process FlairCorrect {
+
+    executor 'slurm'
+    clusterOptions '--partition=short'
+
+    time '1h'
+    memory '32 GB'
+
+    conda '/private/home/hdheath/miniforge3/envs/flair-dev'
+
+    publishDir "results/align", mode: 'link'
+
+    input:
+    tuple val(sample), val(opt_label), val(opt_args), path(reads), path(genome), val(genome_ref)
+
+    output:
+    tuple val(sample),
+          val(opt_label),
+          val(opt_args),
+          path("${sample}_${opt_label}_all_corrected.bed"),
+          path("${sample}_${opt_label}_all_inconsistent.bed"),
+          path("${sample}_${opt_label}_cannot_verify.bed"),
+          val(genome_ref)
+
+    script:
+    """
+    flair correct \\
+        --reads ${reads} \\
+        --genome ${genome} \\
+        ${opt_args} \\
+        --output ${sample}_${opt_label}
+    """
+}
+
 workflow {
     def align_files_ch = Channel.of(
         tuple(
             'Test1',
+            [ // list of files - for multiple read inputs
             file('/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11.100reads.fasta'),
+            file('/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11.10reads.fasta')
+            ],
             file('/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa')
         ),
         tuple(
@@ -90,19 +127,17 @@ workflow {
         tuple('with_nvrna', '--nvrna')
     )
 
+
     def align_inputs = align_files_ch
         .combine(align_options_ch)
-        .map { datasetName, readsPath, genomePath, optLabel, optArgs ->
-            tuple(datasetName, optLabel, optArgs, readsPath, genomePath, genomePath)
+        .map { sample, readsList, genome, label, args ->
+            def readsFinal = readsList instanceof List ? readsList : [readsList]
+            tuple(sample, label, args, readsFinal, genome, genome)
         }
 
+
+
     def aligned_outputs = FlairAlign(align_inputs)
-        .map { emit_tuple ->
-            def (sample, alignLabel, alignArgs, bamPath, baiPath, bedPath, genomeRef) = emit_tuple
-            def genomeFile = file(genomeRef).toAbsolutePath()
-            println "[DEBUG] Align emit -> sample=${sample}, align_label=${alignLabel}, bam=${bamPath}, genome=${genomeFile}"
-            tuple(sample, alignLabel, alignArgs, bamPath, baiPath, bedPath, genomeFile)
-        }
 
     def transcriptome_options_ch = Channel.of(
         // describing name, command line args
