@@ -68,6 +68,72 @@ process FlairTranscriptome {
     """
 }
 
+process FlairPartition {
+
+    executor 'slurm'
+    clusterOptions '--partition=short'
+    time '1h'
+    memory '32 GB'
+    conda '/private/home/hdheath/miniforge3/envs/flair-dev'
+    publishDir "results/partition", mode: 'link'
+
+    input:
+    tuple val(sample), val(align_label), val(align_args),
+          path(align_bam), path(align_bai), path(align_bed),
+          val(genome_ref), val(partition_label), val(partition_args),
+          path(gtf)
+
+    output:
+    tuple val(sample),
+          val(align_label),
+          val(partition_label),
+          path("${sample}_${align_label}_${partition_label}.bam"),
+          path("${sample}_${align_label}_${partition_label}.bam.bai"),
+          path("${sample}_${align_label}_${partition_label}.bed"),
+          path("${sample}_${align_label}_${partition_label}.gtf"),
+          val(genome_ref)
+
+    script:
+    def dataset = sample
+    def align_idx = 1
+    def partition_idx = 1
+    def command_text = "partition_${partition_label}"
+    def conda_env = "flair-dev"
+    def output_prefix = "${sample}_${align_label}_${partition_label}"
+    
+    """
+    # Run partition.py
+    python3 ${projectDir}/bin/partition.py \\
+        --dataset ${dataset} \\
+        --align-index ${align_idx} \\
+        --command-index ${partition_idx} \\
+        --command-text ${command_text} \\
+        --conda-env-label ${conda_env} \\
+        --output-dir partition_output \\
+        --align-bam ${align_bam} \\
+        --align-bed ${align_bed} \\
+        --gtf ${gtf} \\
+        --genome ${genome_ref} \\
+        ${partition_args}
+    
+    # Move outputs to expected names
+    if [ "${partition_label}" = "all" ]; then
+        # For --all mode, files have align*_region*_all pattern
+        mv partition_output/align${align_idx}_region${partition_idx}_all.bam ${output_prefix}.bam
+        mv partition_output/align${align_idx}_region${partition_idx}_all.bam.bai ${output_prefix}.bam.bai
+        mv partition_output/align${align_idx}_region${partition_idx}_all.bed ${output_prefix}.bed
+        mv partition_output/align${align_idx}_region${partition_idx}_all.gtf ${output_prefix}.gtf
+    else
+        # For region mode, files have chr_start_end pattern
+        # Find the files (they'll have coordinates in the name)
+        mv partition_output/*.bam ${output_prefix}.bam
+        mv partition_output/*.bam.bai ${output_prefix}.bam.bai
+        mv partition_output/*.bed ${output_prefix}.bed
+        mv partition_output/*.gtf ${output_prefix}.gtf
+    fi
+    """
+}
+
 process FlairCorrect {
 
     executor 'slurm'
@@ -78,30 +144,32 @@ process FlairCorrect {
     publishDir "results/correct", mode: 'link'
 
     input:
-    tuple val(sample), val(align_label),
+    tuple val(sample), val(align_label), val(partition_label),
           val(cor_label), val(cor_args),
-          path(align_bed), path(genome), val(genome_ref)
+          path(align_bed), path(gtf), path(genome), val(genome_ref)
 
     output:
     tuple val(sample),
           val(align_label),
+          val(partition_label),
           val(cor_label),
           val(cor_args),
-          path("${sample}_${align_label}_${cor_label}_all_corrected.bed"),
-          path("${sample}_${align_label}_${cor_label}_all_inconsistent.bed", optional: true),
-          path("${sample}_${align_label}_${cor_label}_cannot_verify.bed", optional: true),
+          path("${sample}_${align_label}_${partition_label}_${cor_label}_all_corrected.bed"),
+          path("${sample}_${align_label}_${partition_label}_${cor_label}_all_inconsistent.bed", optional: true),
+          path("${sample}_${align_label}_${partition_label}_${cor_label}_cannot_verify.bed", optional: true),
           val(genome_ref)
 
     script:
     """
     flair correct \\
         -q ${align_bed} \\
+        -f ${gtf} \\
         ${cor_args} \\
-        --output ${sample}_${align_label}_${cor_label}
+        --output ${sample}_${align_label}_${partition_label}_${cor_label}
     
     # Create empty files for optional outputs if they don't exist
-    touch ${sample}_${align_label}_${cor_label}_all_inconsistent.bed
-    touch ${sample}_${align_label}_${cor_label}_cannot_verify.bed
+    touch ${sample}_${align_label}_${partition_label}_${cor_label}_all_inconsistent.bed
+    touch ${sample}_${align_label}_${partition_label}_${cor_label}_cannot_verify.bed
     """
 }
 
@@ -115,7 +183,7 @@ process FlairCollapse {
     publishDir "results/collapse", mode: 'link'
 
     input:
-    tuple val(sample), val(align_label),
+    tuple val(sample), val(align_label), val(partition_label),
           val(cor_label), val(cor_args),
           path(cor_bed), path(genome), val(genome_ref),
           path(reads), val(col_label), val(col_args)
@@ -123,11 +191,12 @@ process FlairCollapse {
     output:
     tuple val(sample),
           val(align_label),
+          val(partition_label),
           val(cor_label),
           val(col_label),
-          path("${sample}_${align_label}_${cor_label}_${col_label}.bed"),
-          path("${sample}_${align_label}_${cor_label}_${col_label}.gtf", optional: true),
-          path("${sample}_${align_label}_${cor_label}_${col_label}.fa", optional: true),
+          path("${sample}_${align_label}_${partition_label}_${cor_label}_${col_label}.bed"),
+          path("${sample}_${align_label}_${partition_label}_${cor_label}_${col_label}.gtf", optional: true),
+          path("${sample}_${align_label}_${partition_label}_${cor_label}_${col_label}.fa", optional: true),
           val(genome_ref)
 
     script:
@@ -137,12 +206,12 @@ process FlairCollapse {
         -q ${cor_bed} \\
         -r ${reads instanceof List ? reads.join(' ') : reads} \\
         ${col_args} \\
-        --output ${sample}_${align_label}_${cor_label}_${col_label}
+        --output ${sample}_${align_label}_${partition_label}_${cor_label}_${col_label}
     
     # Create empty files for outputs if they don't exist
-    touch ${sample}_${align_label}_${cor_label}_${col_label}.bed
-    touch ${sample}_${align_label}_${cor_label}_${col_label}.gtf
-    touch ${sample}_${align_label}_${cor_label}_${col_label}.fa
+    touch ${sample}_${align_label}_${partition_label}_${cor_label}_${col_label}.bed
+    touch ${sample}_${align_label}_${partition_label}_${cor_label}_${col_label}.gtf
+    touch ${sample}_${align_label}_${partition_label}_${cor_label}_${col_label}.fa
     """
 }
 
@@ -182,37 +251,57 @@ workflow {
 
     def aligned_outputs = FlairAlign(align_inputs)
 
-    ///// Step 3: Transcriptome (using multiMap to split aligned_outputs) /////
+    ///// Step 3: Partition /////
     
-    // Use multiMap to split the aligned outputs for different purposes
-    def aligned_split = aligned_outputs.multiMap { sample, align_label, align_args, bam, bai, bed, genome_ref ->
-        correct_path: tuple(sample, align_label, align_args, bam, bai, bed, genome_ref)
-        transcriptome_path: tuple(sample, align_label, align_args, bam, bai, bed, genome_ref)
+    // Define partition options
+    def partition_options = Channel.of(
+        tuple('all', '--all'),                              // Full genome (no partitioning)
+        tuple('chr1', '--region chr1:1-248956422'),         // Entire chr1 (GRCh38 length)
+        tuple('chr1_1_100k', '--region chr1:1-100000')      // Specific region on chr1
+    )
+    
+    // GTF file for partition process
+    def gtf_file = file('/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf')
+    
+    def partition_inputs = aligned_outputs
+        .combine(partition_options)
+        .map { sample, align_label, align_args, bam, bai, bed, genome_ref, part_label, part_args ->
+            tuple(sample, align_label, align_args, bam, bai, bed, genome_ref, part_label, part_args, gtf_file)
+        }
+    
+    def partitioned_outputs = FlairPartition(partition_inputs)
+
+    ///// Step 4: Transcriptome (using multiMap to split partitioned outputs) /////
+    
+    // Use multiMap to split the partitioned outputs for different purposes
+    def partitioned_split = partitioned_outputs.multiMap { sample, align_label, partition_label, bam, bai, bed, gtf, genome_ref ->
+        correct_path: tuple(sample, align_label, partition_label, bam, bai, bed, gtf, genome_ref)
+        transcriptome_path: tuple(sample, align_label, partition_label, bam, bai, bed, gtf, genome_ref)
     }
     
     def transcriptome_options = Channel.of(
         tuple('default', '--gtf /private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf')
     )
 
-    def transcriptome_inputs = aligned_split.transcriptome_path
+    def transcriptome_inputs = partitioned_split.transcriptome_path
         .combine(transcriptome_options)
-        .map { sample, alignLabel, alignArgs, bamPath, baiPath, bedPath, genomePath, transLabel, transArgs ->
+        .map { sample, alignLabel, partitionLabel, bamPath, baiPath, bedPath, gtfPath, genomePath, transLabel, transArgs ->
             tuple(sample, alignLabel, transLabel, transArgs, bamPath, baiPath, genomePath)
         }
 
     def transcriptome_outputs = FlairTranscriptome(transcriptome_inputs)
 
-    ///// Step 4: Correct /////
+    ///// Step 5: Correct /////
     
     def correct_options = Channel.of(
-        tuple('with_gtf', '--gtf /private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf'),
-        tuple('with_gtf_and_nvrna', '--gtf /private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf --nvrna')
+        tuple('with_gtf', ''),
+        tuple('with_gtf_and_nvrna', '--nvrna')
     )
 
-    def correct_inputs = aligned_split.correct_path
+    def correct_inputs = partitioned_split.correct_path
         .combine(correct_options)
-        .map { sample, align_label, align_args, bam, bai, bed, genome, cor_label, cor_args ->
-            tuple(sample, align_label, cor_label, cor_args, bed, genome, genome)
+        .map { sample, align_label, partition_label, bam, bai, bed, gtf, genome, cor_label, cor_args ->
+            tuple(sample, align_label, partition_label, cor_label, cor_args, bed, gtf, genome, genome)
         }
 
     def correct_outputs = FlairCorrect(correct_inputs)
@@ -226,7 +315,7 @@ workflow {
 
     def collapse_inputs = correct_outputs
         .combine(collapse_options)
-        .map { sample, align_label, cor_label, cor_args, cor_bed, inconsistent_bed, cannot_verify_bed, genome_ref, col_label, col_args ->
+        .map { sample, align_label, partition_label, cor_label, cor_args, cor_bed, inconsistent_bed, cannot_verify_bed, genome_ref, col_label, col_args ->
             // Map reads directly based on sample name - this is the key solution
             def reads_files
             if (sample == 'Test1') {
@@ -238,7 +327,7 @@ workflow {
                 reads_files = [file('/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11.10reads.fasta')]
             }
             
-            tuple(sample, align_label, cor_label, cor_args,
+            tuple(sample, align_label, partition_label, cor_label, cor_args,
                   cor_bed, genome_ref, genome_ref, reads_files,
                   col_label, col_args)
         }
