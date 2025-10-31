@@ -526,6 +526,76 @@ process FlairEval {
     """
 }
 
+// =============================================================================
+// PROCESS: PrepareReferencePeaks - Extract TSS/TTS from partitioned GTF
+// =============================================================================
+
+process PrepareReferencePeaks {
+    publishDir "results/reference_peaks/${test_name}", mode: 'copy'
+    
+    input:
+    tuple val(test_name), val(dataset_name), val(align_label), val(partition_label), path(gtf)
+    
+    output:
+    tuple val(test_name), val(dataset_name), val(align_label), val(partition_label),
+          path("${dataset_name}_${align_label}_${partition_label}_ref_tss.bed"), 
+          path("${dataset_name}_${align_label}_${partition_label}_ref_tts.bed"), emit: ref_peaks
+    
+    script:
+    """
+    python ${projectDir}/bin/gtf_to_tss_tts.py \\
+        --gtf ${gtf} \\
+        --output-prefix ${dataset_name}_${align_label}_${partition_label}_ref \\
+        --deduplicate
+    """
+}
+
+// =============================================================================
+// PROCESS: FlairTED - Calculate TED metrics
+// =============================================================================
+
+process FlairTED {
+    publishDir "results/ted/${test_name}/${dataset_name}", mode: 'copy', 
+               pattern: "*.tsv"
+    errorStrategy 'ignore'  // Allow other samples to continue if this fails
+    
+    input:
+    tuple val(test_name), val(dataset_name), val(align_label), val(partition_label), 
+          val(process_label), val(stage),
+          path(isoforms_bed), path(isoform_read_map), path(bam), path(bai),
+          path(corrected_bed), path(cage_peaks), path(quantseq_peaks), 
+          path(ref_tss), path(ref_tts)
+    
+    output:
+    tuple val(test_name), val(dataset_name), val(align_label), val(partition_label), 
+          val(process_label), val(stage),
+          path("${dataset_name}_${align_label}_${partition_label}_${process_label}_${stage}_ted.tsv"), emit: ted_metrics
+    
+    script:
+    // Build optional arguments
+    def cage_arg = cage_peaks.name != 'NO_CAGE' ? "--prime5-peaks ${cage_peaks}" : ""
+    def quantseq_arg = quantseq_peaks.name != 'NO_QUANTSEQ' ? "--prime3-peaks ${quantseq_peaks}" : ""
+    def ref_tss_arg = ref_tss.name != 'NO_REF_TSS' ? "--ref-prime5-peaks ${ref_tss}" : ""
+    def ref_tts_arg = ref_tts.name != 'NO_REF_TTS' ? "--ref-prime3-peaks ${ref_tts}" : ""
+    def corrected_arg = corrected_bed.name != 'NO_CORRECTED' ? "--corrected-bed ${corrected_bed}" : ""
+    
+    """
+    python ${projectDir}/bin/ted.py \\
+        --isoforms-bed ${isoforms_bed} \\
+        --map-file ${isoform_read_map} \\
+        --bam ${bam} \\
+        ${corrected_arg} \\
+        ${cage_arg} \\
+        ${quantseq_arg} \\
+        ${ref_tss_arg} \\
+        ${ref_tts_arg} \\
+        --window 50 \\
+        --stage ${stage} \\
+        --output ${dataset_name}_${align_label}_${partition_label}_${process_label}_${stage}_ted.tsv \\
+        --verbose
+    """
+}
+
 workflow {
     // =============================================================================
     // DEFINE DATASETS AS OBJECTS
@@ -752,6 +822,20 @@ workflow {
         target_files
     )
     
+    // =============================================================================
+    // PREPARE REFERENCE PEAKS - Generate from partitioned GTFs
+    // =============================================================================
+    
+    // Extract partitioned GTFs for reference peak generation
+    ref_peak_inputs = FlairPartition.out.partitioned
+        .map { test_name, dataset_name, align_label, partition_label, bam, bai, bed, genome, gtf,
+               cage, quantseq, junctions_bed, targets ->
+            tuple(test_name, dataset_name, align_label, partition_label, gtf)
+        }
+    
+    // Generate reference peaks from partitioned GTFs
+    PrepareReferencePeaks(ref_peak_inputs)
+    
     // Create transcriptome inputs from partitioned outputs
     transcriptome_inputs = FlairPartition.out.partitioned
         .flatMap { test_name, dataset_name, align_label, partition_label, bam, bai, bed, genome, gtf,
@@ -908,4 +992,141 @@ workflow {
     // Combine both evaluation inputs and run FlairEval once
     eval_all_inputs = eval_transcriptome_inputs.mix(eval_collapse_inputs)
     FlairEval(eval_all_inputs)
+    
+    // =============================================================================
+    // TED METRICS: Run FlairTED on both transcriptome and collapse outputs
+    // =============================================================================
+    
+    // Prepare align outputs for TED - extract BAM, BAI, and dataset info
+    align_for_ted = FlairAlign.out.alignments
+        .map { test_name, dataset_name, align_label, bam, bai, bed ->
+            tuple(test_name, dataset_name, align_label, bam, bai)
+        }
+    
+    // Prepare partition outputs for TED - extract partitioned peak files
+    partition_for_ted = FlairPartition.out.partitioned
+        .map { test_name, dataset_name, align_label, partition_label, bam, bai, bed, genome, gtf,
+               cage, quantseq, junctions_bed, targets ->
+            tuple(test_name, dataset_name, align_label, partition_label, cage, quantseq)
+        }
+    
+    // Prepare transcriptome outputs for TED
+    ted_transcriptome_inputs = FlairTranscriptome.out.transcriptome
+        .map { test_name, dataset_name, align_partition_label, isoforms_bed, isoforms_gtf, isoforms_fa, 
+               isoform_counts, isoform_read_map ->
+            // Split the combined label back into align_label and partition_label
+            def labels = align_partition_label.split('_', 2)
+            def align_label = labels[0]
+            def partition_label = labels.size() > 1 ? labels[1] : ''
+            tuple(
+                test_name,
+                dataset_name,
+                align_label,
+                partition_label,
+                'transcriptome',      // process_label
+                'transcriptome',      // stage
+                isoforms_bed,
+                isoform_read_map
+            )
+        }
+        .combine(align_for_ted, by: [0, 1, 2])  // Join by test_name, dataset_name, align_label
+        .combine(partition_for_ted, by: [0, 1, 2, 3])  // Join by test_name, dataset_name, align_label, partition_label
+        .map { test_name, dataset_name, align_label, partition_label, process_label, stage, 
+               isoforms_bed, isoform_read_map, bam, bai, cage_file, qs_file ->
+            def corrected_file = file('NO_CORRECTED')  // No corrected BED for transcriptome
+            
+            tuple(
+                test_name,
+                dataset_name,
+                align_label,
+                partition_label,
+                process_label,
+                stage,
+                isoforms_bed,
+                isoform_read_map,
+                bam,
+                bai,
+                corrected_file,
+                cage_file,
+                qs_file
+            )
+        }
+    
+    // Prepare collapse outputs for TED
+    ted_collapse_inputs = FlairCollapse.out.collapsed
+        .map { test_name, dataset_name, align_label, partition_label, correct_label, collapse_label,
+               isoforms_bed, isoforms_fa, isoforms_gtf, isoform_read_map, isoform_counts ->
+            def process_label = "${correct_label}_${collapse_label}"
+            tuple(
+                test_name,
+                dataset_name,
+                align_label,
+                partition_label,
+                correct_label,
+                collapse_label,
+                process_label,
+                isoforms_bed,
+                isoform_read_map
+            )
+        }
+        .combine(align_for_ted, by: [0, 1, 2])  // Join by test_name, dataset_name, align_label
+        // Need to get corrected BED from FlairCorrect output
+        .combine(
+            FlairCorrect.out.corrected.map { test_name, dataset_name, align_label, partition_label, 
+                                              correct_label, corrected_bed, inconsistent_bed ->
+                tuple(test_name, dataset_name, align_label, partition_label, correct_label, corrected_bed)
+            },
+            by: [0, 1, 2, 3, 4]  // Join by test_name, dataset_name, align_label, partition_label, correct_label
+        )
+        .combine(partition_for_ted, by: [0, 1, 2, 3])  // Join by test_name, dataset_name, align_label, partition_label
+        .map { test_name, dataset_name, align_label, partition_label, correct_label, collapse_label,
+               process_label, isoforms_bed, isoform_read_map, bam, bai, corrected_bed, cage_file, qs_file ->
+            
+            tuple(
+                test_name,
+                dataset_name,
+                align_label,
+                partition_label,
+                process_label,
+                'collapse',           // stage
+                isoforms_bed,
+                isoform_read_map,
+                bam,
+                bai,
+                corrected_bed,
+                cage_file,
+                qs_file
+            )
+        }
+    
+    // Combine transcriptome and collapse inputs
+    ted_combined_inputs = ted_transcriptome_inputs.mix(ted_collapse_inputs)
+    
+    // Join with partitioned reference peaks
+    ted_with_ref_peaks = ted_combined_inputs
+        .combine(PrepareReferencePeaks.out.ref_peaks, by: [0, 1, 2, 3])  // Join by test_name, dataset_name, align_label, partition_label
+        .map { test_name, dataset_name, align_label, partition_label, process_label, stage,
+               isoforms_bed, isoform_read_map, bam, bai, corrected_bed, cage_file, qs_file,
+               ref_tss, ref_tts ->
+            tuple(
+                test_name,
+                dataset_name,
+                align_label,
+                partition_label,
+                process_label,
+                stage,
+                isoforms_bed,
+                isoform_read_map,
+                bam,
+                bai,
+                corrected_bed,
+                cage_file,
+                qs_file,
+                ref_tss,
+                ref_tts
+            )
+        }
+    
+    // Run FlairTED with reference peaks
+    FlairTED(ted_with_ref_peaks)
 }
