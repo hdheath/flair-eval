@@ -9,7 +9,7 @@ nextflow.enable.dsl=2
 // =============================================================================
 
 process FlairAlign {
-    conda 'flair-dev'
+    conda '/private/home/hdheath/miniforge3/envs/flair-dev'
     publishDir "results/align", mode: 'symlink'
     
     output:
@@ -26,14 +26,14 @@ process FlairAlign {
 }
 
 process FlairPartition {
-    conda 'flair-dev'
+    conda '/private/home/hdheath/miniforge3/envs/flair-dev'
     publishDir "results/partition", mode: 'symlink'
     
     input:
     tuple path(bam), path(bed)
     
     output:
-    tuple path("example_chr1.bam"), path("example_chr1.bed"), emit: partitioned
+    tuple path("example_chr1.bam"), path("example_chr1.bam.bai"), path("example_chr1.bed"), path("example_chr1_annotation.gtf"), emit: partitioned
     
     script:
     """
@@ -48,20 +48,22 @@ process FlairPartition {
 }
 
 process FlairTranscriptome {
-    conda 'flair-dev'
+    conda '/private/home/hdheath/miniforge3/envs/flair-dev'
     publishDir "results/transcriptome", mode: 'symlink'
     
     input:
-    tuple path(bam), path(bed)
+    tuple path(bam), path(bai), path(bed), path(gtf)
     
     output:
-    path("example.transcriptome.fa"), emit: transcriptome
+    path("example_chr1.transcriptome.isoforms.fa"), emit: transcriptome
     
     script:
     """
     flair transcriptome \
         -b ${bam} \
-        -o example.transcriptome \
+        -g /private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa \
+        -f ${gtf} \
+        -o example_chr1.transcriptome \
         --threads 4
     """
 }
@@ -70,29 +72,7 @@ workflow {
     // Run the three processes in sequence
     FlairAlign()
     FlairPartition(FlairAlign.out.alignments)
-    FlairTranscriptome(FlairAlign.out.alignments)
-    
-    // Print completion message
-    workflow.onComplete {
-        println """
-        
-        ====================================================
-        FLAIR WORKFLOW COMPLETE!
-        ====================================================
-        
-        What happened:
-        1. ✅ Aligned reads to genome (chromosome 1, first 100k bases)
-        2. ✅ Partitioned alignments by region  
-        3. ✅ Generated transcriptome assembly
-        
-        Results:
-        📁 results/align/example.{bam,bed}
-        📁 results/partition/example_chr1.{bam,bed}
-        📁 results/transcriptome/example.transcriptome.fa
-        
-        ====================================================
-        """
-    }
+    FlairTranscriptome(FlairPartition.out.partitioned)
 }
 
 /*
@@ -111,6 +91,5 @@ This runs a single example with:
 - Region: chr1:1-100000 (first 100k bases of chromosome 1)
 - Output: Alignment, partition, and transcriptome files
 
-Perfect for testing FLAIR installation or workflow setup!
 ====================================================
 */

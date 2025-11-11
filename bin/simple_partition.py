@@ -22,10 +22,10 @@ def run_command(cmd):
 
 def partition_bam(input_bam, output_bam, region):
     """Extract reads from BAM file for specified region."""
-    # Index BAM if needed
+    # Index input BAM if needed
     bai_file = Path(str(input_bam) + ".bai")
     if not bai_file.exists():
-        print(f"Indexing BAM file: {input_bam}")
+        print(f"Indexing input BAM file: {input_bam}")
         run_command(["samtools", "index", str(input_bam)])
     
     # Extract region
@@ -35,6 +35,10 @@ def partition_bam(input_bam, output_bam, region):
         "-o", str(output_bam),
         str(input_bam), region
     ])
+    
+    # Index the output BAM file (required for FLAIR transcriptome)
+    print(f"Indexing output BAM file: {output_bam}")
+    run_command(["samtools", "index", str(output_bam)])
 
 
 
