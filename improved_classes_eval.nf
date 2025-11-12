@@ -112,7 +112,6 @@ def standard_transcriptome_modes = [
 // =============================================================================
 
 process FlairAlign {
-    conda '/private/groups/brookslab/hdheath/envs/flair-dev'
     publishDir "results/align", mode: 'symlink'
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}"
@@ -137,7 +136,6 @@ process FlairAlign {
 }
 
 process FlairPartition {
-    conda '/private/groups/brookslab/hdheath/envs/flair-dev'
     publishDir "results/partition/${test_name}", mode: 'symlink'
     tag "${dataset_name}_${align_mode}_${partition_mode}"
     
@@ -170,7 +168,6 @@ process FlairPartition {
 }
 
 process FlairCorrect {
-    conda '/private/groups/brookslab/hdheath/envs/flair-dev'
     publishDir "results/correct/${test_name}", mode: 'symlink'
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_${correct_mode}"
@@ -195,7 +192,6 @@ process FlairCorrect {
 }
 
 process FlairCollapse {
-    conda '/private/groups/brookslab/hdheath/envs/flair-dev'
     publishDir "results/collapse/${test_name}", mode: 'symlink'
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_${correct_mode}_${collapse_mode}"
@@ -226,7 +222,6 @@ process FlairCollapse {
 }
 
 process FlairTranscriptome {
-    conda '/private/groups/brookslab/hdheath/envs/flair-dev'
     publishDir "results/transcriptome/${test_name}", mode: 'symlink'
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_transcriptome"
@@ -256,7 +251,6 @@ process FlairTranscriptome {
 }
 
 process FlairEval {
-    conda '/private/groups/brookslab/hdheath/envs/flair-dev'
     publishDir "results/eval/${test_name}", mode: 'symlink'
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_${process_label}"
@@ -281,7 +275,6 @@ process FlairEval {
 }
 
 process PrepareReferencePeaks {
-    conda '/private/groups/brookslab/hdheath/envs/flair-dev'
     publishDir "results/reference_peaks/${test_name}", mode: 'symlink'
     tag "${dataset_name}_${align_mode}_${partition_mode}"
     
@@ -303,7 +296,6 @@ process PrepareReferencePeaks {
 }
 
 process FlairTED {
-    conda '/private/groups/brookslab/hdheath/envs/flair-dev'
     publishDir "results/ted/${test_name}/${dataset_name}", mode: 'symlink', 
                pattern: "*.tsv"
     errorStrategy 'ignore'
@@ -409,8 +401,8 @@ workflow {
     // =============================================================================
     
     def test_sets = [
-        quick_test,
-        partition_test
+        quick_test
+        // , partition_test
         // comprehensive_test  // Commented out - too many jobs!
     ]
     
@@ -436,11 +428,11 @@ workflow {
     // Generate align combinations
     align_inputs = datasets_ch
         .flatMap { test_name, dataset, align_modes, partition_modes, correct_modes, collapse_modes, transcriptome_modes ->
-            align_modes.collect { align_mode, align_args ->
+            align_modes.collectMany { align_mode, align_args ->
                 dataset.getReadsList().collect { reads_file ->
                     [test_name, dataset.name, file(reads_file), align_mode, align_args]
                 }
-            }.flatten(1)
+            }
         }
     
     // Get unique genome files

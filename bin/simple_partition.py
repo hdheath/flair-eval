@@ -104,7 +104,8 @@ def main():
     parser = argparse.ArgumentParser(description="Simple partition script for FLAIR BAM/BED files")
     parser.add_argument("--bam", required=True, help="Input BAM file from FLAIR align")
     parser.add_argument("--bed", required=True, help="Input BED file from FLAIR align") 
-    parser.add_argument("--region", required=True, help="Region to extract (e.g., chr1:1000-2000)")
+    parser.add_argument("--region", help="Region to extract (e.g., chr1:1000-2000)")
+    parser.add_argument("--all", action="store_true", help="Pass through all data (no filtering)")
     parser.add_argument("--output-prefix", required=True, help="Prefix for output files")
     
     # Optional files
@@ -117,10 +118,23 @@ def main():
     
     args = parser.parse_args()
     
+    # Check arguments
+    if not args.all and not args.region:
+        print("Error: Must specify either --all or --region", file=sys.stderr)
+        sys.exit(1)
+    
+    if args.all and args.region:
+        print("Error: Cannot specify both --all and --region", file=sys.stderr)
+        sys.exit(1)
+    
     # Parse inputs
     input_bam = Path(args.bam)
     input_bed = Path(args.bed)
-    chrom, start, end = parse_region(args.region)
+    
+    if args.region:
+        chrom, start, end = parse_region(args.region)
+    else:
+        chrom, start, end = None, None, None  # For --all mode
     
     # Check inputs exist
     if not input_bam.exists():
@@ -134,15 +148,35 @@ def main():
     output_bam = Path(f"{args.output_prefix}.bam")
     output_bed = Path(f"{args.output_prefix}.bed")
     
-    print(f"Partitioning to region: {chrom}:{start}-{end}")
-    print(f"Input BAM: {input_bam}")
-    print(f"Input BED: {input_bed}")
-    print(f"Output BAM: {output_bam}")
-    print(f"Output BED: {output_bed}")
-    
-    # Do the work - core BAM/BED files
-    partition_bam(input_bam, output_bam, args.region)
-    partition_bed_file(input_bed, output_bed, chrom, start, end)
+    if args.all:
+        print("Pass-through mode: creating symlinks to original files")
+        print(f"Input BAM: {input_bam}")
+        print(f"Input BED: {input_bed}")
+        print(f"Output BAM: {output_bam}")
+        print(f"Output BED: {output_bed}")
+        
+        # Create symlinks instead of copying
+        output_bam.symlink_to(input_bam.resolve())
+        output_bed.symlink_to(input_bed.resolve())
+        
+        # For BAM index - symlink if exists, create if doesn't
+        input_bai = Path(str(input_bam) + ".bai")
+        output_bai = Path(str(output_bam) + ".bai")
+        if input_bai.exists():
+            output_bai.symlink_to(input_bai.resolve())
+        else:
+            print(f"Creating BAM index for: {output_bam}")
+            run_command(["samtools", "index", str(output_bam)])
+    else:
+        print(f"Partitioning to region: {chrom}:{start}-{end}")
+        print(f"Input BAM: {input_bam}")
+        print(f"Input BED: {input_bed}")
+        print(f"Output BAM: {output_bam}")
+        print(f"Output BED: {output_bed}")
+        
+        # Do the work - core BAM/BED files
+        partition_bam(input_bam, output_bam, args.region)
+        partition_bed_file(input_bed, output_bed, chrom, start, end)
     
     created_files = [str(output_bam), str(output_bed)]
     
@@ -160,7 +194,19 @@ def main():
         if file_path:
             input_path = Path(file_path)
             
-            if file_type == 'genome' and input_path.exists():
+            if args.all and input_path.exists():
+                # Pass-through mode: create symlinks
+                if file_type == 'genome':
+                    output_file = Path(f"{args.output_prefix}_genome.fa")
+                elif file_type == 'gtf':
+                    output_file = Path(f"{args.output_prefix}_annotation.gtf")
+                else:
+                    output_file = Path(f"{args.output_prefix}_{file_type}.bed")
+                
+                output_file.symlink_to(input_path.resolve())
+                created_files.append(str(output_file))
+                
+            elif file_type == 'genome' and input_path.exists():
                 # For genome FASTA, extract the sequence for this region
                 output_genome = Path(f"{args.output_prefix}_genome.fa")
                 print(f"Extracting genome sequence for {args.region}")
