@@ -80,27 +80,22 @@ class TestSet {
 // =============================================================================
 
 def standard_align_modes = [
-    default: '',
-    with_nvrna: '--nvrna',
-    stringent: '-m 200 --quality 20'
+    default: ''
 ]
 
 def standard_partition_modes = [
     all: '--all',
     chr1: '--region chr1',
-    chr1_100k: '--region chr1:1-100000'
+    chr5: '--region chr5',
+    chr22: '--region chr22'
 ]
 
 def standard_correct_modes = [
     with_gtf: '',
-    with_gtf_and_nvrna: '--nvrna',
-    stringent: '-w 20'
 ]
 
 def standard_collapse_modes = [
     default: '',
-    stringent: '-s 4 -e 100',
-    check_splice: '--check_splice'
 ]
 
 def standard_transcriptome_modes = [
@@ -117,8 +112,7 @@ process FlairAlign {
     tag "${dataset_name}_${align_mode}"
     
     input:
-    tuple val(test_name), val(dataset_name), path(reads), val(align_mode), val(align_args)
-    path genome
+    tuple val(test_name), val(dataset_name), path(reads), val(align_mode), val(align_args), path(genome)
     
     output:
     tuple val(test_name), val(dataset_name), val(align_mode), 
@@ -141,9 +135,7 @@ process FlairPartition {
     
     input:
     tuple val(test_name), val(dataset_name), val(align_mode), path(bam), path(bai), path(bed), 
-          val(partition_mode), val(partition_args)
-    path genome
-    path gtf
+          val(partition_mode), val(partition_args), path(genome), path(gtf)
     
     output:
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), 
@@ -343,71 +335,123 @@ workflow {
     // DATASET DEFINITIONS
     // =============================================================================
     
-    def human_dataset = new Dataset('human', [
-        reads: '/private/groups/brookslab/hdheath/projects/flair-eval/cache/datasets/human/WTC11.100reads.fasta',
-        genome: '/private/groups/brookslab/reference_genomes/gencode_human/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/reference_genomes/gencode_human/gencode.v47.annotation.gtf',
-        junctions: '/private/groups/brookslab/hdheath/projects/flair-eval/cache/datasets/human/junctions.bed',
-        cage: '/private/groups/brookslab/hdheath/projects/flair-eval/cache/datasets/human/hg38_fair+new_CAGE_peaks_phase1and2.bed',
-        quantseq: '/private/groups/brookslab/hdheath/projects/flair-eval/cache/datasets/human/Atlas.clusters.2.0.GRCh38.96.bed'
+    def a549_chr1_dataset = new Dataset('a549_chr1', [
+        reads: '/private/groups/brookslab/hdheath/projects/flair-eval/data/A549_chr1_reads_300kb.fasta',
+        genome: '/private/groups/brookslab/hdheath/projects/flair-eval/data/A549_chr1_reference.fasta',
+        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf'
     ])
-    
-    def a549_dataset = new Dataset('A549_cDNA', [
-        reads: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11.100reads.fasta',
-        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
-        junctions: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11_all.SJ.out.tab',
-        cage: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/CAGE_TSS_human.bed',
-        quantseq: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11_all_polyApeaks_fixed.bed'
+
+    def a549_chr5_dataset = new Dataset('a549_chr5', [
+        reads: '/private/groups/brookslab/hdheath/projects/flair-eval/data/A549_chr5_reads_300kb.fasta',
+        genome: '/private/groups/brookslab/hdheath/projects/flair-eval/data/A549_chr5_reference.fasta',
+        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf'
+    ])
+
+    def a549_chr22_dataset = new Dataset('a549_chr22', [
+        reads: '/private/groups/brookslab/cafelton/testflairanyvcf/simNMD/smallchr22test/WTC11.pacBio.chr22smalllocus.fasta',
+        genome: '/private/groups/brookslab/cafelton/testflairanyvcf/simNMD/smallchr22test/GRCh38.chr22.genome.fa',
+        gtf: '/private/groups/brookslab/cafelton/testflairanyvcf/simNMD/smallchr22test/gencode.v38.annotation.chr22.gtf'
     ])
     
     // =============================================================================
-    // TEST SET DEFINITIONS - Using simplified parameter structure
+    // TEST SET DEFINITIONS 1 - Single Dataset, individual testsets, custom options
     // =============================================================================
     
-    // Quick test - minimal options
-    def quick_test = new TestSet('quick_test', a549_dataset, [
-        align: [default: ''],
-        partition: [chr1_100k: '--region chr1:1-100000'],
-        correct: [with_gtf: ''],
-        collapse: [default: ''],
-        transcriptome: [with_gtf: '']
-    ])
+    // // Quick test - minimal options
+    // def quick_test = new TestSet('test_w_colette', test_w_colette, [
+    //     align: [default: ''],
+    //     partition: [chr22_100k: '--region chr22:31000000-32000000'],
+    //     correct: [with_gtf: ''],
+    //     collapse: [default: ''],
+    //     transcriptome: [
+    //         with_gtf: '',
+    //         max_ends: '--max_ends 3'
+    //     ]
+    // ])
+
+    // def quick_test2 = new TestSet('test_w_colette', test_w_colette, [
+    //     align: [default: '']
+    // ])
+
+    // // Partition comparison test - focused on partition modes
+    // def partition_test = new TestSet('partition_test', a549_dataset, [
+    //     align: [default: ''],
+    //     partition: [
+    //         all: '--all',
+    //         chr1_100k: '--region chr1:1-100000'
+    //     ],
+    //     correct: [with_gtf: ''],
+    //     collapse: [default: ''],
+    //     transcriptome: [with_gtf: '']
+    // ])
+
+    // =============================================================================
+    // TEST SET DEFINITIONS 2 - Single Dataset, individual testsets, global options
+    // =============================================================================
     
-    // Partition comparison test - focused on partition modes
-    def partition_test = new TestSet('partition_test', a549_dataset, [
-        align: [default: ''],
-        partition: [
-            all: '--all',
-            chr1: '--region chr1',
-            chr1_100k: '--region chr1:1-100000'
-        ],
-        correct: [with_gtf: ''],
-        collapse: [default: ''],
-        transcriptome: [with_gtf: '']
-    ])
+    // // Comprehensive tests - uses standard modes for full matrix across multiple datasets
+    // def comprehensive_chr1_test = new TestSet('comprehensive_chr1', a549_chr1_dataset, [
+    //     align: standard_align_modes,
+    //     partition: standard_partition_modes,
+    //     correct: standard_correct_modes,
+    //     collapse: standard_collapse_modes,
+    //     transcriptome: standard_transcriptome_modes
+    // ])
     
-    // Comprehensive test - uses standard modes for full matrix
-    def comprehensive_test = new TestSet('comprehensive_test', human_dataset, [
-        align: standard_align_modes,
-        partition: standard_partition_modes,
-        correct: standard_correct_modes,
-        collapse: standard_collapse_modes,
-        transcriptome: standard_transcriptome_modes
+    // def comprehensive_chr5_test = new TestSet('comprehensive_chr5', a549_chr5_dataset, [
+    //     align: standard_align_modes,
+    //     partition: standard_partition_modes,
+    //     correct: standard_correct_modes,
+    //     collapse: standard_collapse_modes,
+    //     transcriptome: standard_transcriptome_modes
+    // ])
+    
+    // def comprehensive_chr22_test = new TestSet('comprehensive_chr22', a549_chr22_dataset, [
+    //     align: standard_align_modes,
+    //     partition: standard_partition_modes,
+    //     correct: standard_correct_modes,
+    //     collapse: standard_collapse_modes,
+    //     transcriptome: standard_transcriptome_modes
+    // ])
+
+    // =============================================================================
+    // TEST SET DEFINITIONS 3 - Multi Dataset, using global options
+    // =============================================================================
+    
+    // Helper function to create a testset of multiple datasets with global options
+    def createMultiDatasetRun = { datasets ->
+        return datasets.collect { dataset ->
+            new TestSet("comprehensive_${dataset.name}", dataset, [
+                align: standard_align_modes,
+                partition: standard_partition_modes,
+                correct: standard_correct_modes,
+                collapse: standard_collapse_modes,
+                transcriptome: standard_transcriptome_modes
+            ])
+        }
+    }
+    
+    // Create comprehensive tests for all chromosome datasets
+    def all_comprehensive_tests = createMultiDatasetRun([
+        a549_chr1_dataset, 
+        a549_chr5_dataset, 
+        a549_chr22_dataset
     ])
     
     // =============================================================================
     // COLLECT ALL TEST SETS TO RUN
     // =============================================================================
     
-    def test_sets = [
-        quick_test
-        // , partition_test
-        // comprehensive_test  // Commented out - too many jobs!
-    ]
+    def test_sets = all_comprehensive_tests
+    
+    // Alternative ways to configure test_sets:
+    // def test_sets = [quick_test]
+    // def test_sets = [quick_test, partition_test]
+    // def test_sets = [comprehensive_chr1_test, comprehensive_chr5_test, comprehensive_chr22_test]
+    // def test_sets = [quick_test] + all_comprehensive_tests
     
     // Print summary
-    println("\n=== IMPROVED FLAIR Test Suite ===")
+    println("\n=== FLAIR Test Suite ===")
     test_sets.each { test ->
         println("${test.name}: ${test.totalJobs()} jobs using dataset '${test.dataset.name}'")
     }
@@ -415,7 +459,7 @@ workflow {
     println("===================================\n")
     
     // =============================================================================
-    // BUILD CHANNELS USING SIMPLIFIED APPROACH
+    // BUILD CHANNELS
     // =============================================================================
     
     // Create datasets channel
@@ -425,42 +469,30 @@ workflow {
              test_set.correctModes, test_set.collapseModes, test_set.transcriptomeModes]
         }
     
-    // Generate align combinations
+    // Generate align combinations (include dataset-specific genome)
     align_inputs = datasets_ch
         .flatMap { test_name, dataset, align_modes, partition_modes, correct_modes, collapse_modes, transcriptome_modes ->
             align_modes.collectMany { align_mode, align_args ->
                 dataset.getReadsList().collect { reads_file ->
-                    [test_name, dataset.name, file(reads_file), align_mode, align_args]
+                    [test_name, dataset.name, file(reads_file), align_mode, align_args, file(dataset.genome)]
                 }
             }
         }
     
-    // Get unique genome files
-    unique_genome = Channel.from(test_sets)
-        .map { file(it.dataset.genome) }
-        .unique()
-        .first()
+    // Run alignment (genome files are now included in align_inputs)
+    FlairAlign(align_inputs)
     
-    // Run alignment
-    FlairAlign(align_inputs, unique_genome)
-    
-    // Generate partition combinations using combine
+    // Generate partition combinations using combine (include dataset-specific genome)
     partition_inputs = FlairAlign.out.alignments
         .combine(datasets_ch, by: 0)  // Join by test_name
         .flatMap { test_name, dataset_name, align_mode, bam, bai, bed, dataset, align_modes, partition_modes, correct_modes, collapse_modes, transcriptome_modes ->
             partition_modes.collect { partition_mode, partition_args ->
-                [test_name, dataset_name, align_mode, bam, bai, bed, partition_mode, partition_args]
+                [test_name, dataset_name, align_mode, bam, bai, bed, partition_mode, partition_args, file(dataset.genome), file(dataset.gtf)]
             }
         }
     
-    // Get unique GTF files  
-    unique_gtf = Channel.from(test_sets)
-        .map { file(it.dataset.gtf) }
-        .unique()
-        .first()
-    
-    // Run partition
-    FlairPartition(partition_inputs, unique_genome, unique_gtf)
+    // Run partition (genome and GTF files are now included in partition_inputs)
+    FlairPartition(partition_inputs)
     
     // Generate transcriptome combinations
     transcriptome_inputs = FlairPartition.out.partitioned
