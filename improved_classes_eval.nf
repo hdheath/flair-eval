@@ -330,6 +330,26 @@ process FlairTED {
     """
 }
 
+process SynthesizeEvaluations {
+    publishDir "results/summary", mode: 'symlink'
+    tag "${test_name}_evaluation_summary"
+    
+    input:
+    tuple val(test_name), path(ted_files), path(eval_files)
+    
+    output:
+    path "${test_name}_evaluation_summary.tsv", emit: evaluation_summary
+    
+    script:
+    """
+    python ${projectDir}/bin/synthesize_evaluations.py \\
+        --ted-files ${ted_files.join(' ')} \\
+        --flair-files ${eval_files.join(' ')} \\
+        --output ${test_name}_evaluation_summary.tsv \\
+        --test-name ${test_name}
+    """
+}
+
 workflow {
     // =============================================================================
     // DATASET DEFINITIONS
@@ -656,4 +676,28 @@ workflow {
     // Combine transcriptome and collapse TED inputs
     ted_all_inputs = ted_transcriptome_inputs.mix(ted_collapse_inputs)
     FlairTED(ted_all_inputs)
+    
+    // =============================================================================
+    // SYNTHESIS AND SUMMARY LOGIC
+    // =============================================================================
+    
+    // Group TED results by test name for synthesis
+    ted_by_test = FlairTED.out.ted_metrics
+        .map { test_name, dataset_name, align_mode, partition_mode, process_label, stage, ted_file ->
+            [test_name, ted_file]
+        }
+        .groupTuple(by: 0)
+    
+    // Group FLAIR eval results by test name for synthesis
+    flair_by_test = FlairEval.out.eval_results
+        .map { test_name, dataset_name, align_mode, partition_mode, process_label, eval_file ->
+            [test_name, eval_file]
+        }
+        .groupTuple(by: 0)
+    
+    // Combine both TED and FLAIR results for comprehensive synthesis
+    all_results_input = ted_by_test.join(flair_by_test, by: 0)
+    
+    // Generate comprehensive summary with both TED and FLAIR evaluations
+    SynthesizeEvaluations(all_results_input)
 }
