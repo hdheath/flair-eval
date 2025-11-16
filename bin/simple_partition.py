@@ -28,7 +28,7 @@ def partition_bam(input_bam, output_bam, region):
         print(f"Indexing input BAM file: {input_bam}")
         run_command(["samtools", "index", str(input_bam)])
     
-    # Extract region
+    # Extract region - samtools accepts both 'chr1' and 'chr1:1000-2000' formats
     print(f"Extracting region {region} from {input_bam}")
     run_command([
         "samtools", "view", "-b", 
@@ -45,9 +45,15 @@ def partition_bam(input_bam, output_bam, region):
 
 
 def parse_region(region_str):
-    """Parse region string like 'chr1:1000-2000' into components."""
-    if ':' not in region_str or '-' not in region_str:
-        raise ValueError(f"Region must be in format 'chr:start-end', got: {region_str}")
+    """Parse region string like 'chr1:1000-2000' or just 'chr1' into components."""
+    # Handle case where only chromosome is specified (e.g., 'chr1')
+    if ':' not in region_str:
+        # Just chromosome name - return None for start/end to indicate whole chromosome
+        return region_str, None, None
+    
+    # Handle case with coordinates (e.g., 'chr1:1000-2000')
+    if '-' not in region_str:
+        raise ValueError(f"Region with coordinates must be in format 'chr:start-end', got: {region_str}")
     
     chrom, pos_range = region_str.split(':', 1)
     start_str, end_str = pos_range.split('-', 1)
@@ -69,8 +75,14 @@ def partition_bed_file(input_file, output_file, chrom, start, end):
     if not input_file.exists():
         print(f"Warning: Optional file not found, skipping: {input_file}")
         return False
+    
+    # Format region string for logging
+    if start is None or end is None:
+        region_str = chrom  # Whole chromosome
+    else:
+        region_str = f"{chrom}:{start}-{end}"
         
-    print(f"Filtering {input_file} for {chrom}:{start}-{end}")
+    print(f"Filtering {input_file} for {region_str}")
     
     with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
         for line in infile:
@@ -91,10 +103,14 @@ def partition_bed_file(input_file, output_file, chrom, start, end):
                 outfile.write(line)  # Keep lines with non-numeric coordinates
                 continue
             
-            # Check if this entry overlaps with our region
-            if (bed_chrom == chrom and 
-                not (bed_end < start or bed_start > end)):
-                outfile.write(line)
+            # Check if this entry is in the target chromosome
+            if bed_chrom == chrom:
+                # If no coordinates specified, include all entries from this chromosome
+                if start is None or end is None:
+                    outfile.write(line)
+                # Otherwise check for overlap with specified region
+                elif not (bed_end < start or bed_start > end):
+                    outfile.write(line)
     
     print(f"Created: {output_file}")
     return True
@@ -168,7 +184,13 @@ def main():
             print(f"Creating BAM index for: {output_bam}")
             run_command(["samtools", "index", str(output_bam)])
     else:
-        print(f"Partitioning to region: {chrom}:{start}-{end}")
+        # Format region string for logging
+        if start is None or end is None:
+            region_display = chrom
+        else:
+            region_display = f"{chrom}:{start}-{end}"
+        
+        print(f"Partitioning to region: {region_display}")
         print(f"Input BAM: {input_bam}")
         print(f"Input BED: {input_bed}")
         print(f"Output BAM: {output_bam}")
@@ -211,6 +233,7 @@ def main():
                 output_genome = Path(f"{args.output_prefix}_genome.fa")
                 print(f"Extracting genome sequence for {args.region}")
                 try:
+                    # samtools faidx accepts both 'chr1' and 'chr1:1000-2000' formats
                     run_command([
                         "samtools", "faidx", str(input_path), args.region,
                         "-o", str(output_genome)

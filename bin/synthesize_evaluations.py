@@ -18,15 +18,15 @@ def parse_filename_metadata(filename):
     
     Expected patterns:
     - TED: dataset_align_partition_process_stage_ted.tsv
-    - FLAIR: dataset_align_partition_process.eval_summary.txt
+    - FLAIR: dataset_align_partition_process_stage_flair_eval.tsv
     
     Example: a549_chr5_default_all_transcriptome_with_gtf_transcriptome_ted.tsv
     -> dataset=a549_chr5, align=default, partition=all, process=transcriptome_with_gtf
     """
     base_name = Path(filename).stem
     
-    # Remove common suffixes
-    base_name = base_name.replace('_ted', '').replace('.eval_summary', '')
+    # Remove common suffixes (order matters - do flair_eval before ted to avoid partial match)
+    base_name = base_name.replace('_flair_eval', '').replace('_ted', '').replace('.eval_summary', '')
     
     # Split by underscores
     parts = base_name.split('_')
@@ -104,7 +104,7 @@ def parse_filename_metadata(filename):
         'dataset': dataset,
         'align_mode': align_mode,
         'partition_mode': partition_mode,
-        'pipeline_stage': pipeline_stage,
+        'stage': pipeline_stage,
         'pipeline_mode': pipeline_mode,
         'source_file': filename
     }
@@ -136,7 +136,8 @@ def parse_ted_file(filepath):
                 
                 # Add metadata first
                 for key, value in metadata.items():
-                    row[key] = value
+                    if key != 'source_file':  # Don't include source file
+                        row[key] = value
                 
                 # Add TED metrics
                 for i, col in enumerate(header):
@@ -155,65 +156,42 @@ def parse_ted_file(filepath):
 
 
 def parse_flair_file(filepath):
-    """Parse FLAIR evaluation text file and return row dictionary."""
+    """Parse FLAIR evaluation TSV file and return row dictionary."""
     try:
-        results = OrderedDict()
+        results = []
         metadata = parse_filename_metadata(filepath.name)
         
-        # Normalize pipeline_mode for collapse to match TED naming
-        # FLAIR collapse files: collapse_with_gtf_default (single string)
-        # TED collapse files:   collapse_with_gtf_default_collapse (has markers)
-        # Both should result in: with_gtf+default
-        if metadata['pipeline_stage'] == 'collapse' and '+' not in metadata['pipeline_mode']:
-            # FLAIR format doesn't have the second collapse marker
-            # Parse it as: correct_mode_collapse_mode
-            parts = metadata['pipeline_mode'].split('_')
-            # Last part is typically the collapse mode, rest is correct mode
-            if len(parts) >= 2:
-                collapse_mode = parts[-1]
-                correct_mode = '_'.join(parts[:-1])
-                metadata['pipeline_mode'] = f"{correct_mode}+{collapse_mode}"
-        
-        # Add metadata
-        for key, value in metadata.items():
-            results[key] = value
-        
         with open(filepath, 'r') as f:
-            content = f.read()
+            lines = f.readlines()
         
-        # Parse different sections
-        sections = {
-            'GENIC REGION EVALUATION': r'=== GENIC REGION EVALUATION ===\s*\nfile\s+total_read_regions\s+found_regions\s+total_reads\s+genic_reads\s*\n([^\n=]+)',
-            'SPLICE JUNCTION EVALUATION': r'=== SPLICE JUNCTION EVALUATION ===\s*\nfile\s+total_sjc\s+supported_sjc\s+subset_sjc\s+total_se\s+supported_se\s*\n([^\n=]+)',
-            'TRANSCRIPT CLASSIFICATION': r'=== TRANSCRIPT CLASSIFICATION \(vs ANNOTATION\) ===\s*\nfile\s+FSM\s+ISM\s+NIC\s+NNC\s+SEM\s+SEN\s*\n([^\n=]+)'
-        }
+        if len(lines) < 2:
+            print(f"Warning: FLAIR file {filepath} has insufficient lines")
+            return []
         
-        for section_name, pattern in sections.items():
-            match = re.search(pattern, content)
-            if match:
-                line = match.group(1).strip()
-                parts = line.split('\t')
-                if len(parts) > 1:
-                    if section_name == 'GENIC REGION EVALUATION':
-                        results['total_read_regions'] = parts[1] if len(parts) > 1 else ''
-                        results['found_regions'] = parts[2] if len(parts) > 2 else ''
-                        results['total_reads'] = parts[3] if len(parts) > 3 else ''
-                        results['genic_reads'] = parts[4] if len(parts) > 4 else ''
-                    elif section_name == 'SPLICE JUNCTION EVALUATION':
-                        results['total_sjc'] = parts[1] if len(parts) > 1 else ''
-                        results['supported_sjc'] = parts[2] if len(parts) > 2 else ''
-                        results['subset_sjc'] = parts[3] if len(parts) > 3 else ''
-                        results['total_se'] = parts[4] if len(parts) > 4 else ''
-                        results['supported_se'] = parts[5] if len(parts) > 5 else ''
-                    elif section_name == 'TRANSCRIPT CLASSIFICATION':
-                        results['FSM'] = parts[1] if len(parts) > 1 else ''
-                        results['ISM'] = parts[2] if len(parts) > 2 else ''
-                        results['NIC'] = parts[3] if len(parts) > 3 else ''
-                        results['NNC'] = parts[4] if len(parts) > 4 else ''
-                        results['SEM'] = parts[5] if len(parts) > 5 else ''
-                        results['SEN'] = parts[6] if len(parts) > 6 else ''
+        # Parse header
+        header = lines[0].strip().split('\t')
         
-        return [results]
+        # Parse data row (should only be one)
+        for line in lines[1:]:
+            if line.strip():
+                values = line.strip().split('\t')
+                row = OrderedDict()
+                
+                # Add metadata first
+                for key, value in metadata.items():
+                    if key != 'source_file':  # Don't include source file
+                        row[key] = value
+                
+                # Add FLAIR metrics
+                for i, col in enumerate(header):
+                    if i < len(values):
+                        row[col] = values[i]
+                    else:
+                        row[col] = ''
+                
+                results.append(row)
+        
+        return results
         
     except Exception as e:
         print(f"Error parsing FLAIR file {filepath}: {e}")
@@ -225,7 +203,7 @@ def main():
     parser.add_argument('--ted-files', nargs='+', required=True, 
                        help='TED evaluation TSV files')
     parser.add_argument('--flair-files', nargs='+', required=True,
-                       help='FLAIR evaluation text files')
+                       help='FLAIR evaluation TSV files')
     parser.add_argument('--output', required=True,
                        help='Output TSV file for unified results')
     parser.add_argument('--test-name', required=True,
@@ -245,7 +223,7 @@ def main():
             for row in rows:
                 # Create sample key from metadata
                 sample_key = (row['dataset'], row['align_mode'], row['partition_mode'], 
-                             row['pipeline_stage'], row['pipeline_mode'])
+                             row['stage'], row['pipeline_mode'])
                 
                 if sample_key not in results_by_sample:
                     results_by_sample[sample_key] = OrderedDict()
@@ -253,13 +231,13 @@ def main():
                     results_by_sample[sample_key]['dataset'] = row['dataset']
                     results_by_sample[sample_key]['align_mode'] = row['align_mode']
                     results_by_sample[sample_key]['partition_mode'] = row['partition_mode']
-                    results_by_sample[sample_key]['pipeline_stage'] = row['pipeline_stage']
+                    results_by_sample[sample_key]['stage'] = row['stage']
                     results_by_sample[sample_key]['pipeline_mode'] = row['pipeline_mode']
                 
-                # Add TED metrics without prefix
+                # Add TED metrics
                 for key, value in row.items():
                     if key not in ['test_name', 'dataset', 'align_mode', 'partition_mode', 
-                                   'pipeline_stage', 'pipeline_mode', 'source_file', 'stage']:
+                                   'stage', 'pipeline_mode']:
                         results_by_sample[sample_key][key] = value
         else:
             print(f"Warning: TED file not found: {ted_file}")
@@ -273,7 +251,7 @@ def main():
             for row in rows:
                 # Create sample key from metadata
                 sample_key = (row['dataset'], row['align_mode'], row['partition_mode'], 
-                             row['pipeline_stage'], row['pipeline_mode'])
+                             row['stage'], row['pipeline_mode'])
                 
                 if sample_key not in results_by_sample:
                     results_by_sample[sample_key] = OrderedDict()
@@ -281,13 +259,13 @@ def main():
                     results_by_sample[sample_key]['dataset'] = row['dataset']
                     results_by_sample[sample_key]['align_mode'] = row['align_mode']
                     results_by_sample[sample_key]['partition_mode'] = row['partition_mode']
-                    results_by_sample[sample_key]['pipeline_stage'] = row['pipeline_stage']
+                    results_by_sample[sample_key]['stage'] = row['stage']
                     results_by_sample[sample_key]['pipeline_mode'] = row['pipeline_mode']
                 
-                # Add FLAIR metrics without prefix
+                # Add FLAIR metrics
                 for key, value in row.items():
                     if key not in ['test_name', 'dataset', 'align_mode', 'partition_mode', 
-                                   'pipeline_stage', 'pipeline_mode', 'source_file']:
+                                   'stage', 'pipeline_mode']:
                         results_by_sample[sample_key][key] = value
         else:
             print(f"Warning: FLAIR file not found: {flair_file}")
@@ -304,11 +282,7 @@ def main():
     
     if success:
         print(f"Saved unified evaluation summary to {args.output}")
-        print(f"Total samples: {len(all_results)}")
-        ted_count = sum(1 for r in all_results if any(k.startswith('ted_') for k in r.keys()))
-        flair_count = sum(1 for r in all_results if any(k.startswith('flair_') for k in r.keys()))
-        print(f"Samples with TED metrics: {ted_count}")
-        print(f"Samples with FLAIR metrics: {flair_count}")
+        print(f"Total merged samples: {len(all_results)}")
         return 0
     else:
         print("Failed to write output file")
@@ -329,7 +303,7 @@ def write_tsv_merged(rows, output_path, test_name):
     
     # Define metadata column order
     metadata_cols = ['test_name', 'dataset', 'align_mode', 'partition_mode', 
-                     'pipeline_stage', 'pipeline_mode']
+                     'stage', 'pipeline_mode']
     
     # Define known TED metrics (from TED TSV files)
     known_ted_metrics = [
