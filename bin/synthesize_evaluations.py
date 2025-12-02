@@ -2,14 +2,20 @@
 """
 Synthesize TED and FLAIR evaluation results into unified summary tables.
 
-This script combines TED metrics (.tsv files) and FLAIR evaluation results (.txt files)
+This script combines TED metrics (.tsv files) and FLAIR evaluation results (.tsv files)
 into comprehensive summary tables with consistent formatting.
 """
 
 import argparse
-import re
+import csv
 from pathlib import Path
 from collections import OrderedDict
+
+# Metadata fields to exclude from metric columns
+METADATA_FIELDS = {'test_name', 'dataset', 'align_mode', 'partition_mode', 'stage', 'pipeline_mode'}
+
+# Minimum lines required for a valid TSV file (header + at least one data row)
+MIN_TSV_LINES = 2
 
 
 def parse_filename_metadata(filename):
@@ -112,90 +118,92 @@ def parse_filename_metadata(filename):
     return metadata
 
 
-def parse_ted_file(filepath):
-    """Parse TED evaluation TSV file and return list of row dictionaries."""
+def parse_tsv_file(filepath):
+    """
+    Parse evaluation TSV file (TED or FLAIR) and return list of row dictionaries.
+    
+    Args:
+        filepath: Path object pointing to TSV file
+        
+    Returns:
+        List of OrderedDict objects, one per data row with metadata prepended
+    """
     try:
         results = []
         metadata = parse_filename_metadata(filepath.name)
         
         with open(filepath, 'r') as f:
-            lines = f.readlines()
-        
-        if len(lines) < 2:
-            print(f"Warning: TED file {filepath} has insufficient lines")
-            return []
-        
-        # Parse header
-        header = lines[0].strip().split('\t')
-        
-        # Parse data rows
-        for line in lines[1:]:
-            if line.strip():
-                values = line.strip().split('\t')
+            # Use csv.DictReader for more robust TSV parsing
+            reader = csv.DictReader(f, delimiter='\t')
+            
+            for row_dict in reader:
                 row = OrderedDict()
                 
-                # Add metadata first
+                # Add metadata first (exclude source_file)
                 for key, value in metadata.items():
-                    if key != 'source_file':  # Don't include source file
+                    if key != 'source_file':
                         row[key] = value
                 
-                # Add TED metrics
-                for i, col in enumerate(header):
-                    if i < len(values):
-                        row[col] = values[i]
-                    else:
-                        row[col] = ''
+                # Add metric columns
+                for key, value in row_dict.items():
+                    row[key] = value
                 
                 results.append(row)
         
-        return results
-        
-    except Exception as e:
-        print(f"Error parsing TED file {filepath}: {e}")
-        return []
-
-
-def parse_flair_file(filepath):
-    """Parse FLAIR evaluation TSV file and return row dictionary."""
-    try:
-        results = []
-        metadata = parse_filename_metadata(filepath.name)
-        
-        with open(filepath, 'r') as f:
-            lines = f.readlines()
-        
-        if len(lines) < 2:
-            print(f"Warning: FLAIR file {filepath} has insufficient lines")
-            return []
-        
-        # Parse header
-        header = lines[0].strip().split('\t')
-        
-        # Parse data row (should only be one)
-        for line in lines[1:]:
-            if line.strip():
-                values = line.strip().split('\t')
-                row = OrderedDict()
-                
-                # Add metadata first
-                for key, value in metadata.items():
-                    if key != 'source_file':  # Don't include source file
-                        row[key] = value
-                
-                # Add FLAIR metrics
-                for i, col in enumerate(header):
-                    if i < len(values):
-                        row[col] = values[i]
-                    else:
-                        row[col] = ''
-                
-                results.append(row)
+        if not results:
+            print(f"Warning: No data rows found in {filepath}")
         
         return results
         
-    except Exception as e:
-        print(f"Error parsing FLAIR file {filepath}: {e}")
+    except FileNotFoundError:
+        print(f"Error: File not found: {filepath}")
         return []
+    except csv.Error as e:
+        print(f"Error parsing CSV/TSV file {filepath}: {e}")
+        return []
+    except Exception as e:
+        print(f"Unexpected error parsing {filepath}: {e}")
+        return []
+
+
+def process_evaluation_files(file_list, file_type, test_name, results_by_sample):
+    """
+    Process a list of evaluation files and merge into results dictionary.
+    
+    Args:
+        file_list: List of file paths to process
+        file_type: String description for logging (e.g., 'TED', 'FLAIR')
+        test_name: Test set name for labeling
+        results_by_sample: Dictionary to populate with results, keyed by sample tuple
+    """
+    print(f"Processing {len(file_list)} {file_type} files...")
+    
+    for filepath_str in file_list:
+        filepath = Path(filepath_str)
+        if not filepath.exists():
+            print(f"Warning: {file_type} file not found: {filepath_str}")
+            continue
+        
+        rows = parse_tsv_file(filepath)
+        for row in rows:
+            # Create sample key from metadata
+            sample_key = (row['dataset'], row['align_mode'], row['partition_mode'], 
+                         row['stage'], row['pipeline_mode'])
+            
+            # Initialize sample if not exists
+            if sample_key not in results_by_sample:
+                results_by_sample[sample_key] = OrderedDict()
+                results_by_sample[sample_key]['test_name'] = test_name
+                results_by_sample[sample_key]['dataset'] = row['dataset']
+                results_by_sample[sample_key]['align_mode'] = row['align_mode']
+                results_by_sample[sample_key]['partition_mode'] = row['partition_mode']
+                results_by_sample[sample_key]['stage'] = row['stage']
+                results_by_sample[sample_key]['pipeline_mode'] = row['pipeline_mode']
+            
+            # Add metrics (exclude metadata fields)
+            for key, value in row.items():
+                if key not in METADATA_FIELDS:
+                    results_by_sample[sample_key][key] = value
 
 
 def main():
@@ -214,61 +222,9 @@ def main():
     # Dictionary to hold results keyed by sample identifier
     results_by_sample = {}
     
-    # Process TED files
-    print(f"Processing {len(args.ted_files)} TED files...")
-    for ted_file in args.ted_files:
-        filepath = Path(ted_file)
-        if filepath.exists():
-            rows = parse_ted_file(filepath)
-            for row in rows:
-                # Create sample key from metadata
-                sample_key = (row['dataset'], row['align_mode'], row['partition_mode'], 
-                             row['stage'], row['pipeline_mode'])
-                
-                if sample_key not in results_by_sample:
-                    results_by_sample[sample_key] = OrderedDict()
-                    results_by_sample[sample_key]['test_name'] = args.test_name
-                    results_by_sample[sample_key]['dataset'] = row['dataset']
-                    results_by_sample[sample_key]['align_mode'] = row['align_mode']
-                    results_by_sample[sample_key]['partition_mode'] = row['partition_mode']
-                    results_by_sample[sample_key]['stage'] = row['stage']
-                    results_by_sample[sample_key]['pipeline_mode'] = row['pipeline_mode']
-                
-                # Add TED metrics
-                for key, value in row.items():
-                    if key not in ['test_name', 'dataset', 'align_mode', 'partition_mode', 
-                                   'stage', 'pipeline_mode']:
-                        results_by_sample[sample_key][key] = value
-        else:
-            print(f"Warning: TED file not found: {ted_file}")
-    
-    # Process FLAIR files
-    print(f"Processing {len(args.flair_files)} FLAIR files...")
-    for flair_file in args.flair_files:
-        filepath = Path(flair_file)
-        if filepath.exists():
-            rows = parse_flair_file(filepath)
-            for row in rows:
-                # Create sample key from metadata
-                sample_key = (row['dataset'], row['align_mode'], row['partition_mode'], 
-                             row['stage'], row['pipeline_mode'])
-                
-                if sample_key not in results_by_sample:
-                    results_by_sample[sample_key] = OrderedDict()
-                    results_by_sample[sample_key]['test_name'] = args.test_name
-                    results_by_sample[sample_key]['dataset'] = row['dataset']
-                    results_by_sample[sample_key]['align_mode'] = row['align_mode']
-                    results_by_sample[sample_key]['partition_mode'] = row['partition_mode']
-                    results_by_sample[sample_key]['stage'] = row['stage']
-                    results_by_sample[sample_key]['pipeline_mode'] = row['pipeline_mode']
-                
-                # Add FLAIR metrics
-                for key, value in row.items():
-                    if key not in ['test_name', 'dataset', 'align_mode', 'partition_mode', 
-                                   'stage', 'pipeline_mode']:
-                        results_by_sample[sample_key][key] = value
-        else:
-            print(f"Warning: FLAIR file not found: {flair_file}")
+    # Process both TED and FLAIR files using unified function
+    process_evaluation_files(args.ted_files, 'TED', args.test_name, results_by_sample)
+    process_evaluation_files(args.flair_files, 'FLAIR', args.test_name, results_by_sample)
     
     if not results_by_sample:
         print("No valid results found!")
@@ -290,66 +246,98 @@ def main():
 
 
 def write_tsv_merged(rows, output_path, test_name):
-    """Write merged rows to TSV file with TED and FLAIR metrics combined."""
+    """
+    Write merged rows to TSV file with TED and FLAIR metrics combined.
+    
+    Args:
+        rows: List of OrderedDict objects containing merged data
+        output_path: Path to output TSV file
+        test_name: Test set name (unused but kept for API compatibility)
+        
+    Returns:
+        True if successful, False otherwise
+    """
     if not rows:
         print("No rows to write!")
         return False
     
-    # Collect all columns
-    all_columns = OrderedDict()
-    for row in rows:
-        for col in row.keys():
-            all_columns[col] = None
-    
-    # Define metadata column order
-    metadata_cols = ['test_name', 'dataset', 'align_mode', 'partition_mode', 
-                     'stage', 'pipeline_mode']
-    
-    # Define known TED metrics (from TED TSV files)
-    known_ted_metrics = [
-        'isoforms_observed', 'genes_observed', 
-        'assigned_unique_read_ids', 'assigned_primary_alignments', 
-        'assigned_supplementary_alignments', 'assigned_total_alignments',
-        'reads_per_isoform_mean', 'reads_per_isoform_median', 
-        'reads_per_isoform_min', 'reads_per_isoform_max',
-        'input_molecules', 'input_primary_alignments', 
-        'input_supplementary_alignments', 'input_total_alignments',
-        'assignment_rate', 'primary_alignment_utilization', 'total_alignment_utilization',
-        '5prime_precision', '5prime_recall', '5prime_f1',
-        '3prime_precision', '3prime_recall', '3prime_f1',
-        'ref5prime_precision', 'ref5prime_recall', 'ref5prime_f1',
-        'ref3prime_precision', 'ref3prime_recall', 'ref3prime_f1'
-    ]
-    
-    # Define known FLAIR metrics (from FLAIR eval files)
-    known_flair_metrics = [
-        'total_read_regions', 'found_regions', 'genic_reads',
-        'total_sjc', 'supported_sjc', 'subset_sjc', 'total_se', 'supported_se',
-        'FSM', 'ISM', 'NIC', 'NNC', 'SEM', 'SEN'
-    ]
-    
-    # Separate actual TED and FLAIR columns present in data
-    ted_cols = [c for c in known_ted_metrics if c in all_columns]
-    flair_cols = [c for c in known_flair_metrics if c in all_columns]
-    
-    # Get any remaining columns not in known lists
-    known_all = set(metadata_cols + known_ted_metrics + known_flair_metrics)
-    other_cols = sorted([c for c in all_columns.keys() if c not in known_all])
-    
-    # Create final column order: metadata, TED metrics, FLAIR metrics, other
-    final_columns = metadata_cols + ted_cols + flair_cols + other_cols
-    
-    # Write TSV
-    with open(output_path, 'w') as f:
-        # Write header
-        f.write('\t'.join(final_columns) + '\n')
-        
-        # Write rows
+    try:
+        # Collect all columns present in data
+        all_columns = OrderedDict()
         for row in rows:
-            values = [str(row.get(col, '')) for col in final_columns]
-            f.write('\t'.join(values) + '\n')
-    
-    return True
+            for col in row.keys():
+                all_columns[col] = None
+        
+        # Define metadata column order
+        metadata_cols = ['test_name', 'dataset', 'align_mode', 'partition_mode', 
+                         'stage', 'pipeline_mode']
+        
+        # Define known TED metrics (from TED TSV files) in logical grouping order
+        known_ted_metrics = [
+            # Isoform counts
+            'isoforms_observed', 'genes_observed',
+            # Read assignment counts
+            'assigned_unique_read_ids', 'assigned_primary_alignments', 
+            'assigned_supplementary_alignments', 'assigned_total_alignments',
+            # Per-isoform statistics
+            'reads_per_isoform_mean', 'reads_per_isoform_median', 
+            'reads_per_isoform_min', 'reads_per_isoform_max',
+            # Input counts
+            'input_molecules', 'input_primary_alignments', 
+            'input_supplementary_alignments', 'input_total_alignments',
+            # Utilization rates
+            'assignment_rate', 'primary_alignment_utilization', 'total_alignment_utilization',
+            # 5' end metrics
+            '5prime_precision', '5prime_recall', '5prime_f1',
+            # 3' end metrics
+            '3prime_precision', '3prime_recall', '3prime_f1',
+            # Reference 5' end metrics
+            'ref5prime_precision', 'ref5prime_recall', 'ref5prime_f1',
+            # Reference 3' end metrics
+            'ref3prime_precision', 'ref3prime_recall', 'ref3prime_f1'
+        ]
+        
+        # Define known FLAIR metrics (from FLAIR eval files)
+        known_flair_metrics = [
+            # Genic region metrics
+            'total_read_regions', 'found_regions', 'genic_reads',
+            # Splice junction metrics
+            'total_sjc', 'supported_sjc', 'subset_sjc', 'total_se', 'supported_se',
+            # SQANTI-like classification
+            'FSM', 'ISM', 'NIC', 'NNC', 'SEM', 'SEN'
+        ]
+        
+        # Filter to only include columns that exist in the data
+        ted_cols = [c for c in known_ted_metrics if c in all_columns]
+        flair_cols = [c for c in known_flair_metrics if c in all_columns]
+        
+        # Identify any unexpected columns not in known lists
+        known_all = set(metadata_cols + known_ted_metrics + known_flair_metrics)
+        other_cols = sorted([c for c in all_columns.keys() if c not in known_all])
+        
+        # Create final column order: metadata, TED metrics, FLAIR metrics, other
+        final_columns = metadata_cols + ted_cols + flair_cols + other_cols
+        
+        # Write TSV using csv module for proper escaping
+        with open(output_path, 'w', newline='') as f:
+            writer = csv.writer(f, delimiter='\t')
+            
+            # Write header
+            writer.writerow(final_columns)
+            
+            # Write data rows
+            for row in rows:
+                values = [row.get(col, '') for col in final_columns]
+                writer.writerow(values)
+        
+        return True
+        
+    except IOError as e:
+        print(f"Error writing output file {output_path}: {e}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error writing output: {e}")
+        return False
 
 
 if __name__ == '__main__':

@@ -575,7 +575,7 @@ def calculate_ted_metrics(
             "total_alignments": 0,
         }
     
-    # Denominator
+    # Denominator for assignment_rate
     if stage == "collapse" and corrected_bed and corrected_bed.exists():
         input_molecules = count_lines(corrected_bed)
     else:
@@ -603,7 +603,6 @@ def calculate_ted_metrics(
         "reads_per_isoform_median": reads_per_iso_stats.get("reads_per_isoform_median"),
         "reads_per_isoform_min": reads_per_iso_stats.get("reads_per_isoform_min"),
         "reads_per_isoform_max": reads_per_iso_stats.get("reads_per_isoform_max"),
-        "input_molecules": int(input_molecules) if (input_molecules is not None) else None,
         "input_primary_alignments": total_alignments.get("total_primary", 0) or None,
         "input_supplementary_alignments": total_alignments.get("total_supplementary", 0) or None,
         "input_total_alignments": total_alignments.get("total_alignments", 0) or None,
@@ -632,6 +631,12 @@ def main():
     parser.add_argument("--stage", choices=["collapse", "transcriptome"], default="collapse", help="Pipeline stage")
     parser.add_argument("--output", type=Path, required=True, help="Output TSV file")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    # Metadata arguments for result tracking
+    parser.add_argument("--test-name", type=str, help="Test set name")
+    parser.add_argument("--dataset-name", type=str, help="Dataset name")
+    parser.add_argument("--align-mode", type=str, help="Alignment mode")
+    parser.add_argument("--partition-mode", type=str, help="Partition mode")
+    parser.add_argument("--pipeline-mode", type=str, help="Pipeline mode (process label)")
     
     args = parser.parse_args()
     
@@ -652,6 +657,20 @@ def main():
         window=args.window,
         stage=args.stage,
     )
+    
+    # Add metadata to metrics if provided
+    if args.test_name:
+        metrics = {'test_name': args.test_name, **metrics}
+    if args.dataset_name:
+        metrics = {'dataset': args.dataset_name, **metrics}
+    if args.align_mode:
+        metrics = {'align_mode': args.align_mode, **metrics}
+    if args.partition_mode:
+        metrics = {'partition_mode': args.partition_mode, **metrics}
+    if args.pipeline_mode:
+        metrics = {'pipeline_mode': args.pipeline_mode, **metrics}
+    # Always include stage
+    metrics = {**metrics, 'stage': args.stage}
     
     # Write output as TSV
     with open(args.output, 'w', newline='') as f:

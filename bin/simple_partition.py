@@ -108,9 +108,113 @@ def partition_bed_file(input_file, output_file, chrom, start, end):
                 # If no coordinates specified, include all entries from this chromosome
                 if start is None or end is None:
                     outfile.write(line)
-                # Otherwise check for overlap with specified region
-                elif not (bed_end < start or bed_start > end):
+                # Otherwise check if fully contained within specified region
+                elif bed_start >= start and bed_end <= end:
                     outfile.write(line)
+    
+    print(f"Created: {output_file}")
+    return True
+
+
+def partition_gtf_file(input_file, output_file, chrom, start, end):
+    """Filter GTF file to only include transcripts fully contained in the region."""
+    if not input_file.exists():
+        print(f"Warning: GTF file not found, skipping: {input_file}")
+        return False
+    
+    # Format region string for logging
+    if start is None or end is None:
+        region_str = chrom  # Whole chromosome
+    else:
+        region_str = f"{chrom}:{start}-{end}"
+        
+    print(f"Filtering GTF {input_file} for {region_str}")
+    
+    # First pass: identify which transcripts are fully contained in the region
+    valid_transcripts = set()
+    transcript_bounds = {}  # transcript_id -> (start, end)
+    
+    with open(input_file, 'r') as infile:
+        for line in infile:
+            if line.startswith('#'):
+                continue
+            
+            fields = line.strip().split('\t')
+            if len(fields) < 9:
+                continue
+            
+            gtf_chrom = fields[0]
+            feature_type = fields[2]
+            gtf_start = int(fields[3])  # GTF is 1-based
+            gtf_end = int(fields[4])    # GTF end is inclusive
+            attributes = fields[8]
+            
+            # Only look at chromosome of interest
+            if gtf_chrom != chrom:
+                continue
+            
+            # Extract transcript_id from attributes
+            transcript_id = None
+            for attr in attributes.split(';'):
+                attr = attr.strip()
+                if attr.startswith('transcript_id'):
+                    transcript_id = attr.split('"')[1]
+                    break
+            
+            if not transcript_id:
+                continue
+            
+            # Track transcript boundaries (using actual coordinates, not 0-based)
+            if transcript_id not in transcript_bounds:
+                transcript_bounds[transcript_id] = [gtf_start, gtf_end]
+            else:
+                transcript_bounds[transcript_id][0] = min(transcript_bounds[transcript_id][0], gtf_start)
+                transcript_bounds[transcript_id][1] = max(transcript_bounds[transcript_id][1], gtf_end)
+    
+    # Determine which transcripts are fully contained
+    if start is None or end is None:
+        # No region filter - keep all transcripts on this chromosome
+        valid_transcripts = set(transcript_bounds.keys())
+    else:
+        # GTF uses 1-based inclusive coordinates
+        # Our region uses 0-based half-open (start is 0-based, end is exclusive in BED convention)
+        # So we need: transcript_start >= start+1 AND transcript_end <= end
+        for transcript_id, (trans_start, trans_end) in transcript_bounds.items():
+            if trans_start >= start + 1 and trans_end <= end:
+                valid_transcripts.add(transcript_id)
+    
+    print(f"Found {len(valid_transcripts)} transcripts fully contained in {region_str}")
+    
+    # Second pass: write only lines belonging to valid transcripts
+    with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
+        for line in infile:
+            if line.startswith('#'):
+                outfile.write(line)
+                continue
+            
+            fields = line.strip().split('\t')
+            if len(fields) < 9:
+                outfile.write(line)  # Keep non-standard lines
+                continue
+            
+            gtf_chrom = fields[0]
+            attributes = fields[8]
+            
+            # Only process lines from target chromosome
+            if gtf_chrom != chrom:
+                continue
+            
+            # Extract transcript_id
+            transcript_id = None
+            for attr in attributes.split(';'):
+                attr = attr.strip()
+                if attr.startswith('transcript_id'):
+                    transcript_id = attr.split('"')[1]
+                    break
+            
+            # Write line if transcript is valid
+            if transcript_id and transcript_id in valid_transcripts:
+                outfile.write(line)
     
     print(f"Created: {output_file}")
     return True
@@ -229,23 +333,17 @@ def main():
                 created_files.append(str(output_file))
                 
             elif file_type == 'genome' and input_path.exists():
-                # For genome FASTA, extract the sequence for this region
+                # For genome FASTA, create symlink to preserve coordinates
+                # DO NOT extract sequence - FLAIR needs full genome for coordinate matching
                 output_genome = Path(f"{args.output_prefix}_genome.fa")
-                print(f"Extracting genome sequence for {args.region}")
-                try:
-                    # samtools faidx accepts both 'chr1' and 'chr1:1000-2000' formats
-                    run_command([
-                        "samtools", "faidx", str(input_path), args.region,
-                        "-o", str(output_genome)
-                    ])
-                    created_files.append(str(output_genome))
-                except:
-                    print(f"Warning: Could not extract genome sequence (samtools faidx failed)")
+                print(f"Creating symlink to full genome (preserving coordinates): {input_path}")
+                output_genome.symlink_to(input_path.resolve())
+                created_files.append(str(output_genome))
                     
             elif file_type == 'gtf' and input_path.exists():
-                # For GTF, filter annotations in this region
+                # For GTF, filter annotations to only include transcripts fully in this region
                 output_gtf = Path(f"{args.output_prefix}_annotation.gtf") 
-                if partition_bed_file(input_path, output_gtf, chrom, start, end):
+                if partition_gtf_file(input_path, output_gtf, chrom, start, end):
                     created_files.append(str(output_gtf))
                     
             elif input_path.exists():

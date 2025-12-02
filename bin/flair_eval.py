@@ -64,14 +64,24 @@ def get_intersect_count(filea, fileb):
     return c
 
 def extract_sj_info(file):
-    """Extract splice junction and single exon information from BED file"""
+    """Extract splice junction and single exon information from BED file
+    Handles both BED6 and BED12 formats.
+    """
     read_sjc, read_se_ends = {}, {}
     for line in open(file):
         line = line.rstrip().split('\t')
         chrom, strand = line[0], line[5]
         iso, start, end = line[3], int(line[1]), int(line[2])
-        esizes, estarts = [int(x) for x in line[10].rstrip(',').split(',')], [int(x) for x in line[11].rstrip(',').split(',')]
-        exons = [(start+estarts[i], start + estarts[i] + esizes[i]) for i in range(len(esizes))]
+        
+        # Check if BED12 format (has exon block info in columns 10-11)
+        if len(line) >= 12 and line[10] and line[11]:
+            # BED12 format - extract exon blocks
+            esizes, estarts = [int(x) for x in line[10].rstrip(',').split(',')], [int(x) for x in line[11].rstrip(',').split(',')]
+            exons = [(start+estarts[i], start + estarts[i] + esizes[i]) for i in range(len(esizes))]
+        else:
+            # BED6 format - treat as single exon
+            exons = [(start, end)]
+        
         introns = tuple([(exons[x][1], exons[x+1][0]) for x in range(len(exons)-1)])
         cs = chrom
         if cs not in read_sjc:
@@ -174,8 +184,16 @@ def main():
     parser.add_argument('--reads-bed', required=True, help='Input reads BED file')
     parser.add_argument('--isoforms-bed', required=True, help='FLAIR isoforms BED file')
     parser.add_argument('--gtf', required=True, help='Reference annotation GTF file')
-    parser.add_argument('--output', required=True, help='Output evaluation summary file')
+    parser.add_argument('--output', required=True, help='Output evaluation summary file (TSV format)')
     parser.add_argument('--verbose', action='store_true', help='Print verbose output')
+    
+    # Metadata arguments
+    parser.add_argument('--test-name', help='Test set name')
+    parser.add_argument('--dataset-name', help='Dataset name')
+    parser.add_argument('--align-mode', help='Alignment mode')
+    parser.add_argument('--partition-mode', help='Partition mode')
+    parser.add_argument('--pipeline-mode', help='Pipeline mode (e.g., collapse_with-gtf_default)')
+    parser.add_argument('--stage', help='Stage name (e.g., collapse, transcriptome)')
     
     args = parser.parse_args()
     
@@ -184,13 +202,7 @@ def main():
         print(f"Against reads: {args.reads_bed}")
         print(f"Using annotation: {args.gtf}")
     
-    # Open output file
-    outfile = open(args.output, 'w')
-    
     # EVALUATE GENIC REGIONS
-    outfile.write("=== GENIC REGION EVALUATION ===\n")
-    outfile.write("file\ttotal_read_regions\tfound_regions\ttotal_reads\tgenic_reads\n")
-    
     chromtoint, totreads = get_chromtoint(args.reads_bed)
     reads_intervals_file = args.reads_bed.replace('.bed', '.intervals.bed')
     totregions = get_regions(chromtoint, reads_intervals_file)
@@ -202,12 +214,7 @@ def main():
     foundregions = get_intersect_count(reads_intervals_file, iso_intervals_file)
     genicreads = get_intersect_count(args.reads_bed, iso_intervals_file)
     
-    outfile.write(f"{args.isoforms_bed}\t{totregions}\t{foundregions}\t{totreads}\t{genicreads}\n")
-    
     # EVALUATE SPLICE JUNCTIONS
-    outfile.write("\n=== SPLICE JUNCTION EVALUATION ===\n")
-    outfile.write("file\ttotal_sjc\tsupported_sjc\tsubset_sjc\ttotal_se\tsupported_se\n")
-    
     read_sjc, read_se_ends = extract_sj_info(args.reads_bed)
     found_sjc, found_se_ends = extract_sj_info(args.isoforms_bed)
     
@@ -243,18 +250,54 @@ def main():
             for se in read_se_ends[cs]:
                 tot_se += read_se_ends[cs][se]
     
-    outfile.write(f"{args.isoforms_bed}\t{tot_sjc}\t{sup_sjc}\t{subset_sjc}\t{tot_se}\t{sup_se}\n")
-    
     # EVALUATE TRANSCRIPT CLASSIFICATION
-    outfile.write("\n=== TRANSCRIPT CLASSIFICATION (vs ANNOTATION) ===\n")
-    outfile.write("file\tFSM\tISM\tNIC\tNNC\tSEM\tSEN\n")
-    
     transcripttoexons = parse_gtf_transcripts(args.gtf)
     refjuncs, refjuncchains, refseends = build_reference_structures(transcripttoexons)
     fsm, ism, nic, nnc, sem, sen, tot = classify_transcripts(args.isoforms_bed, refjuncs, refjuncchains, refseends)
     
-    outfile.write(f"{args.isoforms_bed}\t{fsm}\t{ism}\t{nic}\t{nnc}\t{sem}\t{sen}\n")
-    outfile.close()
+    # Write output as simple TSV (one header row, one data row)
+    with open(args.output, 'w') as outfile:
+        # Build header with metadata columns first
+        header = []
+        if args.test_name:
+            header.append('test_name')
+        if args.dataset_name:
+            header.append('dataset')
+        if args.align_mode:
+            header.append('align_mode')
+        if args.partition_mode:
+            header.append('partition_mode')
+        if args.stage:
+            header.append('stage')
+        if args.pipeline_mode:
+            header.append('pipeline_mode')
+        
+        # Add metrics columns
+        header.extend(['total_read_regions', 'found_regions', 'genic_reads',
+                      'total_sjc', 'supported_sjc', 'subset_sjc', 'total_se', 'supported_se',
+                      'FSM', 'ISM', 'NIC', 'NNC', 'SEM', 'SEN'])
+        outfile.write('\t'.join(header) + '\n')
+        
+        # Build data row with metadata values first
+        values = []
+        if args.test_name:
+            values.append(args.test_name)
+        if args.dataset_name:
+            values.append(args.dataset_name)
+        if args.align_mode:
+            values.append(args.align_mode)
+        if args.partition_mode:
+            values.append(args.partition_mode)
+        if args.stage:
+            values.append(args.stage)
+        if args.pipeline_mode:
+            values.append(args.pipeline_mode)
+        
+        # Add metrics values
+        values.extend([totregions, foundregions, genicreads,
+                      tot_sjc, sup_sjc, subset_sjc, tot_se, sup_se,
+                      fsm, ism, nic, nnc, sem, sen])
+        outfile.write('\t'.join(str(v) for v in values) + '\n')
     
     if args.verbose:
         print(f"Evaluation complete. Results written to {args.output}")
