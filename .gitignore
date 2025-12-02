@@ -1,0 +1,11 @@
+# Nextflow execution dirs
+work/
+.results/
+results/
+reports/
+.nextflow*
+*.log
+
+# macOS cruft
+.DS_Store
+._*
