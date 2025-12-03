@@ -1,4 +1,5 @@
 # Nextflow execution dirs
+data/
 work/
 .results/
 results/
