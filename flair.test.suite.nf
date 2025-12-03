@@ -154,7 +154,7 @@ process BamToBed {
     script:
     """
     # Generate BED file from BAM
-    bedtools bamtobed -i ${bam} > ${dataset_name}_${align_mode}.bed
+    bedtools bamtobed -bed12 -i ${bam} > ${dataset_name}_${align_mode}.bed
     """
 }
 
@@ -347,10 +347,6 @@ process PlotIsoforms {
 }
 
 workflow {
-    println("DEBUG: Entering workflow block")
-    
-    // Dataset definitions
-    println("DEBUG: Creating datasets...")
     def B1A_kd_induced_rep1_chr22_dataset = new Dataset('B1A_kd_induced_rep1_SMARA4_locus', ([
         genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
         gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
@@ -370,7 +366,7 @@ workflow {
     ]))
 
     def B1B_kd_induced_rep1_chr22_dataset = new Dataset('B1B_kd_induced_rep1_SMARA4_locus', ([
-        genome: '/private/groups/brookslab/cafelton/testflairanyvcf/simNMD/smallchr22test/GRCh38.chr22.genome.fa',
+        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
         gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
         bam: '/private/groups/brookslab/data.rep/SMARCA4_PacBio_2511/PB1300_8-plex_Human_FL-RNA-Kinnex_Revio-SPRQ_cell1/9637_ReadSegmentationData/outputs/alignments/B1B_kd_induced_rep1_aligned.bam'
     ]))
