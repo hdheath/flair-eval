@@ -106,7 +106,8 @@ def standard_align_modes = [
 ]
 
 def standard_partition_modes = [
-    'SMARCA4': '--region chr19:10900001-11100000'
+    //'SMARCA4': '--region chr19:10900001-11100000'
+    'all': '--all'
 ]
 
 def standard_transcriptome_modes = [
@@ -347,83 +348,52 @@ process PlotIsoforms {
 }
 
 workflow {
-    def B1A_kd_induced_rep1_chr22_dataset = new Dataset('B1A_kd_induced_rep1_SMARA4_locus', ([
-        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
-        bam: '/private/groups/brookslab/data.rep/SMARCA4_PacBio_2511/PB1300_8-plex_Human_FL-RNA-Kinnex_Revio-SPRQ_cell1/9637_ReadSegmentationData/outputs/alignments/B1A_kd_induced_rep1_aligned.bam'
-    ]))
+    // Validate input parameters
+    if (!params.input) {
+        error "ERROR: Please provide a samplesheet via --input"
+    }
 
-    def B1A_kd_induced_rep2_chr22_dataset = new Dataset('B1A_kd_induced_rep2_SMARA4_locus', ([
-        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
-        bam: '/private/groups/brookslab/data.rep/SMARCA4_PacBio_2511/PB1300_8-plex_Human_FL-RNA-Kinnex_Revio-SPRQ_cell1/9637_ReadSegmentationData/outputs/alignments/B1A_kd_induced_rep2_aligned.bam'
-    ]))
+    // Display test name warning if using default
+    if (params.test_name == 'flair_test_suite') {
+        log.warn "WARNING: Using default test name 'flair_test_suite'. Specify a custom name with --test_name"
+    }
 
-    def B1A_kd_unperturbed_chr22_dataset = new Dataset('B1A_kd_unperturbed_SMARA4_locus', ([
-        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
-        bam: '/private/groups/brookslab/data.rep/SMARCA4_PacBio_2511/PB1300_8-plex_Human_FL-RNA-Kinnex_Revio-SPRQ_cell1/9637_ReadSegmentationData/outputs/alignments/B1A_kd_unperturbed_aligned.bam'
-    ]))
+    // Read and parse samplesheet CSV into a list
+    def test_sets_list = []
+    file(params.input).withReader { reader ->
+        def header = reader.readLine().split(',')
+        reader.eachLine { line ->
+            def values = line.split(',')
+            def row = [header, values].transpose().collectEntries()
 
-    def B1B_kd_induced_rep1_chr22_dataset = new Dataset('B1B_kd_induced_rep1_SMARA4_locus', ([
-        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
-        bam: '/private/groups/brookslab/data.rep/SMARCA4_PacBio_2511/PB1300_8-plex_Human_FL-RNA-Kinnex_Revio-SPRQ_cell1/9637_ReadSegmentationData/outputs/alignments/B1B_kd_induced_rep1_aligned.bam'
-    ]))
+            // Create Dataset object from CSV row
+            def dataset = new Dataset(row.sample_id, ([
+                genome: file(row.genome),
+                gtf: file(row.gtf),
+                bam: row.bam && row.bam != '' ? file(row.bam) : null,
+                reads: row.reads && row.reads != '' ? file(row.reads) : null,
+                cage: row.cage && row.cage != '' ? file(row.cage) : null,
+                quantseq: row.quantseq && row.quantseq != '' ? file(row.quantseq) : null
+            ]))
 
-    def B1B_kd_induced_rep2_chr22_dataset = new Dataset('B1B_kd_induced_rep2_SMARA4_locus', ([
-        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
-        bam: '/private/groups/brookslab/data.rep/SMARCA4_PacBio_2511/PB1300_8-plex_Human_FL-RNA-Kinnex_Revio-SPRQ_cell1/9637_ReadSegmentationData/outputs/alignments/B1B_kd_induced_rep2_aligned.bam'
-    ]))
-
-    def B1B_kd_unperturbed_chr22_dataset = new Dataset('B1B_kd_unperturbed_SMARA4_locus', ([
-        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
-        bam: '/private/groups/brookslab/data.rep/SMARCA4_PacBio_2511/PB1300_8-plex_Human_FL-RNA-Kinnex_Revio-SPRQ_cell1/9637_ReadSegmentationData/outputs/alignments/B1B_kd_unperturbed_aligned.bam'
-    ]))
-
-    def Scrambled_induced_nonspecific_chr22_dataset = new Dataset('Scrambled_induced_nonspecific_SMARA4_locus', ([
-        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
-        bam: '/private/groups/brookslab/data.rep/SMARCA4_PacBio_2511/PB1300_8-plex_Human_FL-RNA-Kinnex_Revio-SPRQ_cell1/9637_ReadSegmentationData/outputs/alignments/Scrambled_induced_nonspecific_aligned.bam'
-    ]))
-
-    def Scrambled_unperturbed_chr22_dataset = new Dataset('Scrambled_unperturbed_SMARA4_locus', ([
-        genome: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/GRCh38.primary_assembly.genome.fa',
-        gtf: '/private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/gencode.v48.annotation.gtf',
-        bam: '/private/groups/brookslab/data.rep/SMARCA4_PacBio_2511/PB1300_8-plex_Human_FL-RNA-Kinnex_Revio-SPRQ_cell1/9637_ReadSegmentationData/outputs/alignments/Scrambled_unperturbed_aligned.bam'
-    ]))
-
-    // Helper function to create a testset of multiple datasets with global options
-    def createMultiDatasetRun = { datasets ->
-        return datasets.collect { dataset ->
-            new TestSet("comprehensive_${dataset.name}", dataset, ([
+            // Create TestSet with the specified test_name
+            test_sets_list.add(new TestSet("${params.test_name}_${dataset.name}", dataset, ([
                 align: sanitizeModeMap(standard_align_modes),
                 partition: sanitizeModeMap(standard_partition_modes),
                 transcriptome: sanitizeModeMap(standard_transcriptome_modes)
-            ]))
+            ])))
         }
     }
 
-    // Create comprehensive tests for all chromosome datasets
-    def test_set_name = "SMARCA4_locus_comprehensive"
-    def all_comprehensive_tests = createMultiDatasetRun([
-        B1A_kd_induced_rep1_chr22_dataset,
-        B1A_kd_induced_rep2_chr22_dataset,
-        B1B_kd_induced_rep1_chr22_dataset,
-        B1B_kd_induced_rep2_chr22_dataset,
-        Scrambled_induced_nonspecific_chr22_dataset,
-        Scrambled_unperturbed_chr22_dataset,
-        B1B_kd_unperturbed_chr22_dataset,
-        B1A_kd_unperturbed_chr22_dataset
-    ])
-
-    def test_sets = all_comprehensive_tests
+    // Use test_name for the comprehensive summary
+    def test_set_name = params.test_name
 
     // Print summary
     println("\n=== FLAIR Test Suite ===")
-    test_sets.each { test ->
+    println("Input samplesheet: ${params.input}")
+    println("Test name: ${test_set_name}")
+    println("===================================")
+    test_sets_list.each { test ->
         println("${test.name}: ${test.totalJobs()} jobs using dataset '${test.dataset.name}'")
         if (test.dataset.hasBam()) {
             println("  ⚠ WARNING: Pre-aligned BAM detected for '${test.dataset.name}' - FlairAlign will be SKIPPED")
@@ -432,11 +402,11 @@ workflow {
             }
         }
     }
-    println("Total jobs: ${test_sets.sum { it.totalJobs() }}")
+    println("Total jobs: ${test_sets_list.sum { it.totalJobs() }}")
     println("===================================\n")
 
     // Build channels
-    datasets_ch = Channel.from(test_sets)
+    datasets_ch = Channel.from(test_sets_list)
         .map { test_set -> 
             [test_set.name, test_set.dataset, test_set.alignModes, test_set.partitionModes,
              test_set.transcriptomeModes]
