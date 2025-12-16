@@ -32,7 +32,6 @@ class Dataset {
     def reads  // Can be String (single file) or List (multiple files)
     String genome
     String gtf
-    String junctions
     String cage
     String quantseq
     String bam  // Optional: pre-aligned BAM file
@@ -44,7 +43,6 @@ class Dataset {
         this.reads = config.reads
         this.genome = config.genome
         this.gtf = config.gtf
-        this.junctions = config.junctions
         this.cage = config.cage
         this.quantseq = config.quantseq
         this.bam = config.bam
@@ -53,7 +51,6 @@ class Dataset {
     }
 
     // Helper methods
-    boolean hasJunctions() { return junctions != null }
     boolean hasCage() { return cage != null }
     boolean hasQuantseq() { return quantseq != null }
     boolean hasBam() { return bam != null }
@@ -107,11 +104,12 @@ def standard_align_modes = [
 
 def standard_partition_modes = [
     //'SMARCA4': '--region chr19:10900001-11100000'
-    'all': '--all'
+    'chr22': '--region chr22'
 ]
 
 def standard_transcriptome_modes = [
-    'with-gtf': ''
+    'standard': '--junction_tab /private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11_all.SJ.out.tab',
+    'high-sensitivity': '--junction_tab /private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11_all.SJ.out.tab --junction_support 2'
 ]
 
 // =============================================================================
@@ -119,14 +117,24 @@ def standard_transcriptome_modes = [
 // =============================================================================
 
 process FlairAlign {
+    // Aligns long-read RNA-seq data to the genome using minimap2 (via FLAIR)
+    // Produces BAM, BAI, and BED12 files for downstream analysis
     publishDir "results/align", mode: 'symlink'
+    publishDir "results/logs/align", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${it}" }
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}"
 
     input:
+    // test_name: Passed through for downstream tracking (not used in script)
+    // dataset_name: Used for output file naming
+    // reads: FASTQ file(s) with long-read RNA-seq data
+    // align_mode: Mode identifier for this alignment configuration
+    // align_args: Additional command-line arguments for flair align
+    // genome: Reference genome FASTA file
     tuple val(test_name), val(dataset_name), path(reads), val(align_mode), val(align_args), path(genome)
 
     output:
+    // Produces aligned BAM with index and BED12 representation of reads
     tuple val(test_name), val(dataset_name), val(align_mode),
           path("${dataset_name}_${align_mode}.bam"),
           path("${dataset_name}_${align_mode}.bam.bai"),
@@ -134,6 +142,8 @@ process FlairAlign {
 
     script:
     """
+    # FLAIR align wraps minimap2 for spliced alignment of long reads
+    # Automatically generates BAM, BAI, and BED12 files
     flair align ${align_args} \\
         -r ${reads} \\
         -g ${genome} \\
@@ -142,48 +152,78 @@ process FlairAlign {
 }
 
 process BamToBed {
+    // Converts pre-aligned BAM files to BED12 format for downstream FLAIR processes
+    // Used when user provides pre-aligned BAM instead of raw reads
     publishDir "results/align", mode: 'symlink'
     tag "${dataset_name}_${align_mode}"
 
     input:
+    // test_name: Passed through for downstream tracking (not used in script)
+    // dataset_name: Used for output file naming
+    // align_mode: Mode identifier for this alignment
+    // bam: Pre-aligned BAM file
+    // bai: BAM index file (required implicitly for efficient BAM access)
     tuple val(test_name), val(dataset_name), val(align_mode), path(bam), path(bai)
 
     output:
+    // Returns original BAM/BAI plus newly generated BED12 file
     tuple val(test_name), val(dataset_name), val(align_mode),
           path(bam), path(bai), path("${dataset_name}_${align_mode}.bed"), emit: alignments
 
     script:
     """
-    # Generate BED file from BAM
+    # Convert BAM alignments to BED12 format (preserves splice junctions)
     bedtools bamtobed -bed12 -i ${bam} > ${dataset_name}_${align_mode}.bed
     """
 }
 
 process FlairPartition {
+    // Partitions data to a specific genomic region or subset for testing
+    // Extracts alignments, genome sequence, annotations, and experimental peak files for the specified region
     publishDir "results/partition/${test_name}", mode: 'symlink'
     tag "${dataset_name}_${align_mode}_${partition_mode}"
 
     input:
+    // test_name: Used for publishDir organization (not used in script)
+    // dataset_name, align_mode, partition_mode: Used for output file naming
+    // bam, bai: Input alignment files (bai required implicitly by samtools)
+    // bed: BED12 representation of alignments
+    // partition_mode: Mode identifier for this partition configuration
+    // partition_args: Arguments specifying region (e.g., --region chr19:1000-2000 or --all)
+    // genome: Full reference genome FASTA
+    // gtf: Full reference annotation GTF
+    // cage_peaks: CAGE-seq TSS peaks (optional, may be NO_CAGE placeholder)
+    // quantseq_peaks: QuantSeq TTS peaks (optional, may be NO_QUANTSEQ placeholder)
     tuple val(test_name), val(dataset_name), val(align_mode), path(bam), path(bai), path(bed),
-          val(partition_mode), val(partition_args), path(genome), path(gtf)
+          val(partition_mode), val(partition_args), path(genome), path(gtf),
+          path(cage_peaks), path(quantseq_peaks)
 
     output:
+    // Produces subsetted BAM, BED, genome, GTF, and peak files for the specified partition
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           path("${dataset_name}_${align_mode}_${partition_mode}.bam"),
           path("${dataset_name}_${align_mode}_${partition_mode}.bam.bai"),
           path("${dataset_name}_${align_mode}_${partition_mode}.bed"),
           path("${dataset_name}_${align_mode}_${partition_mode}_genome.fa"),
-          path("${dataset_name}_${align_mode}_${partition_mode}_annotation.gtf"), emit: partitioned
+          path("${dataset_name}_${align_mode}_${partition_mode}_annotation.gtf"),
+          path("${dataset_name}_${align_mode}_${partition_mode}_cage.bed", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_quantseq.bed", optional: true), emit: partitioned
 
     script:
     def output_prefix = "${dataset_name}_${align_mode}_${partition_mode}"
+    def cage_arg = cage_peaks.name != 'NO_CAGE' ? "--cage-peaks ${cage_peaks}" : ""
+    def quantseq_arg = quantseq_peaks.name != 'NO_QUANTSEQ' ? "--quantseq-peaks ${quantseq_peaks}" : ""
 
     """
+    # Custom script to partition data to a specific genomic region
+    # Subsets BAM, BED, genome sequence, GTF annotation, and experimental peak files to the target region
     python ${projectDir}/bin/simple_partition.py \\
         --bam ${bam} \\
         --bed ${bed} \\
         --genome ${genome} \\
         --gtf ${gtf} \\
+        ${cage_arg} \\
+        ${quantseq_arg} \\
         --output-prefix ${output_prefix} \\
         ${partition_args}
     """
@@ -191,39 +231,71 @@ process FlairPartition {
 
 process FlairTranscriptome {
     publishDir "results/transcriptome/${test_name}", mode: 'symlink'
+    publishDir "results/logs/${test_name}", mode: 'copy', pattern: '*.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_transcriptome.${it.tokenize('.')[-1]}" }
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_transcriptome"
 
     input:
+    // test_name: Used for publishDir organization
+    // dataset_name, align_mode, partition_mode: Used for output file naming
+    // partition_args, transcriptome_mode: Passed through for downstream tracking
+    // bam, bai: Input alignment files (bai required implicitly by samtools)
+    // genome: Reference genome FASTA for isoform sequence extraction
+    // gtf: Reference annotation for guided assembly
+    // transcriptome_args: Additional command-line arguments for flair transcriptome
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), val(partition_args),
-          path(bam), path(bai), path(bed), path(genome), path(gtf),
+          path(bam), path(bai), path(genome), path(gtf),
           val(transcriptome_mode), val(transcriptome_args)
 
     output:
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), val(partition_args), val(transcriptome_mode),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoforms.bed"),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoforms.gtf"),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoforms.fa"),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoform.counts.txt"),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoform.read.map.txt"), emit: transcriptome
+          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoforms.bed", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoforms.gtf", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoforms.fa", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoform.counts.txt", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoform.read.map.txt", optional: true), emit: transcriptome
 
     script:
-    def extra_args = transcriptome_args ? "${transcriptome_args} \\" : ""
     """
+    # Run FLAIR transcriptome assembly to generate isoform models
+    # Creates BED, GTF, FASTA, counts, and read-to-isoform mapping files
     flair transcriptome \\
         -b ${bam} \\
         --genome ${genome} \\
         -f ${gtf} \\
-        ${extra_args}        -o ${dataset_name}_${align_mode}_${partition_mode}_transcriptome
+        ${transcriptome_args} \\
+        -o ${dataset_name}_${align_mode}_${partition_mode}_transcriptome
     """
 }
 
 process FlairEvaluation {
+    // Evaluates isoform predictions using two complementary metrics:
+    // 1. TED (Transcript End Distance) - measures TSS/TTS accuracy
+    // 2. FLAIR eval - measures structural accuracy against reference annotation
     publishDir "results/evaluations/individual/${test_name}", mode: 'symlink', pattern: '*.tsv'
+    publishDir "results/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_${it}" }
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}"
 
     input:
+    // Metadata for tracking and output naming
+    // test_name, dataset_name, align_mode, partition_mode: Identify this specific analysis
+    // partition_args: Partition configuration (e.g., genomic region)
+    // process_label: Pipeline stage being evaluated (e.g., "transcriptome_with-gtf")
+    // stage: Evaluation stage identifier
+    //
+    // Data files for evaluation
+    // isoforms_bed: Predicted isoforms from FLAIR
+    // isoform_read_map: Mapping of reads to isoforms
+    // bam, bai: Alignment files (used for read coverage analysis)
+    // reads_bed: Original aligned reads in BED12 format
+    // corrected_bed: Optional corrected reads (may be NO_CORRECTED placeholder)
+    // genome, gtf: Reference files for comparison
+    //
+    // Peak files for TED evaluation (optional, may be NO_* placeholders)
+    // cage_peaks: CAGE-seq TSS peaks (5' ends)
+    // quantseq_peaks: QuantSeq TTS peaks (3' ends)
+    // ref_tss, ref_tts: Reference TSS/TTS from annotation
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           val(partition_args), val(process_label), val(stage),
           path(isoforms_bed), path(isoform_read_map), path(bam), path(bai),
@@ -232,21 +304,26 @@ process FlairEvaluation {
           path(ref_tss), path(ref_tts)
 
     output:
+    // Two TSV files with evaluation metrics
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           val(partition_args), val(process_label), val(stage),
           path("${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_ted.tsv"),
           path("${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_flair_eval.tsv"), emit: evaluation_results
 
     script:
-    // Build optional arguments for TED
-    def cage_arg = cage_peaks.name != 'NO_CAGE' ? "--prime5-peaks ${cage_peaks}" : ""
-    def quantseq_arg = quantseq_peaks.name != 'NO_QUANTSEQ' ? "--prime3-peaks ${quantseq_peaks}" : ""
+    // Build optional arguments - only include if files are not placeholders and not empty
+    // Note: Empty CAGE/QuantSeq files may be created by partition script to satisfy Nextflow output requirements
+    // We check file size to avoid passing empty files to evaluation (ted.py handles None gracefully)
+    def cage_arg = (cage_peaks.name != 'NO_CAGE' && cage_peaks.size() > 0) ? "--prime5-peaks ${cage_peaks}" : ""
+    def quantseq_arg = (quantseq_peaks.name != 'NO_QUANTSEQ' && quantseq_peaks.size() > 0) ? "--prime3-peaks ${quantseq_peaks}" : ""
     def ref_tss_arg = ref_tss.name != 'NO_REF_TSS' ? "--ref-prime5-peaks ${ref_tss}" : ""
     def ref_tts_arg = ref_tts.name != 'NO_REF_TTS' ? "--ref-prime3-peaks ${ref_tts}" : ""
     def corrected_arg = corrected_bed.name != 'NO_CORRECTED' ? "--corrected-bed ${corrected_bed}" : ""
 
     """
-    # Run TED evaluation
+    # TED (Transcript End Distance) evaluation
+    # Measures distance between predicted and actual TSS/TTS positions
+    # Uses CAGE-seq (5' ends) and QuantSeq (3' ends) data if available
     python ${projectDir}/bin/ted.py \\
         --isoforms-bed ${isoforms_bed} \\
         --map-file ${isoform_read_map} \\
@@ -266,7 +343,9 @@ process FlairEvaluation {
         --output ${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_ted.tsv \\
         --verbose
 
-    # Run FLAIR evaluation
+    # FLAIR evaluation metrics
+    # Compares predicted isoforms against reference annotation
+    # Measures sensitivity, precision, and structural accuracy
     python ${projectDir}/bin/flair_eval.py \\
         --reads-bed ${reads_bed} \\
         --isoforms-bed ${isoforms_bed} \\
@@ -283,19 +362,26 @@ process FlairEvaluation {
 }
 
 process PrepareReferencePeaks {
+    // Extracts TSS (transcription start sites) and TTS (transcription termination sites)
+    // from reference annotation GTF for use as ground truth in TED evaluation
     publishDir "results/reference_peaks/${test_name}", mode: 'symlink'
     tag "${dataset_name}_${align_mode}_${partition_mode}"
 
     input:
+    // test_name, dataset_name, align_mode, partition_mode: Used for tracking and naming
+    // gtf: Reference annotation to extract TSS/TTS positions from
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), path(gtf)
 
     output:
+    // Two BED files: one with TSS positions, one with TTS positions
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           path("${dataset_name}_${align_mode}_${partition_mode}_ref_tss.bed"),
           path("${dataset_name}_${align_mode}_${partition_mode}_ref_tts.bed"), emit: ref_peaks
 
     script:
     """
+    # Extract TSS and TTS positions from GTF annotation
+    # --deduplicate removes redundant positions from overlapping transcripts
     python ${projectDir}/bin/gtf_to_tss_tts.py \\
         --gtf ${gtf} \\
         --output-prefix ${dataset_name}_${align_mode}_${partition_mode}_ref \\
@@ -304,17 +390,25 @@ process PrepareReferencePeaks {
 }
 
 process SynthesizeEvaluations {
+    // Aggregates all individual evaluation results into a single comprehensive summary
+    // Combines TED and FLAIR evaluation metrics across all test configurations
     publishDir "results/evaluations/summary", mode: 'symlink'
     tag "${test_name}_evaluation_summary"
 
     input:
+    // test_name: Overall test suite identifier
+    // ted_files: All TED evaluation TSV files from FlairEvaluation
+    // eval_files: All FLAIR evaluation TSV files from FlairEvaluation
     tuple val(test_name), path(ted_files), path(eval_files)
 
     output:
+    // Single comprehensive TSV with all evaluation metrics
     path "${test_name}_evaluation_summary.tsv", emit: evaluation_summary
 
     script:
     """
+    # Synthesize all evaluation results into one summary table
+    # Merges metrics from multiple runs for easy comparison
     python ${projectDir}/bin/synthesize_evaluations.py \\
         --ted-files ${ted_files.join(' ')} \\
         --flair-files ${eval_files.join(' ')} \\
@@ -324,21 +418,32 @@ process SynthesizeEvaluations {
 }
 
 process PlotIsoforms {
+    // Generates visualization plots of isoform structures and read assignments
+    // Only runs for partitions ≤ 400kb to avoid generating overly complex plots
     publishDir "results/isoform_plots/${test_name}", mode: 'copy'
-    conda '/private/home/hdheath/miniforge3/envs/nextflow_env'
+    publishDir "results/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_plot_${it}" }
+    conda '/private/home/hdheath/miniforge3/envs/nextflow_env'  // TODO: Make this configurable
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}"
 
     input:
+    // test_name: Used for publishDir organization (not used in script)
+    // dataset_name, align_mode, partition_mode: Used for output file naming
+    // bam, bai: Alignment files for read coverage visualization
+    // isoforms_bed: Predicted isoforms to plot
+    // isoform_read_map: Read-to-isoform assignments for coloring/grouping
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           path(bam), path(bai), path(isoforms_bed), path(isoform_read_map)
 
     output:
+    // PNG image visualizing isoform structures and read support
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           path("${dataset_name}_${align_mode}_${partition_mode}_isoform_plot.png"), emit: plots
 
     script:
     """
+    # Generate isoform structure plot with read coverage
+    # Shows splice junctions, exons, and read assignments
     python ${projectDir}/bin/isoform_plot_test.py \\
         --bam ${bam} \\
         --readmap ${isoform_read_map} \\
@@ -363,7 +468,20 @@ workflow {
     file(params.input).withReader { reader ->
         def header = reader.readLine().split(',')
         reader.eachLine { line ->
-            def values = line.split(',')
+            // Skip empty lines
+            if (!line.trim()) return
+
+            // Split and trim values, handling trailing commas
+            def values = line.split(',', -1)  // -1 keeps trailing empty strings
+
+            // Ensure values array matches header length
+            if (values.size() > header.size()) {
+                values = values[0..<header.size()]  // Truncate extra values
+            } else if (values.size() < header.size()) {
+                // Pad with empty strings if needed
+                values = values + [''] * (header.size() - values.size())
+            }
+
             def row = [header, values].transpose().collectEntries()
 
             // Create Dataset object from CSV row
@@ -405,98 +523,154 @@ workflow {
     println("Total jobs: ${test_sets_list.sum { it.totalJobs() }}")
     println("===================================\n")
 
-    // Build channels
+    // =============================================================================
+    // CHANNEL CONSTRUCTION - Build input channels for processes
+    // =============================================================================
+
+    // Create main datasets channel from test sets list
+    // Each element: [test_name, dataset, align_modes, partition_modes, transcriptome_modes]
     datasets_ch = Channel.from(test_sets_list)
-        .map { test_set -> 
+        .map { test_set ->
             [test_set.name, test_set.dataset, test_set.alignModes, test_set.partitionModes,
              test_set.transcriptomeModes]
         }
 
+    // Split datasets into two branches based on whether BAM files are provided
+    // Branch 1: Pre-aligned BAM files provided (skip FlairAlign)
     datasets_with_bam = datasets_ch.filter { test_name, dataset, align_modes, partition_modes, transcriptome_modes ->
         dataset.hasBam()
     }
 
+    // Branch 2: Raw reads provided (run FlairAlign)
     datasets_without_bam = datasets_ch.filter { test_name, dataset, align_modes, partition_modes, transcriptome_modes ->
         !dataset.hasBam()
     }
 
+    // Prepare inputs for FlairAlign process
+    // Expands datasets into individual alignment jobs (one per read file per align mode)
     align_inputs = datasets_without_bam.flatMap { test_name, dataset, align_modes, partition_modes, transcriptome_modes ->
+        // For each alignment mode configuration
         align_modes.collectMany { align_mode, align_args ->
+            // For each reads file (handles both single file and multi-file datasets)
             dataset.getReadsList().collect { reads_file ->
                 [test_name, dataset.name, file(reads_file), align_mode, align_args, file(dataset.genome)]
             }
         }
     }
 
+    // Prepare inputs for BamToBed process (pre-aligned data)
+    // Creates one job per align mode for each pre-aligned BAM file
     prealigned_bam_inputs = datasets_with_bam.flatMap { test_name, dataset, align_modes, partition_modes, transcriptome_modes ->
         align_modes.collect { align_mode, align_args ->
             [test_name, dataset.name, align_mode, file(dataset.bam), file(dataset.bai)]
         }
     }
 
-    // Run processes
+    // =============================================================================
+    // ALIGNMENT STAGE - Run alignment or convert pre-aligned BAMs
+    // =============================================================================
+
     FlairAlign(align_inputs)
     BamToBed(prealigned_bam_inputs)
 
-    // Mix outputs - use concat instead of mix for better empty channel handling
+    // Merge alignment outputs from both branches (FlairAlign and BamToBed)
+    // Both produce: [test_name, dataset_name, align_mode, bam, bai, bed]
+    // Use concat instead of mix for better empty channel handling
     all_alignments = FlairAlign.out.alignments.concat(BamToBed.out.alignments)
 
-    partition_inputs = all_alignments.combine(datasets_ch, by: 0).flatMap { 
+    // =============================================================================
+    // PARTITION STAGE - Subset data to specific genomic regions
+    // =============================================================================
+
+    // Prepare inputs for FlairPartition by combining alignments with partition modes
+    // For each alignment, create one partition job per partition mode
+    partition_inputs = all_alignments.combine(datasets_ch, by: 0).flatMap {
         test_name, dataset_name, align_mode, bam, bai, bed, dataset, align_modes, partition_modes, transcriptome_modes ->
+        // Prepare CAGE and QuantSeq files (use placeholders if not provided)
+        def cage_file = dataset.cage ? file(dataset.cage) : file("${workflow.workDir}/NO_CAGE", checkIfExists: false)
+        def quantseq_file = dataset.quantseq ? file(dataset.quantseq) : file("${workflow.workDir}/NO_QUANTSEQ", checkIfExists: false)
+        // Generate tuple for each partition mode configuration
         partition_modes.collect { partition_mode, partition_args ->
-            [test_name, dataset_name, align_mode, bam, bai, bed, partition_mode, partition_args, file(dataset.genome), file(dataset.gtf)]
+            [test_name, dataset_name, align_mode, bam, bai, bed, partition_mode, partition_args,
+             file(dataset.genome), file(dataset.gtf), cage_file, quantseq_file]
         }
     }
 
     FlairPartition(partition_inputs)
 
-    transcriptome_inputs = FlairPartition.out.partitioned.combine(datasets_ch, by: 0).flatMap { 
-        test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, 
+    // =============================================================================
+    // TRANSCRIPTOME STAGE - Generate isoform predictions
+    // =============================================================================
+
+    // Prepare inputs for FlairTranscriptome by combining partitioned data with transcriptome modes
+    // For each partitioned output, generate one transcriptome job per transcriptome mode
+    transcriptome_inputs = FlairPartition.out.partitioned.combine(datasets_ch, by: 0).flatMap {
+        test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
         dataset, align_modes, partition_modes, transcriptome_modes ->
+        // Retrieve partition arguments for this specific partition mode
         def partition_args = partition_modes[partition_mode] ?: ''
+        // Generate a tuple for each transcriptome mode configuration
         transcriptome_modes.collect { transcriptome_mode, transcriptome_args ->
-            [test_name, dataset_name, align_mode, partition_mode, partition_args, bam, bai, bed, genome, gtf, 
+            // Note: bed, cage_peaks, quantseq_peaks are not used by flair transcriptome
+            [test_name, dataset_name, align_mode, partition_mode, partition_args, bam, bai, genome, gtf,
              transcriptome_mode, transcriptome_args]
         }
     }
 
     FlairTranscriptome(transcriptome_inputs)
 
-    // Evaluation logic
-    ref_peak_inputs = FlairPartition.out.partitioned.map { 
-        test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf ->
+    // =============================================================================
+    // EVALUATION SETUP - Prepare reference data and organize inputs
+    // =============================================================================
+
+    // Extract GTF files from partitioned data to generate reference TSS/TTS peaks
+    ref_peak_inputs = FlairPartition.out.partitioned.map {
+        test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks ->
         [test_name, dataset_name, align_mode, partition_mode, gtf]
     }
 
     PrepareReferencePeaks(ref_peak_inputs)
 
+    // Prepare alignment data for evaluation (keep only necessary fields)
     align_for_eval = all_alignments.map { test_name, dataset_name, align_mode, bam, bai, bed ->
         [test_name, dataset_name, align_mode, bam, bai, bed]
     }
 
-    cage_quantseq_by_dataset = datasets_ch.map { 
-        test_name, dataset, align_modes, partition_modes, transcriptome_modes ->
-        def cage_file = dataset.cage ? file(dataset.cage) : file("${workflow.workDir}/NO_CAGE", checkIfExists: false)
-        def quantseq_file = dataset.quantseq ? file(dataset.quantseq) : file("${workflow.workDir}/NO_QUANTSEQ", checkIfExists: false)
-        [test_name, dataset.name, cage_file, quantseq_file]
-    }
+    // =============================================================================
+    // EVALUATION STAGE - Combine all data sources for comprehensive evaluation
+    // =============================================================================
+    //
+    // This is the most complex channel operation in the pipeline. It combines:
+    // 1. Transcriptome outputs (isoform predictions)
+    // 2. Partitioned data (BAM, BED, genome, GTF, CAGE, QuantSeq)
+    // 3. Reference TSS/TTS peaks
+    //
+    // The combine operations use 'by' parameter to match on common keys:
+    // - by: [0, 1, 2, 3] matches on [test_name, dataset_name, align_mode, partition_mode]
 
     eval_transcriptome_inputs = FlairTranscriptome.out.transcriptome
+        // Step 1: Extract isoform data and add process labels
         .map { test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode,
                isoforms_bed, isoforms_gtf, isoforms_fa, isoform_counts, isoform_read_map ->
-            [test_name, dataset_name, align_mode, partition_mode, partition_args, "transcriptome_${transcriptome_mode}", 
+            // Add descriptive process_label and stage identifier
+            // Use placeholder for corrected_bed (not used in transcriptome-only evaluation)
+            [test_name, dataset_name, align_mode, partition_mode, partition_args, "transcriptome_${transcriptome_mode}",
              "transcriptome", isoforms_bed, isoform_read_map, file("${workflow.workDir}/NO_CORRECTED", checkIfExists: false)]
         }
-        .combine(FlairPartition.out.partitioned.map { test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf ->
-            [test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf]
+        // Step 2: Add partitioned BAM/BED/genome/GTF/CAGE/QuantSeq (match on test_name, dataset_name, align_mode, partition_mode)
+        .combine(FlairPartition.out.partitioned.map { test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks ->
+            [test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks]
         }, by: [0, 1, 2, 3])
-        .combine(datasets_ch, by: 0)
-        .combine(cage_quantseq_by_dataset, by: [0, 1])
+        // Step 3: Add reference TSS/TTS peaks (match on test_name, dataset_name, align_mode, partition_mode)
         .combine(PrepareReferencePeaks.out.ref_peaks, by: [0, 1, 2, 3])
+        // Step 4: Reorganize into final evaluation input tuple
         .map { test_name, dataset_name, align_mode, partition_mode, partition_args, process_label, stage,
-               isoforms_bed, isoform_read_map, corrected_file, bam, bai, reads_bed, genome, gtf,
-               dataset, align_modes, partition_modes, transcriptome_modes,
-               cage_file, quantseq_file, ref_tss, ref_tts ->
+               isoforms_bed, isoform_read_map, corrected_file, bam, bai, reads_bed, genome, gtf, cage_peaks, quantseq_peaks,
+               ref_tss, ref_tts ->
+            // Final tuple with all inputs needed for FlairEvaluation
+            // Use partitioned CAGE/QuantSeq files or placeholders
+            def cage_file = cage_peaks ?: file("${workflow.workDir}/NO_CAGE", checkIfExists: false)
+            def quantseq_file = quantseq_peaks ?: file("${workflow.workDir}/NO_QUANTSEQ", checkIfExists: false)
             [test_name, dataset_name, align_mode, partition_mode, partition_args, process_label, stage,
              isoforms_bed, isoform_read_map, bam, bai, reads_bed, corrected_file, genome, gtf,
              cage_file, quantseq_file, ref_tss, ref_tts]
@@ -504,11 +678,17 @@ workflow {
 
     FlairEvaluation(eval_transcriptome_inputs)
 
-    // Prepare inputs for plotting (filter for regions ≤ 400kb)
+    // =============================================================================
+    // VISUALIZATION - Generate isoform plots for small regions
+    // =============================================================================
+
+    // Prepare inputs for plotting, but only for small regions (≤ 400kb)
+    // Larger regions would produce overly complex plots
     plot_inputs = FlairTranscriptome.out.transcriptome
         .map { test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode,
                isoforms_bed, isoforms_gtf, isoforms_fa, isoform_counts, isoform_read_map ->
             // Extract region size from partition_args if present
+            // Looks for patterns like: --region chr19:10000-20000
             def region_size = 0
             if (partition_args && partition_args.contains('--region')) {
                 def matcher = partition_args =~ /chr\w+:(\d+)-(\d+)/
@@ -521,15 +701,17 @@ workflow {
             [test_name, dataset_name, align_mode, partition_mode, partition_args, region_size,
              isoforms_bed, isoform_read_map]
         }
+        // Filter: only include regions ≤ 400kb for plotting
         .filter { test_name, dataset_name, align_mode, partition_mode, partition_args, region_size,
                   isoforms_bed, isoform_read_map ->
-            // Only plot if region is 400kb or less
             region_size > 0 && region_size <= 400000
         }
-        .combine(FlairPartition.out.partitioned.map { test_name, dataset_name, align_mode, partition_mode, 
-                                                        bam, bai, bed, genome, gtf ->
+        // Add BAM files from partition output (match on test_name, dataset_name, align_mode, partition_mode)
+        .combine(FlairPartition.out.partitioned.map { test_name, dataset_name, align_mode, partition_mode,
+                                                        bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks ->
             [test_name, dataset_name, align_mode, partition_mode, bam, bai]
         }, by: [0, 1, 2, 3])
+        // Remove region_size (no longer needed) and reorganize for PlotIsoforms input
         .map { test_name, dataset_name, align_mode, partition_mode, partition_args, region_size,
                isoforms_bed, isoform_read_map, bam, bai ->
             [test_name, dataset_name, align_mode, partition_mode, bam, bai, isoforms_bed, isoform_read_map]
@@ -537,24 +719,32 @@ workflow {
 
     PlotIsoforms(plot_inputs)
 
-    // Collect all TED and FLAIR evaluation files
+    // =============================================================================
+    // SUMMARY GENERATION - Aggregate all evaluation results
+    // =============================================================================
+
+    // Collect all TED evaluation files from all runs
+    // .collect() waits for all FlairEvaluation processes to complete and gathers files into a list
     all_ted_files = FlairEvaluation.out.evaluation_results
         .map { test_name, dataset_name, align_mode, partition_mode, partition_args, process_label, stage, ted_file, flair_file ->
             ted_file
         }
         .collect()
 
+    // Collect all FLAIR evaluation files from all runs
     all_flair_files = FlairEvaluation.out.evaluation_results
         .map { test_name, dataset_name, align_mode, partition_mode, partition_args, process_label, stage, ted_file, flair_file ->
             flair_file
         }
         .collect()
 
-    // Combine all files for a single comprehensive summary
+    // Combine TED and FLAIR file lists into a single channel for synthesis
+    // Use the overall test_set_name (not individual test names) for the comprehensive summary
     all_results_input = all_ted_files
         .map { ted_files -> [test_set_name, ted_files] }
         .join(all_flair_files.map { flair_files -> [test_set_name, flair_files] })
 
-    // Generate one comprehensive summary with all TED and FLAIR evaluations
+    // Generate one comprehensive summary TSV with all evaluation metrics
+    // This produces a single file combining results from all configurations
     SynthesizeEvaluations(all_results_input)
 }

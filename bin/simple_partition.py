@@ -70,11 +70,29 @@ def parse_region(region_str):
     return chrom, start, end
 
 
-def partition_bed_file(input_file, output_file, chrom, start, end):
-    """Filter any BED-like file to only include entries in the specified region."""
+def partition_bed_file(input_file, output_file, chrom, start, end, create_empty_if_missing=False):
+    """Filter any BED-like file to only include entries in the specified region.
+
+    Args:
+        input_file: Path to input BED file
+        output_file: Path to output BED file
+        chrom: Chromosome to filter to
+        start: Start position (0-based, inclusive)
+        end: End position (0-based, exclusive)
+        create_empty_if_missing: If True, create empty output file even if input doesn't exist
+
+    Returns:
+        True if output file was created, False otherwise
+    """
     if not input_file.exists():
-        print(f"Warning: Optional file not found, skipping: {input_file}")
-        return False
+        if create_empty_if_missing:
+            print(f"Input file not found, creating empty output: {input_file} -> {output_file}")
+            # Create empty file
+            output_file.touch()
+            return True
+        else:
+            print(f"Warning: Optional file not found, skipping: {input_file}")
+            return False
     
     # Format region string for logging
     if start is None or end is None:
@@ -309,14 +327,23 @@ def main():
     # Handle optional files
     optional_files = {
         'gtf': args.gtf,
-        'genome': args.genome, 
+        'genome': args.genome,
         'cage': args.cage_peaks,
         'quantseq': args.quantseq_peaks,
         'junctions': args.junctions,
         'targets': args.target_regions
     }
-    
+
     for file_type, file_path in optional_files.items():
+        # Special handling for CAGE and QuantSeq: always create output files (even if empty)
+        # This satisfies Nextflow's output requirements while allowing evaluation to handle missing data
+        if file_type in ['cage', 'quantseq'] and not file_path:
+            output_file = Path(f"{args.output_prefix}_{file_type}.bed")
+            print(f"Input {file_type} file not provided, creating empty output: {output_file}")
+            output_file.touch()
+            created_files.append(str(output_file))
+            continue
+
         if file_path:
             input_path = Path(file_path)
             
@@ -349,8 +376,17 @@ def main():
             elif input_path.exists():
                 # For BED-like files (CAGE, QuantSeq, junctions, targets)
                 output_file = Path(f"{args.output_prefix}_{file_type}.bed")
-                if partition_bed_file(input_path, output_file, chrom, start, end):
+                # For CAGE and QuantSeq, always create output file (even if empty) to satisfy Nextflow
+                # The evaluation script handles empty/missing files gracefully
+                create_empty = (file_type in ['cage', 'quantseq'])
+                if partition_bed_file(input_path, output_file, chrom, start, end, create_empty_if_missing=create_empty):
                     created_files.append(str(output_file))
+            elif file_type in ['cage', 'quantseq']:
+                # Input file doesn't exist but we need to create empty output for Nextflow
+                output_file = Path(f"{args.output_prefix}_{file_type}.bed")
+                print(f"Input {file_type} file not provided, creating empty output: {output_file}")
+                output_file.touch()
+                created_files.append(str(output_file))
     
     print("\nPartitioning complete!")
     print("Created files:")
