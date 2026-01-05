@@ -12,7 +12,7 @@ from pathlib import Path
 from collections import OrderedDict
 
 # Metadata fields to exclude from metric columns
-METADATA_FIELDS = {'test_name', 'dataset', 'align_mode', 'partition_mode', 'stage', 'pipeline_mode'}
+METADATA_FIELDS = {'test_name', 'dataset', 'align_mode', 'partition_mode', 'transcriptome_mode'}
 
 # Minimum lines required for a valid TSV file (header + at least one data row)
 MIN_TSV_LINES = 2
@@ -55,14 +55,12 @@ def parse_filename_metadata(filename):
     # Remaining parts define the pipeline stage and mode
     process_parts = remaining_parts[2:] if len(remaining_parts) > 2 else []
     
-    # Determine pipeline_stage and pipeline_mode from the remaining parts
+    # Determine transcriptome_mode from the remaining parts
     if 'transcriptome' in process_parts:
-        pipeline_stage = 'transcriptome'
         # Remove 'transcriptome' and join the rest as mode
         mode_parts = [p for p in process_parts if p != 'transcriptome']
-        pipeline_mode = '_'.join(mode_parts) if mode_parts else 'default'
+        transcriptome_mode = '_'.join(mode_parts) if mode_parts else 'default'
     elif 'collapse' in process_parts:
-        pipeline_stage = 'collapse'
         # Format: collapse_correct_mode_collapse_mode_collapse
         # e.g., ['collapse', 'with', 'gtf', 'default', 'collapse']
         # Remove first and last 'collapse' to get the modes
@@ -87,31 +85,29 @@ def parse_filename_metadata(filename):
                     # Last part is collapse mode, rest is correct mode
                     collapse_mode = middle_parts[-1]
                     correct_mode = '_'.join(middle_parts[:-1])
-                pipeline_mode = f"{correct_mode}+{collapse_mode}"
+                transcriptome_mode = f"{correct_mode}+{collapse_mode}"
             else:
-                pipeline_mode = 'default'
+                transcriptome_mode = 'default'
         elif len(collapse_indices) == 1:
             # Single collapse marker - everything before it is the mode
             collapse_idx = collapse_indices[0]
             if collapse_idx > 0:
-                pipeline_mode = '_'.join(process_parts[:collapse_idx])
+                transcriptome_mode = '_'.join(process_parts[:collapse_idx])
             else:
                 # Just the stage, get everything after collapse
                 remaining = process_parts[collapse_idx+1:]
-                pipeline_mode = '_'.join(remaining) if remaining else 'default'
+                transcriptome_mode = '_'.join(remaining) if remaining else 'default'
         else:
             # No collapse marker found (shouldn't happen)
-            pipeline_mode = '_'.join(process_parts)
+            transcriptome_mode = '_'.join(process_parts)
     else:
-        pipeline_stage = 'unknown'
-        pipeline_mode = '_'.join(process_parts) if process_parts else 'unknown'
+        transcriptome_mode = '_'.join(process_parts) if process_parts else 'unknown'
     
     metadata = {
         'dataset': dataset,
         'align_mode': align_mode,
         'partition_mode': partition_mode,
-        'stage': pipeline_stage,
-        'pipeline_mode': pipeline_mode,
+        'transcriptome_mode': transcriptome_mode,
         'source_file': filename
     }
     
@@ -121,16 +117,16 @@ def parse_filename_metadata(filename):
 def parse_tsv_file(filepath):
     """
     Parse evaluation TSV file (TED or FLAIR) and return list of row dictionaries.
+    Reads metadata directly from the TSV file headers.
     
     Args:
         filepath: Path object pointing to TSV file
         
     Returns:
-        List of OrderedDict objects, one per data row with metadata prepended
+        List of OrderedDict objects, one per data row
     """
     try:
         results = []
-        metadata = parse_filename_metadata(filepath.name)
         
         with open(filepath, 'r') as f:
             # Use csv.DictReader for more robust TSV parsing
@@ -139,12 +135,7 @@ def parse_tsv_file(filepath):
             for row_dict in reader:
                 row = OrderedDict()
                 
-                # Add metadata first (exclude source_file)
-                for key, value in metadata.items():
-                    if key != 'source_file':
-                        row[key] = value
-                
-                # Add metric columns
+                # Add all columns from the TSV file
                 for key, value in row_dict.items():
                     row[key] = value
                 
@@ -186,23 +177,29 @@ def process_evaluation_files(file_list, file_type, test_name, results_by_sample)
         
         rows = parse_tsv_file(filepath)
         for row in rows:
+            # Extract metadata columns (should be present in the TSV file)
+            dataset = row.get('dataset', 'unknown')
+            align_mode = row.get('align_mode', 'unknown')
+            partition_mode = row.get('partition_mode', 'unknown')
+            transcriptome_mode = row.get('transcriptome_mode', 'unknown')
+            
             # Create sample key from metadata
-            sample_key = (row['dataset'], row['align_mode'], row['partition_mode'], 
-                         row['stage'], row['pipeline_mode'])
+            sample_key = (dataset, align_mode, partition_mode, transcriptome_mode)
             
             # Initialize sample if not exists
             if sample_key not in results_by_sample:
                 results_by_sample[sample_key] = OrderedDict()
                 results_by_sample[sample_key]['test_name'] = test_name
-                results_by_sample[sample_key]['dataset'] = row['dataset']
-                results_by_sample[sample_key]['align_mode'] = row['align_mode']
-                results_by_sample[sample_key]['partition_mode'] = row['partition_mode']
-                results_by_sample[sample_key]['stage'] = row['stage']
-                results_by_sample[sample_key]['pipeline_mode'] = row['pipeline_mode']
+                results_by_sample[sample_key]['dataset'] = dataset
+                results_by_sample[sample_key]['align_mode'] = align_mode
+                results_by_sample[sample_key]['partition_mode'] = partition_mode
+                results_by_sample[sample_key]['transcriptome_mode'] = transcriptome_mode
             
-            # Add metrics (exclude metadata fields)
+            # Add metrics (exclude metadata and unwanted fields)
+            unwanted_fields = {'test_name', 'dataset', 'align_mode', 'partition_mode', 
+                              'transcriptome_mode', 'pipeline_mode', 'stage'}
             for key, value in row.items():
-                if key not in METADATA_FIELDS:
+                if key not in unwanted_fields:
                     results_by_sample[sample_key][key] = value
 
 
@@ -270,7 +267,7 @@ def write_tsv_merged(rows, output_path, test_name):
         
         # Define metadata column order
         metadata_cols = ['test_name', 'dataset', 'align_mode', 'partition_mode', 
-                         'stage', 'pipeline_mode']
+                         'transcriptome_mode']
         
         # Define known TED metrics (from TED TSV files) in logical grouping order
         known_ted_metrics = [

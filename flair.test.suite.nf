@@ -108,7 +108,6 @@ def standard_partition_modes = [
 ]
 
 def standard_transcriptome_modes = [
-    'standard': '--junction_tab /private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11_all.SJ.out.tab',
     'high-sensitivity': '--junction_tab /private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11_all.SJ.out.tab --junction_support 2'
 ]
 

@@ -667,10 +667,17 @@ def main():
         metrics = {'align_mode': args.align_mode, **metrics}
     if args.partition_mode:
         metrics = {'partition_mode': args.partition_mode, **metrics}
+    
+    # Extract transcriptome_mode from pipeline_mode if provided
+    # pipeline_mode format is typically "transcriptome_<mode>" or "collapse_<mode>"
     if args.pipeline_mode:
-        metrics = {'pipeline_mode': args.pipeline_mode, **metrics}
-    # Always include stage
-    metrics = {**metrics, 'stage': args.stage}
+        if args.pipeline_mode.startswith('transcriptome_'):
+            transcriptome_mode = args.pipeline_mode.replace('transcriptome_', '', 1)
+        elif args.pipeline_mode.startswith('collapse_'):
+            transcriptome_mode = args.pipeline_mode.replace('collapse_', '', 1)
+        else:
+            transcriptome_mode = args.pipeline_mode
+        metrics = {'transcriptome_mode': transcriptome_mode, **metrics}
     
     # Write output as TSV
     with open(args.output, 'w', newline='') as f:

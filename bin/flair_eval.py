@@ -267,10 +267,18 @@ def main():
             header.append('align_mode')
         if args.partition_mode:
             header.append('partition_mode')
-        if args.stage:
-            header.append('stage')
+        
+        # Extract transcriptome_mode from pipeline_mode if provided
+        # pipeline_mode format is typically "transcriptome_<mode>" or "collapse_<mode>"
+        transcriptome_mode = None
         if args.pipeline_mode:
-            header.append('pipeline_mode')
+            if args.pipeline_mode.startswith('transcriptome_'):
+                transcriptome_mode = args.pipeline_mode.replace('transcriptome_', '', 1)
+            elif args.pipeline_mode.startswith('collapse_'):
+                transcriptome_mode = args.pipeline_mode.replace('collapse_', '', 1)
+            else:
+                transcriptome_mode = args.pipeline_mode
+            header.append('transcriptome_mode')
         
         # Add metrics columns
         header.extend(['total_read_regions', 'found_regions', 'genic_reads',
@@ -288,10 +296,8 @@ def main():
             values.append(args.align_mode)
         if args.partition_mode:
             values.append(args.partition_mode)
-        if args.stage:
-            values.append(args.stage)
-        if args.pipeline_mode:
-            values.append(args.pipeline_mode)
+        if transcriptome_mode is not None:
+            values.append(transcriptome_mode)
         
         # Add metrics values
         values.extend([totregions, foundregions, genicreads,
