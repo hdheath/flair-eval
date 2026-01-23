@@ -1,6 +1,8 @@
 #!/usr/bin/env nextflow
 nextflow.enable.dsl=2
 
+import groovy.json.JsonSlurper
+
 // =============================================================================
 // UTILITY FUNCTIONS
 // =============================================================================
@@ -36,6 +38,7 @@ class Dataset {
     String quantseq
     String bam  // Optional: pre-aligned BAM file
     String bai  // Optional: BAM index file (auto-constructed from bam path)
+    String junction_tab  // Optional: short-read junction file for flair transcriptome
 
     // Constructor
     Dataset(String name, Map config) {
@@ -48,12 +51,14 @@ class Dataset {
         this.bam = config.bam
         // Auto-construct BAI path from BAM path if BAM is provided
         this.bai = config.bam ? "${config.bam}.bai" : null
+        this.junction_tab = config.junction_tab
     }
 
     // Helper methods
     boolean hasCage() { return cage != null }
     boolean hasQuantseq() { return quantseq != null }
     boolean hasBam() { return bam != null }
+    boolean hasJunctionTab() { return junction_tab != null }
 
     // Get reads as a list (handles both single file and multiple files)
     List<String> getReadsList() {
@@ -93,23 +98,6 @@ class TestSet {
         return "TestSet[${name}, ${totalJobs()} jobs]"
     }
 }
-
-// =============================================================================
-// PARAMETER DEFINITIONS - global
-// =============================================================================
-
-def standard_align_modes = [
-    default: ''
-]
-
-def standard_partition_modes = [
-    //'SMARCA4': '--region chr19:10900001-11100000'
-    'chr22': '--region chr22'
-]
-
-def standard_transcriptome_modes = [
-    'high-sensitivity': '--junction_tab /private/groups/brookslab/hdheath/projects/test_suite/flair-test-suite/flair-test-suite/tests/data/WTC11_all.SJ.out.tab --junction_support 2'
-]
 
 // =============================================================================
 // PROCESS DEFINITIONS
@@ -242,9 +230,11 @@ process FlairTranscriptome {
     // genome: Reference genome FASTA for isoform sequence extraction
     // gtf: Reference annotation for guided assembly
     // transcriptome_args: Additional command-line arguments for flair transcriptome
+    //                     If args contain '--junction_tab' flag, will use junction_tab file from sample
+    // junction_tab: Optional short-read junction file (may be NO_JUNCTION_TAB placeholder)
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), val(partition_args),
           path(bam), path(bai), path(genome), path(gtf),
-          val(transcriptome_mode), val(transcriptome_args)
+          val(transcriptome_mode), val(transcriptome_args), path(junction_tab)
 
     output:
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), val(partition_args), val(transcriptome_mode),
@@ -255,6 +245,14 @@ process FlairTranscriptome {
           path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoform.read.map.txt", optional: true), emit: transcriptome
 
     script:
+    // Check if transcriptome_args requests junction_tab AND sample has a valid junction_tab file
+    // The '--junction_tab' in args acts as a flag to enable junction_tab usage
+    def use_junction_tab = transcriptome_args.contains('--junction_tab') && junction_tab.name != 'NO_JUNCTION_TAB'
+    // Build the junction_tab argument (only if both conditions met)
+    def junction_tab_arg = use_junction_tab ? "--junction_tab ${junction_tab}" : ""
+    // Remove the '--junction_tab' flag from args (it's just a marker, actual path is added separately)
+    def cleaned_args = transcriptome_args.replaceAll('--junction_tab\\s*', '')
+
     """
     # Run FLAIR transcriptome assembly to generate isoform models
     # Creates BED, GTF, FASTA, counts, and read-to-isoform mapping files
@@ -262,7 +260,8 @@ process FlairTranscriptome {
         -b ${bam} \\
         --genome ${genome} \\
         -f ${gtf} \\
-        ${transcriptome_args} \\
+        ${junction_tab_arg} \\
+        ${cleaned_args} \\
         -o ${dataset_name}_${align_mode}_${partition_mode}_transcriptome
     """
 }
@@ -454,13 +453,25 @@ process PlotIsoforms {
 workflow {
     // Validate input parameters
     if (!params.input) {
-        error "ERROR: Please provide a samplesheet via --input"
+        error "ERROR: Please provide a samplesheet via"
+    }
+    if (!params.params_file) {
+        error "ERROR: Please provide a parameters configuration file via --params_file"
     }
 
     // Display test name warning if using default
     if (params.test_name == 'flair_test_suite') {
         log.warn "WARNING: Using default test name 'flair_test_suite'. Specify a custom name with --test_name"
     }
+
+    // Read and parse pipeline parameters configuration from JSON file
+    def jsonSlurper = new JsonSlurper()
+    def pipeline_config = jsonSlurper.parse(file(params.params_file))
+
+    // Extract mode maps from JSON config (with defaults if not specified)
+    def align_modes = pipeline_config.align ?: [default: '']
+    def partition_modes = pipeline_config.partition ?: [all: '--all']
+    def transcriptome_modes = pipeline_config.transcriptome ?: [default: '']
 
     // Read and parse samplesheet CSV into a list
     def test_sets_list = []
@@ -490,14 +501,15 @@ workflow {
                 bam: row.bam && row.bam != '' ? file(row.bam) : null,
                 reads: row.reads && row.reads != '' ? file(row.reads) : null,
                 cage: row.cage && row.cage != '' ? file(row.cage) : null,
-                quantseq: row.quantseq && row.quantseq != '' ? file(row.quantseq) : null
+                quantseq: row.quantseq && row.quantseq != '' ? file(row.quantseq) : null,
+                junction_tab: row.junction_tab && row.junction_tab != '' ? file(row.junction_tab) : null
             ]))
 
-            // Create TestSet with the specified test_name
+            // Create TestSet with the specified test_name and modes from JSON config
             test_sets_list.add(new TestSet("${params.test_name}_${dataset.name}", dataset, ([
-                align: sanitizeModeMap(standard_align_modes),
-                partition: sanitizeModeMap(standard_partition_modes),
-                transcriptome: sanitizeModeMap(standard_transcriptome_modes)
+                align: sanitizeModeMap(align_modes),
+                partition: sanitizeModeMap(partition_modes),
+                transcriptome: sanitizeModeMap(transcriptome_modes)
             ])))
         }
     }
@@ -536,20 +548,20 @@ workflow {
 
     // Split datasets into two branches based on whether BAM files are provided
     // Branch 1: Pre-aligned BAM files provided (skip FlairAlign)
-    datasets_with_bam = datasets_ch.filter { test_name, dataset, align_modes, partition_modes, transcriptome_modes ->
+    datasets_with_bam = datasets_ch.filter { test_name, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
         dataset.hasBam()
     }
 
     // Branch 2: Raw reads provided (run FlairAlign)
-    datasets_without_bam = datasets_ch.filter { test_name, dataset, align_modes, partition_modes, transcriptome_modes ->
+    datasets_without_bam = datasets_ch.filter { test_name, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
         !dataset.hasBam()
     }
 
     // Prepare inputs for FlairAlign process
     // Expands datasets into individual alignment jobs (one per read file per align mode)
-    align_inputs = datasets_without_bam.flatMap { test_name, dataset, align_modes, partition_modes, transcriptome_modes ->
+    align_inputs = datasets_without_bam.flatMap { test_name, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
         // For each alignment mode configuration
-        align_modes.collectMany { align_mode, align_args ->
+        ds_align_modes.collectMany { align_mode, align_args ->
             // For each reads file (handles both single file and multi-file datasets)
             dataset.getReadsList().collect { reads_file ->
                 [test_name, dataset.name, file(reads_file), align_mode, align_args, file(dataset.genome)]
@@ -559,8 +571,8 @@ workflow {
 
     // Prepare inputs for BamToBed process (pre-aligned data)
     // Creates one job per align mode for each pre-aligned BAM file
-    prealigned_bam_inputs = datasets_with_bam.flatMap { test_name, dataset, align_modes, partition_modes, transcriptome_modes ->
-        align_modes.collect { align_mode, align_args ->
+    prealigned_bam_inputs = datasets_with_bam.flatMap { test_name, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
+        ds_align_modes.collect { align_mode, align_args ->
             [test_name, dataset.name, align_mode, file(dataset.bam), file(dataset.bai)]
         }
     }
@@ -584,12 +596,12 @@ workflow {
     // Prepare inputs for FlairPartition by combining alignments with partition modes
     // For each alignment, create one partition job per partition mode
     partition_inputs = all_alignments.combine(datasets_ch, by: 0).flatMap {
-        test_name, dataset_name, align_mode, bam, bai, bed, dataset, align_modes, partition_modes, transcriptome_modes ->
+        test_name, dataset_name, align_mode, bam, bai, bed, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
         // Prepare CAGE and QuantSeq files (use placeholders if not provided)
         def cage_file = dataset.cage ? file(dataset.cage) : file("${workflow.workDir}/NO_CAGE", checkIfExists: false)
         def quantseq_file = dataset.quantseq ? file(dataset.quantseq) : file("${workflow.workDir}/NO_QUANTSEQ", checkIfExists: false)
         // Generate tuple for each partition mode configuration
-        partition_modes.collect { partition_mode, partition_args ->
+        ds_partition_modes.collect { partition_mode, partition_args ->
             [test_name, dataset_name, align_mode, bam, bai, bed, partition_mode, partition_args,
              file(dataset.genome), file(dataset.gtf), cage_file, quantseq_file]
         }
@@ -605,14 +617,16 @@ workflow {
     // For each partitioned output, generate one transcriptome job per transcriptome mode
     transcriptome_inputs = FlairPartition.out.partitioned.combine(datasets_ch, by: 0).flatMap {
         test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
-        dataset, align_modes, partition_modes, transcriptome_modes ->
+        dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
         // Retrieve partition arguments for this specific partition mode
-        def partition_args = partition_modes[partition_mode] ?: ''
+        def partition_args = ds_partition_modes[partition_mode] ?: ''
+        // Prepare junction_tab file (use placeholder if not provided)
+        def junction_tab_file = dataset.junction_tab ? file(dataset.junction_tab) : file("${workflow.workDir}/NO_JUNCTION_TAB", checkIfExists: false)
         // Generate a tuple for each transcriptome mode configuration
-        transcriptome_modes.collect { transcriptome_mode, transcriptome_args ->
+        ds_transcriptome_modes.collect { transcriptome_mode, transcriptome_args ->
             // Note: bed, cage_peaks, quantseq_peaks are not used by flair transcriptome
             [test_name, dataset_name, align_mode, partition_mode, partition_args, bam, bai, genome, gtf,
-             transcriptome_mode, transcriptome_args]
+             transcriptome_mode, transcriptome_args, junction_tab_file]
         }
     }
 

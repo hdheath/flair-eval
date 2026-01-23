@@ -298,14 +298,17 @@ def _count_reads_per_isoform(map_path: Path) -> dict:
 
 
 def _count_assigned_reads_by_type(bam_path: Path, assigned_read_ids: Set[str]) -> dict:
-    """Count primary and supplementary alignments for assigned reads using samtools."""
+    """Count primary and supplementary alignments for assigned reads using samtools.
+
+    Uses streaming to avoid loading entire BAM output into memory.
+    """
     if not bam_path or not bam_path.exists() or not assigned_read_ids:
         return {
             "assigned_primary": 0,
             "assigned_supplementary": 0,
             "assigned_total": 0,
         }
-    
+
     if not _which("samtools"):
         logger.warning("samtools not available; cannot count assigned reads by type")
         return {
@@ -313,34 +316,59 @@ def _count_assigned_reads_by_type(bam_path: Path, assigned_read_ids: Set[str]) -
             "assigned_supplementary": 0,
             "assigned_total": 0,
         }
-    
+
     primary_count = 0
     supplementary_count = 0
-    
+
     try:
-        # Get read names and flags
-        res = _run(["samtools", "view", "-F", "4", str(bam_path)])
-        
-        for line in res.stdout.strip().split('\n'):
+        # Stream BAM output line by line to avoid memory issues with large files
+        logger.debug(f"RUN (streaming): samtools view -F 4 {bam_path}")
+        proc = subprocess.Popen(
+            ["samtools", "view", "-F", "4", str(bam_path)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1  # Line buffered
+        )
+
+        # Process output line by line (streaming)
+        for line in proc.stdout:
+            line = line.rstrip('\n')
             if not line:
                 continue
-            fields = line.split('\t')
-            if len(fields) < 2:
+
+            # Only parse the first two fields (read name and flag)
+            # This is faster than splitting the entire line
+            tab1 = line.find('\t')
+            if tab1 == -1:
                 continue
-            
-            read_name = fields[0]
+            tab2 = line.find('\t', tab1 + 1)
+            if tab2 == -1:
+                tab2 = len(line)
+
+            read_name = line[:tab1]
             if read_name not in assigned_read_ids:
                 continue
-            
-            flag = int(fields[1])
+
+            try:
+                flag = int(line[tab1+1:tab2])
+            except ValueError:
+                continue
+
             is_supplementary = bool(flag & 0x800)
             is_secondary = bool(flag & 0x100)
-            
+
             if is_supplementary:
                 supplementary_count += 1
             elif not is_secondary:
                 primary_count += 1
-                
+
+        # Wait for process to finish and check return code
+        proc.wait()
+        if proc.returncode != 0:
+            stderr = proc.stderr.read()
+            logger.warning(f"samtools view returned non-zero exit code: {stderr}")
+
     except Exception as e:
         logger.warning(f"Error counting assigned reads by type from BAM: {e}")
         return {
@@ -348,7 +376,7 @@ def _count_assigned_reads_by_type(bam_path: Path, assigned_read_ids: Set[str]) -
             "assigned_supplementary": 0,
             "assigned_total": 0,
         }
-    
+
     return {
         "assigned_primary": primary_count,
         "assigned_supplementary": supplementary_count,

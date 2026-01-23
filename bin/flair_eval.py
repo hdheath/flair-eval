@@ -146,7 +146,11 @@ def classify_transcripts(isoforms_file, refjuncs, refjuncchains, refseends):
         tot += 1
         
         if len(introns) > 0:
-            if introns in refjuncchains[(chrom, strand)]:
+            # Check if reference has any transcripts for this (chrom, strand)
+            if (chrom, strand) not in refjuncchains:
+                # No reference transcripts for this (chrom, strand), classify as NNC
+                nnc += 1
+            elif introns in refjuncchains[(chrom, strand)]:
                 fsm += 1
             else:
                 isISM = False
@@ -158,23 +162,28 @@ def classify_transcripts(isoforms_file, refjuncs, refjuncchains, refseends):
                         break
                 if not isISM:
                     allFound = True
-                    for j in introns:
-                        if j not in refjuncs[(chrom, strand)]:
-                            allFound = False
-                            break
-                    if allFound: 
+                    if (chrom, strand) in refjuncs:
+                        for j in introns:
+                            if j not in refjuncs[(chrom, strand)]:
+                                allFound = False
+                                break
+                    else:
+                        # No reference junctions for this (chrom, strand)
+                        allFound = False
+                    if allFound:
                         nic += 1
-                    else: 
+                    else:
                         nnc += 1
         else:
             endsMatch = False
-            for refstart, refend in refseends[(chrom, strand)]:
-                if abs(start-refstart) < SINGLE_EXON_END_WINDOW and abs(end-refend) < SINGLE_EXON_END_WINDOW:
-                    endsMatch = True
-                    break
-            if endsMatch: 
+            if (chrom, strand) in refseends:
+                for refstart, refend in refseends[(chrom, strand)]:
+                    if abs(start-refstart) < SINGLE_EXON_END_WINDOW and abs(end-refend) < SINGLE_EXON_END_WINDOW:
+                        endsMatch = True
+                        break
+            if endsMatch:
                 sem += 1
-            else: 
+            else:
                 sen += 1
     
     return fsm, ism, nic, nnc, sem, sen, tot
