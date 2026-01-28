@@ -220,7 +220,7 @@ process FlairTranscriptome {
     publishDir "results/transcriptome/${test_name}", mode: 'symlink'
     publishDir "results/logs/${test_name}", mode: 'copy', pattern: '*.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_transcriptome.${it.tokenize('.')[-1]}" }
     errorStrategy 'ignore'
-    tag "${dataset_name}_${align_mode}_${partition_mode}_transcriptome"
+    tag "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome"
 
     input:
     // test_name: Used for publishDir organization
@@ -238,11 +238,11 @@ process FlairTranscriptome {
 
     output:
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), val(partition_args), val(transcriptome_mode),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoforms.bed", optional: true),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoforms.gtf", optional: true),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoforms.fa", optional: true),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoform.counts.txt", optional: true),
-          path("${dataset_name}_${align_mode}_${partition_mode}_transcriptome.isoform.read.map.txt", optional: true), emit: transcriptome
+          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.isoforms.bed", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.isoforms.gtf", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.isoforms.fa", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.isoform.counts.txt", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.isoform.read.map.txt", optional: true), emit: transcriptome
 
     script:
     // Check if transcriptome_args requests junction_tab AND sample has a valid junction_tab file
@@ -262,7 +262,7 @@ process FlairTranscriptome {
         -f ${gtf} \\
         ${junction_tab_arg} \\
         ${cleaned_args} \\
-        -o ${dataset_name}_${align_mode}_${partition_mode}_transcriptome
+        -o ${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome
     """
 }
 
@@ -271,6 +271,8 @@ process FlairEvaluation {
     // 1. TED (Transcript End Distance) - measures TSS/TTS accuracy
     // 2. FLAIR eval - measures structural accuracy against reference annotation
     publishDir "results/evaluations/individual/${test_name}", mode: 'symlink', pattern: '*.tsv'
+    publishDir "results/evaluations/ted_plots", mode: 'copy', pattern: 'ted_plots/*.png'
+    publishDir "results/evaluations/ted_test_regions", mode: 'copy', pattern: 'test_regions/*.bed'
     publishDir "results/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_${it}" }
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}"
@@ -307,6 +309,20 @@ process FlairEvaluation {
           val(partition_args), val(process_label), val(stage),
           path("${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_ted.tsv"),
           path("${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_flair_eval.tsv"), emit: evaluation_results
+    // Distance histogram plots (CAGE, QuantSeq, and Reference TSS/TTS)
+    path "ted_plots/*_cage_distance_histogram.png", optional: true, emit: cage_plots
+    path "ted_plots/*_quantseq_distance_histogram.png", optional: true, emit: quantseq_plots
+    path "ted_plots/*_ref_tss_distance_histogram.png", optional: true, emit: ref_tss_plots
+    path "ted_plots/*_ref_tts_distance_histogram.png", optional: true, emit: ref_tts_plots
+    path "ted_plots/*_read_tss_offset_histogram.png", optional: true, emit: read_tss_offset_plots
+    path "ted_plots/*_read_tts_offset_histogram.png", optional: true, emit: read_tts_offset_plots
+    path "ted_plots/*_tss_entropy_distribution.png", optional: true, emit: tss_entropy_plots
+    path "ted_plots/*_tts_entropy_distribution.png", optional: true, emit: tts_entropy_plots
+    path "ted_plots/*_cage_peak_read_support.png", optional: true, emit: cage_read_support_plots
+    path "ted_plots/*_quantseq_peak_read_support.png", optional: true, emit: quantseq_read_support_plots
+    // Recoverable peak BED files (peaks with at least one long read end within window)
+    path "test_regions/*_recoverable_cage_peaks.bed", optional: true, emit: recoverable_cage_peaks
+    path "test_regions/*_recoverable_quantseq_peaks.bed", optional: true, emit: recoverable_quantseq_peaks
 
     script:
     // Build optional arguments - only include if files are not placeholders and not empty
@@ -319,13 +335,19 @@ process FlairEvaluation {
     def corrected_arg = corrected_bed.name != 'NO_CORRECTED' ? "--corrected-bed ${corrected_bed}" : ""
 
     """
+    # Create output directories for TED plots and test regions
+    mkdir -p ted_plots
+    mkdir -p test_regions
+
     # TED (Transcript End Distance) evaluation
     # Measures distance between predicted and actual TSS/TTS positions
     # Uses CAGE-seq (5' ends) and QuantSeq (3' ends) data if available
+    # Also generates distance histogram plots showing transcript end accuracy
     python ${projectDir}/bin/ted.py \\
         --isoforms-bed ${isoforms_bed} \\
         --map-file ${isoform_read_map} \\
         --bam ${bam} \\
+        --reads-bed ${reads_bed} \\
         ${corrected_arg} \\
         ${cage_arg} \\
         ${quantseq_arg} \\
@@ -338,6 +360,8 @@ process FlairEvaluation {
         --align-mode ${align_mode} \\
         --partition-mode ${partition_mode} \\
         --pipeline-mode ${process_label} \\
+        --plot-output-dir ted_plots \\
+        --test-regions-dir test_regions \\
         --output ${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_ted.tsv \\
         --verbose
 
