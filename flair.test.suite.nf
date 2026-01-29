@@ -267,12 +267,16 @@ process FlairTranscriptome {
 }
 
 process FlairEvaluation {
-    // Evaluates isoform predictions using two complementary metrics:
+    // Evaluates isoform predictions using two complementary metrics and synthesizes results:
     // 1. TED (Transcript End Distance) - measures TSS/TTS accuracy
     // 2. FLAIR eval - measures structural accuracy against reference annotation
-    publishDir "results/evaluations/individual/${test_name}", mode: 'symlink', pattern: '*.tsv'
-    publishDir "results/evaluations/ted_plots", mode: 'copy', pattern: 'ted_plots/*.png'
-    publishDir "results/evaluations/ted_test_regions", mode: 'copy', pattern: 'test_regions/*.bed'
+    // 3. Synthesizes both into a single unified evaluation TSV
+    publishDir "results/evaluations/${test_name}", mode: 'symlink', pattern: '*_evaluation.tsv'
+    publishDir "results/evaluations/${test_name}/ted_plots", mode: 'copy', pattern: 'ted_plots/*.png'
+    publishDir "results/evaluations/${test_name}/test_regions", mode: 'copy', pattern: 'test_regions/*.bed'
+    publishDir "results/evaluations/${test_name}/test_regions", mode: 'copy', pattern: 'test_regions/*.csv'
+    publishDir "results/evaluations/${test_name}/test_regions", mode: 'copy', pattern: 'test_regions/*.tsv'
+    publishDir "results/evaluations/${test_name}/timing", mode: 'copy', pattern: '*_ted_timing.txt'
     publishDir "results/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_${it}" }
     errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}"
@@ -304,11 +308,10 @@ process FlairEvaluation {
           path(ref_tss), path(ref_tts)
 
     output:
-    // Two TSV files with evaluation metrics
+    // Single synthesized TSV file with all evaluation metrics (TED + FLAIR eval combined)
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           val(partition_args), val(process_label), val(stage),
-          path("${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_ted.tsv"),
-          path("${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_flair_eval.tsv"), emit: evaluation_results
+          path("${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_evaluation.tsv"), emit: evaluation_results
     // Distance histogram plots (CAGE, QuantSeq, and Reference TSS/TTS)
     path "ted_plots/*_cage_distance_histogram.png", optional: true, emit: cage_plots
     path "ted_plots/*_quantseq_distance_histogram.png", optional: true, emit: quantseq_plots
@@ -320,9 +323,24 @@ process FlairEvaluation {
     path "ted_plots/*_tts_entropy_distribution.png", optional: true, emit: tts_entropy_plots
     path "ted_plots/*_cage_peak_read_support.png", optional: true, emit: cage_read_support_plots
     path "ted_plots/*_quantseq_peak_read_support.png", optional: true, emit: quantseq_read_support_plots
+    // Read classification and truncation pattern plots
+    path "ted_plots/*_cage_read_classification.png", optional: true, emit: cage_read_classification_plots
+    path "ted_plots/*_quantseq_read_classification.png", optional: true, emit: quantseq_read_classification_plots
+    path "ted_plots/*_cage_truncation_patterns.png", optional: true, emit: cage_truncation_plots
+    // Motif sequence logos
+    path "ted_plots/*_tss_motif_logo.png", optional: true, emit: tss_motif_plots
+    path "ted_plots/*_tts_motif_logo.png", optional: true, emit: tts_motif_plots
     // Recoverable peak BED files (peaks with at least one long read end within window)
     path "test_regions/*_recoverable_cage_peaks.bed", optional: true, emit: recoverable_cage_peaks
     path "test_regions/*_recoverable_quantseq_peaks.bed", optional: true, emit: recoverable_quantseq_peaks
+    // Annotated missed peak CSV files with read classification and truncation pattern info
+    path "test_regions/*_missed_cage_peaks_annotated.csv", optional: true, emit: missed_cage_peaks_annotated
+    path "test_regions/*_missed_quantseq_peaks_annotated.csv", optional: true, emit: missed_quantseq_peaks_annotated
+    // TSV files with IGV coordinates and classification for troubled regions
+    path "test_regions/*_missed_cage_peaks.tsv", optional: true, emit: missed_cage_peaks_tsv
+    path "test_regions/*_missed_quantseq_peaks.tsv", optional: true, emit: missed_quantseq_peaks_tsv
+    // Performance timing report
+    path "*_ted_timing.txt", optional: true, emit: timing_reports
 
     script:
     // Build optional arguments - only include if files are not placeholders and not empty
@@ -333,6 +351,7 @@ process FlairEvaluation {
     def ref_tss_arg = ref_tss.name != 'NO_REF_TSS' ? "--ref-prime5-peaks ${ref_tss}" : ""
     def ref_tts_arg = ref_tts.name != 'NO_REF_TTS' ? "--ref-prime3-peaks ${ref_tts}" : ""
     def corrected_arg = corrected_bed.name != 'NO_CORRECTED' ? "--corrected-bed ${corrected_bed}" : ""
+    def output_prefix = "${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}"
 
     """
     # Create output directories for TED plots and test regions
@@ -348,6 +367,7 @@ process FlairEvaluation {
         --map-file ${isoform_read_map} \\
         --bam ${bam} \\
         --reads-bed ${reads_bed} \\
+        --genome ${genome} \\
         ${corrected_arg} \\
         ${cage_arg} \\
         ${quantseq_arg} \\
@@ -362,7 +382,8 @@ process FlairEvaluation {
         --pipeline-mode ${process_label} \\
         --plot-output-dir ted_plots \\
         --test-regions-dir test_regions \\
-        --output ${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_ted.tsv \\
+        --timing-output ${output_prefix}_ted_timing.txt \\
+        --output ${output_prefix}_ted.tsv \\
         --verbose
 
     # FLAIR evaluation metrics
@@ -378,8 +399,19 @@ process FlairEvaluation {
         --partition-mode ${partition_mode} \\
         --pipeline-mode ${process_label} \\
         --stage ${stage} \\
-        --output ${dataset_name}_${align_mode}_${partition_mode}_${process_label}_${stage}_flair_eval.tsv \\
+        --output ${output_prefix}_flair_eval.tsv \\
         --verbose
+
+    # Synthesize TED and FLAIR evaluation results into a single unified TSV
+    # This combines all metrics from both evaluations into one row per sample
+    python ${projectDir}/bin/synthesize_evaluations.py \\
+        --ted-files ${output_prefix}_ted.tsv \\
+        --flair-files ${output_prefix}_flair_eval.tsv \\
+        --output ${output_prefix}_evaluation.tsv \\
+        --test-name ${test_name}
+
+    # Clean up intermediate files (keep only the synthesized result)
+    rm -f ${output_prefix}_ted.tsv ${output_prefix}_flair_eval.tsv
     """
 }
 
@@ -411,33 +443,6 @@ process PrepareReferencePeaks {
     """
 }
 
-process SynthesizeEvaluations {
-    // Aggregates all individual evaluation results into a single comprehensive summary
-    // Combines TED and FLAIR evaluation metrics across all test configurations
-    publishDir "results/evaluations/summary", mode: 'symlink'
-    tag "${test_name}_evaluation_summary"
-
-    input:
-    // test_name: Overall test suite identifier
-    // ted_files: All TED evaluation TSV files from FlairEvaluation
-    // eval_files: All FLAIR evaluation TSV files from FlairEvaluation
-    tuple val(test_name), path(ted_files), path(eval_files)
-
-    output:
-    // Single comprehensive TSV with all evaluation metrics
-    path "${test_name}_evaluation_summary.tsv", emit: evaluation_summary
-
-    script:
-    """
-    # Synthesize all evaluation results into one summary table
-    # Merges metrics from multiple runs for easy comparison
-    python ${projectDir}/bin/synthesize_evaluations.py \\
-        --ted-files ${ted_files.join(' ')} \\
-        --flair-files ${eval_files.join(' ')} \\
-        --output ${test_name}_evaluation_summary.tsv \\
-        --test-name ${test_name}
-    """
-}
 
 process PlotIsoforms {
     // Generates visualization plots of isoform structures and read assignments
@@ -756,32 +761,4 @@ workflow {
 
     PlotIsoforms(plot_inputs)
 
-    // =============================================================================
-    // SUMMARY GENERATION - Aggregate all evaluation results
-    // =============================================================================
-
-    // Collect all TED evaluation files from all runs
-    // .collect() waits for all FlairEvaluation processes to complete and gathers files into a list
-    all_ted_files = FlairEvaluation.out.evaluation_results
-        .map { test_name, dataset_name, align_mode, partition_mode, partition_args, process_label, stage, ted_file, flair_file ->
-            ted_file
-        }
-        .collect()
-
-    // Collect all FLAIR evaluation files from all runs
-    all_flair_files = FlairEvaluation.out.evaluation_results
-        .map { test_name, dataset_name, align_mode, partition_mode, partition_args, process_label, stage, ted_file, flair_file ->
-            flair_file
-        }
-        .collect()
-
-    // Combine TED and FLAIR file lists into a single channel for synthesis
-    // Use the overall test_set_name (not individual test names) for the comprehensive summary
-    all_results_input = all_ted_files
-        .map { ted_files -> [test_set_name, ted_files] }
-        .join(all_flair_files.map { flair_files -> [test_set_name, flair_files] })
-
-    // Generate one comprehensive summary TSV with all evaluation metrics
-    // This produces a single file combining results from all configurations
-    SynthesizeEvaluations(all_results_input)
 }

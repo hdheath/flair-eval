@@ -10,10 +10,15 @@ import csv
 import io
 import logging
 import math
+import os
 import statistics
 import subprocess
 import sys
+import tempfile
+import time
+import numpy as np
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -33,6 +38,20 @@ logging.basicConfig(
     format='[%(levelname)s] %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Performance timing storage
+_TIMING_DATA = defaultdict(list)
+
+@contextmanager
+def timed_section(section_name: str):
+    """Context manager to time code sections and store results."""
+    start = time.time()
+    try:
+        yield
+    finally:
+        elapsed = time.time() - start
+        _TIMING_DATA[section_name].append(elapsed)
+        logger.debug(f"[TIMING] {section_name}: {elapsed:.2f}s")
 
 
 # ────────────────────────── Utility Functions ──────────────────────────
@@ -161,12 +180,13 @@ def _extract_tss_tts_bed(iso_bed: Path, tmps: list) -> Tuple[Path, Path]:
 
 def _run_closest(a: Path, b: Path) -> List[List[str]]:
     """Run bedtools closest."""
-    res = _run(["bedtools", "closest", "-a", str(a), "-b", str(b), "-s", "-d"])
-    rows = []
-    for line in res.stdout.strip().split('\n'):
-        if line and not line.startswith('#'):
-            rows.append(line.split('\t'))
-    return rows
+    with timed_section(f"bedtools_closest"):
+        res = _run(["bedtools", "closest", "-a", str(a), "-b", str(b), "-s", "-d"])
+        rows = []
+        for line in res.stdout.strip().split('\n'):
+            if line and not line.startswith('#'):
+                rows.append(line.split('\t'))
+        return rows
 
 
 def _extract_distance_and_peak(rows: List[List[str]], label: str, max_dist: int) -> Dict[str, Tuple[int, str]]:
@@ -275,9 +295,10 @@ def _plot_distance_histogram(
     Returns:
         True if plot was created successfully, False otherwise
     """
-    if not HAS_MATPLOTLIB:
-        logger.warning("matplotlib not available; cannot create distance histogram")
-        return False
+    with timed_section("plot_distance_histogram"):
+        if not HAS_MATPLOTLIB:
+            logger.warning("matplotlib not available; cannot create distance histogram")
+            return False
 
     if not distances:
         logger.warning(f"No distances to plot for {title}")
@@ -395,8 +416,58 @@ def _safe_f1(p: Optional[float], r: Optional[float]) -> Optional[float]:
 
 # ────────────────────────── Read Assignment Functions ──────────────────────────
 
+def _parse_map_file_comprehensive(map_path: Path) -> Tuple[Set[str], dict]:
+    """Parse map file once to extract both unique read IDs and per-isoform stats.
+    
+    Returns:
+        Tuple of (unique_read_ids, reads_per_isoform_stats)
+    """
+    if not map_path.exists() or map_path.stat().st_size == 0:
+        empty_stats = {
+            "reads_per_isoform_mean": None,
+            "reads_per_isoform_median": None,
+            "reads_per_isoform_min": None,
+            "reads_per_isoform_max": None,
+        }
+        return set(), empty_stats
+    
+    uniq = set()
+    read_counts = []
+    
+    with open(map_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or "\t" not in line:
+                continue
+            _, rhs = line.split("\t", 1)
+            reads = [r.strip() for r in rhs.split(",") if r.strip()]
+            read_counts.append(len(reads))
+            uniq.update(reads)
+    
+    if not read_counts:
+        stats = {
+            "reads_per_isoform_mean": None,
+            "reads_per_isoform_median": None,
+            "reads_per_isoform_min": None,
+            "reads_per_isoform_max": None,
+        }
+    else:
+        stats = {
+            "reads_per_isoform_mean": statistics.mean(read_counts),
+            "reads_per_isoform_median": statistics.median(read_counts),
+            "reads_per_isoform_min": min(read_counts),
+            "reads_per_isoform_max": max(read_counts),
+        }
+    
+    return uniq, stats
+
+
 def _get_assigned_read_ids(map_path: Path) -> Set[str]:
-    """Extract set of unique read IDs from isoform.read.map.txt."""
+    """Extract set of unique read IDs from isoform.read.map.txt.
+    
+    Note: For better performance, use _parse_map_file_comprehensive if you also
+    need reads_per_isoform statistics.
+    """
     if not map_path.exists() or map_path.stat().st_size == 0:
         return set()
     
@@ -598,45 +669,47 @@ def _parse_isoform_ends(iso_bed: Path) -> Dict[str, dict]:
     Returns {isoform_id: {'chrom': str, 'start': int, 'end': int, 'strand': str,
                           'tss': int, 'tts': int}}
     """
-    isoforms = {}
-    with open(iso_bed) as f:
-        reader = csv.reader(f, delimiter='\t')
-        for row in reader:
-            if not row or row[0].startswith('#'):
-                continue
-            if len(row) < 6:
-                continue
-            chrom = row[0]
-            start = int(row[1])
-            end = int(row[2])
-            name = row[3]
-            strand = row[5]
-            if strand == '+':
-                tss, tts = start, end
-            else:
-                tss, tts = end, start
-            isoforms[name] = {
-                'chrom': chrom, 'start': start, 'end': end,
-                'strand': strand, 'tss': tss, 'tts': tts,
-            }
-    return isoforms
+    with timed_section("parse_isoform_ends"):
+        isoforms = {}
+        with open(iso_bed) as f:
+            reader = csv.reader(f, delimiter='\t')
+            for row in reader:
+                if not row or row[0].startswith('#'):
+                    continue
+                if len(row) < 6:
+                    continue
+                chrom = row[0]
+                start = int(row[1])
+                end = int(row[2])
+                name = row[3]
+                strand = row[5]
+                if strand == '+':
+                    tss, tts = start, end
+                else:
+                    tss, tts = end, start
+                isoforms[name] = {
+                    'chrom': chrom, 'start': start, 'end': end,
+                    'strand': strand, 'tss': tss, 'tts': tts,
+                }
+        return isoforms
 
 
 def _parse_read_map(map_path: Path) -> Dict[str, List[str]]:
     """Parse isoform.read.map.txt to get {isoform_id: [read_id, ...]}."""
-    iso_to_reads = {}
-    if not map_path.exists() or map_path.stat().st_size == 0:
+    with timed_section("parse_read_map"):
+        iso_to_reads = {}
+        if not map_path.exists() or map_path.stat().st_size == 0:
+            return iso_to_reads
+        with open(map_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or '\t' not in line:
+                    continue
+                iso_id, rhs = line.split('\t', 1)
+                reads = [r.strip() for r in rhs.split(',') if r.strip()]
+                if reads:
+                    iso_to_reads[iso_id] = reads
         return iso_to_reads
-    with open(map_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or '\t' not in line:
-                continue
-            iso_id, rhs = line.split('\t', 1)
-            reads = [r.strip() for r in rhs.split(',') if r.strip()]
-            if reads:
-                iso_to_reads[iso_id] = reads
-    return iso_to_reads
 
 
 def _parse_reads_bed_ends(reads_bed: Path) -> Dict[str, dict]:
@@ -1188,6 +1261,1191 @@ def _plot_read_support_distribution(
         return False
 
 
+# ────────────────────────── Missed Peak Analysis Functions ──────────────────────────
+
+def _get_reads_to_isoforms(iso_to_reads: Dict[str, List[str]]) -> Dict[str, str]:
+    """Invert isoform->reads map to get read->isoform mapping."""
+    read_to_iso = {}
+    for iso_id, read_ids in iso_to_reads.items():
+        for rid in read_ids:
+            if rid not in read_to_iso:
+                read_to_iso[rid] = iso_id
+    return read_to_iso
+
+
+def _classify_missed_peak_reads(
+    peak_id: str,
+    peak_info: dict,
+    reads_supporting_peak: List[str],
+    iso_to_reads: Dict[str, List[str]],
+    isoforms: Dict[str, dict],
+    read_ends: Dict[str, dict],
+    end_type: str,  # 'tss' (CAGE/5') or 'tts' (QuantSeq/3')
+    window: int = 50,
+    nearby_threshold: int = 200,
+) -> dict:
+    """
+    For reads that support a missed peak, classify where they actually got assigned.
+
+    Categories:
+    - unassigned: read wasn't assigned to any isoform
+    - assigned_nearby: read assigned to isoform with the relevant end (TSS or TTS)
+                      within nearby_threshold bp of the peak
+    - assigned_distant: read assigned to isoform with relevant end far from peak
+    - assigned_wrong_strand: read assigned to isoform on different strand
+
+    Args:
+        peak_id: Peak identifier (chrom_start_end)
+        peak_info: Dict with 'Chrom', 'Start', 'End', 'Strand'
+        reads_supporting_peak: List of read IDs that have ends near this peak
+        iso_to_reads: Dict mapping isoform_id -> list of read_ids
+        isoforms: Dict mapping isoform_id -> {'chrom','start','end','strand','tss','tts'}
+        read_ends: Dict mapping read_id -> {'chrom','start','end','strand','tss','tts'} (currently unused here)
+        end_type: 'tss' to classify relative to isoform TSS (CAGE) or 'tts' for isoform TTS (QuantSeq)
+        window: Window used for peak detection (not used directly in this classifier)
+        nearby_threshold: Distance threshold for "nearby" classification
+
+    Returns:
+        Dict with counts for each category and example read IDs
+    """
+    if end_type not in ("tss", "tts"):
+        raise ValueError(f"end_type must be 'tss' or 'tts', got: {end_type}")
+
+    read_to_iso = _get_reads_to_isoforms(iso_to_reads)
+
+    peak_pos = (peak_info["Start"] + peak_info["End"]) // 2
+    peak_strand = peak_info["Strand"]
+
+    categories = {
+        "unassigned": [],
+        "assigned_nearby": [],
+        "assigned_distant": [],
+        "assigned_wrong_strand": [],
+    }
+
+    for read_id in reads_supporting_peak:
+        iso_id = read_to_iso.get(read_id)
+        if not iso_id:
+            categories["unassigned"].append(read_id)
+            continue
+
+        iso = isoforms.get(iso_id)
+        if not iso:
+            categories["unassigned"].append(read_id)
+            continue
+
+        # Strand mismatch (ignore if peak strand is '.')
+        if peak_strand != "." and iso.get("strand") != peak_strand:
+            categories["assigned_wrong_strand"].append(read_id)
+            continue
+
+        # Compare to the relevant isoform endpoint
+        iso_end_pos = iso.get(end_type)
+        if iso_end_pos is None:
+            categories["unassigned"].append(read_id)
+            continue
+
+        dist = abs(int(iso_end_pos) - int(peak_pos))
+        if dist <= nearby_threshold:
+            categories["assigned_nearby"].append(read_id)
+        else:
+            categories["assigned_distant"].append(read_id)
+
+    return {
+        "peak_id": peak_id,
+        "end_type": end_type,
+        "total_supporting_reads": len(reads_supporting_peak),
+        "unassigned_count": len(categories["unassigned"]),
+        "assigned_nearby_count": len(categories["assigned_nearby"]),
+        "assigned_distant_count": len(categories["assigned_distant"]),
+        "assigned_wrong_strand_count": len(categories["assigned_wrong_strand"]),
+        "unassigned_reads": categories["unassigned"][:5],
+        "assigned_nearby_reads": categories["assigned_nearby"][:5],
+        "assigned_distant_reads": categories["assigned_distant"][:5],
+        "assigned_wrong_strand_reads": categories["assigned_wrong_strand"][:5],
+    }
+
+
+
+def _characterize_truncation_pattern(
+    read_starts: List[int],
+    peak_pos: int,
+    strand: str,
+    sharp_threshold: int = 20,
+    trailing_ratio_threshold: float = 0.3,
+) -> Tuple[str, dict]:
+    """
+    Characterize the shape of read start distribution relative to peak.
+
+    For 5' ends, examines whether reads cluster at the peak or trail off,
+    which can indicate RT truncation patterns.
+
+    Patterns:
+    - "sharp": reads cluster tightly at peak (good signal, low truncation)
+    - "trailing": reads trail off in 5' direction (truncation gradient)
+    - "bimodal": two distinct clusters (possible alternative TSS)
+    - "sparse": too few reads to characterize
+
+    Args:
+        read_starts: List of read start positions (5' ends)
+        peak_pos: Position of the experimental peak
+        strand: Strand of the peak ('+' or '-')
+        sharp_threshold: Max distance from peak for "sharp" classification
+        trailing_ratio_threshold: Ratio of upstream to downstream reads for "trailing"
+
+    Returns:
+        Tuple of (pattern_name, details_dict)
+    """
+    if len(read_starts) < 5:
+        return "sparse", {"n_reads": len(read_starts)}
+
+    # Calculate signed distances (positive = downstream of peak in transcription direction)
+    if strand == '+':
+        distances = [pos - peak_pos for pos in read_starts]
+    else:
+        distances = [peak_pos - pos for pos in read_starts]
+
+    # Upstream (5' of peak, negative values) vs downstream (3' of peak, positive values)
+    upstream = [d for d in distances if d < 0]
+    downstream = [d for d in distances if d >= 0]
+    at_peak = [d for d in distances if abs(d) <= sharp_threshold]
+
+    details = {
+        "n_reads": len(read_starts),
+        "n_upstream": len(upstream),
+        "n_downstream": len(downstream),
+        "n_at_peak": len(at_peak),
+        "mean_distance": statistics.mean(distances) if distances else 0,
+        "median_distance": statistics.median(distances) if distances else 0,
+        "std_distance": statistics.stdev(distances) if len(distances) > 1 else 0,
+    }
+
+    # Check for sharp clustering at peak
+    at_peak_ratio = len(at_peak) / len(read_starts)
+    if at_peak_ratio >= 0.7:
+        return "sharp", details
+
+    # Check for trailing pattern (many reads upstream/5' of peak = truncation)
+    if len(upstream) > 0 and len(downstream) > 0:
+        upstream_ratio = len(upstream) / len(read_starts)
+        if upstream_ratio >= trailing_ratio_threshold:
+            # Further check: is there a gradient (more reads closer to peak)?
+            if upstream:
+                upstream_dists = sorted([abs(d) for d in upstream])
+                # Check if closer reads are more numerous
+                close_upstream = sum(1 for d in upstream if abs(d) <= 100)
+                far_upstream = sum(1 for d in upstream if abs(d) > 100)
+                if close_upstream > far_upstream:
+                    details["trailing_gradient"] = True
+            return "trailing", details
+
+    # Check for bimodal distribution
+    if len(distances) >= 10:
+        sorted_dists = sorted(distances)
+        # Simple bimodal check: look for gap in middle
+        mid_start = len(sorted_dists) // 3
+        mid_end = 2 * len(sorted_dists) // 3
+        mid_range = sorted_dists[mid_end] - sorted_dists[mid_start]
+        full_range = sorted_dists[-1] - sorted_dists[0]
+        if full_range > 0:
+            # If middle third spans less than 20% of range, might be bimodal
+            if mid_range / full_range < 0.2 and full_range > 100:
+                return "bimodal", details
+
+    # Default: dispersed pattern
+    return "dispersed", details
+
+
+def _extract_sequences_batch(
+    genome_path: Path,
+    regions: List[Tuple[str, int, str, int, int]],
+) -> Dict[int, str]:
+    """
+    Extract multiple sequences in a single samtools call (50-100x faster than individual calls).
+
+    Args:
+        genome_path: Path to genome FASTA file
+        regions: List of (chrom, pos, strand, upstream, downstream) tuples
+
+    Returns:
+        Dict mapping index -> sequence string (strand-aware)
+    """
+    if not regions or not _which("samtools"):
+        return {}
+
+    # Create temp file with all regions
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.regions') as f:
+        regions_file = f.name
+        for idx, (chrom, pos, strand, upstream, downstream) in enumerate(regions):
+            # Calculate genomic coordinates
+            if strand == '+':
+                start = max(0, pos - upstream)
+                end = pos + downstream
+            else:
+                start = max(0, pos - downstream)
+                end = pos + upstream
+            
+            # Write region (1-based for samtools)
+            f.write(f"{chrom}:{start + 1}-{end}\n")
+
+    try:
+        # Single samtools call for all regions
+        res = _run(["samtools", "faidx", str(genome_path), "-r", regions_file])
+        
+        # Parse sequences from FASTA output
+        sequences = {}
+        current_seq = []
+        current_idx = -1
+        
+        for line in res.stdout.strip().split('\n'):
+            if line.startswith('>'):
+                # Save previous sequence
+                if current_idx >= 0 and current_seq:
+                    seq = ''.join(current_seq).upper()
+                    _, _, strand, _, _ = regions[current_idx]
+                    
+                    # Reverse complement for minus strand
+                    if strand == '-':
+                        complement = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G', 'N': 'N'}
+                        seq = ''.join(complement.get(b, 'N') for b in reversed(seq))
+                    
+                    sequences[current_idx] = seq
+                
+                # Start new sequence
+                current_idx += 1
+                current_seq = []
+            else:
+                current_seq.append(line)
+        
+        # Save last sequence
+        if current_idx >= 0 and current_seq:
+            seq = ''.join(current_seq).upper()
+            _, _, strand, _, _ = regions[current_idx]
+            
+            if strand == '-':
+                complement = {'A': 'T', 'T': 'A', 'G': 'C', 'C': 'G', 'N': 'N'}
+                seq = ''.join(complement.get(b, 'N') for b in reversed(seq))
+            
+            sequences[current_idx] = seq
+        
+        return sequences
+        
+    except Exception as e:
+        logger.warning(f"Batch sequence extraction failed: {e}")
+        return {}
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(regions_file)
+        except Exception:
+            pass
+
+
+def _extract_sequence_context(
+    genome_path: Path,
+    chrom: str,
+    pos: int,
+    strand: str,
+    upstream: int = 50,
+    downstream: int = 50,
+) -> Optional[str]:
+    """
+    Extract sequence context around a position using samtools faidx.
+    
+    Note: For multiple sequences, use _extract_sequences_batch() for 50-100x speedup.
+
+    Args:
+        genome_path: Path to genome FASTA file
+        chrom: Chromosome name
+        pos: Position (0-based)
+        strand: Strand ('+' or '-')
+        upstream: bp upstream (5' direction on strand)
+        downstream: bp downstream (3' direction on strand)
+
+    Returns:
+        Sequence string (strand-aware), or None if extraction fails
+    """
+    # Use batch extraction for single sequence (simpler than duplicating logic)
+    result = _extract_sequences_batch(genome_path, [(chrom, pos, strand, upstream, downstream)])
+    return result.get(0)
+
+
+def _compute_position_frequency_matrix(
+    sequences: List[str],
+) -> Optional[List[Dict[str, float]]]:
+    """
+    Compute position frequency matrix from aligned sequences.
+
+    Args:
+        sequences: List of equal-length sequences
+
+    Returns:
+        List of dicts, one per position, with nucleotide frequencies
+    """
+    if not sequences:
+        return None
+
+    seq_len = len(sequences[0])
+    if not all(len(s) == seq_len for s in sequences):
+        logger.warning("Sequences have unequal lengths; cannot compute PFM")
+        return None
+
+    pfm = []
+    for i in range(seq_len):
+        counts = {'A': 0, 'T': 0, 'G': 0, 'C': 0, 'N': 0}
+        for seq in sequences:
+            base = seq[i] if i < len(seq) else 'N'
+            counts[base] = counts.get(base, 0) + 1
+
+        total = sum(counts.values())
+        freqs = {base: count / total for base, count in counts.items()}
+        pfm.append(freqs)
+
+    return pfm
+
+
+def _compute_information_content(pfm: List[Dict[str, float]]) -> List[float]:
+    """Compute information content (bits) per position."""
+    ic = []
+    for pos_freqs in pfm:
+        # Shannon entropy
+        entropy = 0
+        for base in ['A', 'T', 'G', 'C']:
+            p = pos_freqs.get(base, 0)
+            if p > 0:
+                entropy -= p * math.log2(p)
+        # Information content = max entropy (2 bits) - observed entropy
+        ic.append(2.0 - entropy)
+    return ic
+
+
+def _analyze_motifs_at_ends(
+    read_ends: Dict[str, dict],
+    genome_path: Path,
+    end_type: str,
+    upstream: int = 50,
+    downstream: int = 50,
+    max_sequences: int = 5000,
+) -> dict:
+    """
+    Analyze sequence motifs around read transcript ends using batch extraction.
+
+    Args:
+        read_ends: Dict mapping read_id -> {'chrom', 'start', 'end', 'strand', 'tss', 'tts'}
+        genome_path: Path to genome FASTA file
+        end_type: 'tss' for 5' ends, 'tts' for 3' ends
+        upstream: bp upstream of end to extract
+        downstream: bp downstream of end to extract
+        max_sequences: Maximum sequences to analyze (for performance)
+
+    Returns:
+        Dict with PFM, information content, and summary statistics
+    """
+    if not genome_path or not genome_path.exists():
+        logger.warning("Genome file not available for motif analysis")
+        return {}
+
+    # Sample reads if too many
+    read_list = list(read_ends.items())
+    if len(read_list) > max_sequences:
+        import random
+        random.seed(42)
+        read_list = random.sample(read_list, max_sequences)
+
+    # Build regions list for batch extraction
+    regions = []
+    valid_reads = []
+    for read_id, read_info in read_list:
+        # Note: _parse_reads_bed_ends returns lowercase keys ('chrom', 'strand', 'tss', 'tts')
+        chrom = read_info['chrom']
+        strand = read_info['strand']
+        pos = read_info.get(end_type)
+
+        if pos is not None:
+            regions.append((chrom, pos, strand, upstream, downstream))
+            valid_reads.append((read_id, chrom, pos, strand))
+
+    if not regions:
+        logger.warning(f"No valid positions for {end_type} motif analysis")
+        return {}
+
+    # Batch extract all sequences (50-100x faster than loop)
+    logger.debug(f"Extracting {len(regions)} sequences for {end_type} motif analysis (batch mode)")
+    sequence_dict = _extract_sequences_batch(genome_path, regions)
+
+    # Filter to expected length
+    sequences = []
+    positions_used = []
+    expected_len = upstream + downstream
+    for idx, (read_id, chrom, pos, strand) in enumerate(valid_reads):
+        seq = sequence_dict.get(idx)
+        if seq and len(seq) == expected_len:
+            sequences.append(seq)
+            positions_used.append((chrom, pos, strand))
+
+    if not sequences:
+        logger.warning(f"No sequences extracted for {end_type} motif analysis")
+        return {}
+
+    # Compute position frequency matrix
+    pfm = _compute_position_frequency_matrix(sequences)
+    if not pfm:
+        return {}
+
+    ic = _compute_information_content(pfm)
+
+    # Find positions with high information content
+    high_ic_positions = [(i - upstream, ic[i]) for i in range(len(ic)) if ic[i] > 0.5]
+
+    result = {
+        "n_sequences": len(sequences),
+        "sequence_length": len(sequences[0]) if sequences else 0,
+        "pfm": pfm,
+        "information_content": ic,
+        "mean_ic": statistics.mean(ic) if ic else 0,
+        "high_ic_positions": high_ic_positions,
+    }
+
+    return result
+
+
+def _plot_sequence_logo(
+    pfm: List[Dict[str, float]],
+    output_path: Path,
+    title: str,
+    upstream: int = 50,
+) -> bool:
+    """
+    Traditional sequence logo:
+      - total stack height at each position = information content (bits)
+      - each letter height = p(base) * information_content
+      - letters are drawn as scaled glyphs (TextPath) so height truly matches bits
+    """
+    if not HAS_MATPLOTLIB or not pfm:
+        return False
+
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.textpath import TextPath
+        from matplotlib.patches import PathPatch
+        from matplotlib.font_manager import FontProperties
+        from matplotlib.transforms import Affine2D
+    except Exception:
+        return False
+
+    # Information content per position (bits), computed from A/T/G/C frequencies
+    ic = _compute_information_content(pfm)
+    if not ic:
+        return False
+
+    # X positions centered around 0 at the end site
+    positions = list(range(-upstream, len(pfm) - upstream))
+
+    # Classic DNA colors (feel free to change)
+    colors = {'A': '#00CC00', 'C': '#0000FF', 'G': '#FFB300', 'T': '#FF0000'}
+    bases = ['A', 'C', 'G', 'T']
+
+    fig, ax = plt.subplots(figsize=(16, 4))
+
+    # Use a bold monospace-ish font for a "logo" look
+    fp = FontProperties(family="DejaVu Sans Mono", weight="bold")
+    # TextPath is defined in "points"; we normalize each glyph to height=1 in data units
+    glyph_cache = {b: TextPath((0, 0), b, size=1, prop=fp) for b in bases}
+
+    # Helper: add one letter as a true scaled glyph in data coordinates
+    def _add_letter(letter: str, x: float, y: float, height_bits: float) -> None:
+        if height_bits <= 0:
+            return
+
+        tp = glyph_cache[letter]
+        bb = tp.get_extents()
+        glyph_h = bb.height if bb.height > 0 else 1.0
+        glyph_w = bb.width if bb.width > 0 else 1.0
+
+        # Scale so glyph height == height_bits in data units.
+        sy = height_bits / glyph_h
+
+        # Make letters fit reasonably within each column; width ~ 0.9 data units.
+        target_w = 0.9
+        sx = (target_w / glyph_w)
+
+        # Center the glyph at x (column), and place its bottom at y
+        # We shift by -bb.x0/-bb.y0 to start at origin, then scale, then translate.
+        trans = (
+            Affine2D()
+            .translate(-bb.x0, -bb.y0)      # move glyph bbox to start at (0,0)
+            .scale(sx, sy)                  # scale to target width + exact bits height
+            .translate(x - target_w / 2.0, y)  # center in column; bottom at y
+        )
+
+        patch = PathPatch(
+            tp,
+            transform=trans + ax.transData,
+            facecolor=colors.get(letter, "black"),
+            edgecolor="none",
+        )
+        ax.add_patch(patch)
+
+    # Draw stacks
+    for i, (pos_freqs, x) in enumerate(zip(pfm, positions)):
+        # Total bits at this position
+        R = ic[i]
+        if R <= 0:
+            continue
+
+        # Compute letter heights in bits: p(base) * R
+        heights = []
+        for b in bases:
+            p = float(pos_freqs.get(b, 0.0) or 0.0)
+            if p < 0:
+                p = 0.0
+            heights.append((b, p * R))
+
+        # Draw from smallest to largest so largest ends up on top
+        heights.sort(key=lambda t: t[1])
+
+        y0 = 0.0
+        for b, h in heights:
+            # Skip extremely tiny letters to reduce clutter
+            if h < 1e-3:
+                continue
+            _add_letter(b, x, y0, h)
+            y0 += h
+
+    # Axis / annotations
+    ax.axvline(x=0, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label='End position')
+    ax.set_xlabel('Position relative to transcript end (bp)', fontsize=12)
+    ax.set_ylabel('Information Content (bits)', fontsize=12)
+    ax.set_title(title, fontsize=14)
+    ax.set_xlim(-upstream - 0.5, len(pfm) - upstream + 0.5)
+    ax.set_ylim(0, 2.05)
+
+    # Tidy look
+    ax.set_axisbelow(True)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.25)
+
+    # Legend
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor=colors[b], label=b) for b in bases]
+    legend_elements.append(plt.Line2D([0], [0], color='red', linestyle='--', label='End position'))
+    ax.legend(handles=legend_elements, loc='upper right', ncol=5, fontsize=9, frameon=False)
+
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved sequence logo to {output_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save sequence logo: {e}")
+        plt.close(fig)
+        return False
+
+
+
+def _analyze_missed_peaks_comprehensive(
+    missed_peaks: Dict[str, int],
+    peaks_path: Path,
+    read_end_positions: List[dict],
+    iso_to_reads: Dict[str, List[str]],
+    isoforms: Dict[str, dict],
+    read_ends: Dict[str, dict],
+    window: int,
+    end_type: str,
+    genome_path: Optional[Path] = None,
+) -> dict:
+    """
+    Comprehensive analysis of missed peaks including read classification and truncation patterns.
+
+    Args:
+        missed_peaks: Dict of peak_id -> read_count for missed recoverable peaks
+        peaks_path: Path to peaks BED file
+        read_end_positions: List of read end position dicts (Chrom/Start/End/Strand)
+        iso_to_reads: Isoform to reads mapping
+        isoforms: Isoform info dict
+        read_ends: Full read ends dict with TSS/TTS positions (from _parse_reads_bed_ends)
+        window: Distance window used to define "recoverable"
+        end_type: 'tss' for CAGE missed peaks, 'tts' for QuantSeq missed peaks
+        genome_path: (optional) genome FASTA path (currently unused here)
+
+    Returns:
+        Dict with analysis results
+    """
+    with timed_section("analyze_missed_peaks_comprehensive"):
+        if end_type not in ("tss", "tts"):
+            raise ValueError(f"end_type must be 'tss' or 'tts', got: {end_type}")
+
+    peaks_rows = _read_bed6(peaks_path)
+    peak_id_to_info = {f"{p['Chrom']}_{p['Start']}_{p['End']}": p for p in peaks_rows}
+
+    # Index read ends by chrom/strand for quick lookup
+    reads_by_chrom_strand = defaultdict(list)
+    for r in read_end_positions:
+        reads_by_chrom_strand[(r["Chrom"], r["Strand"])].append(r)
+
+    # Map read_id -> endpoint position for the requested end_type
+    # NOTE: _parse_reads_bed_ends returns lowercase keys for chrom/strand, but keeps 'tss'/'tts' numeric fields
+    read_id_to_end = {}
+    # Create reverse index: (chrom, strand, pos) -> read_id for O(1) lookup
+    pos_to_read_id = {}
+    for rid, rinfo in read_ends.items():
+        pos = rinfo.get(end_type)
+        if pos is None:
+            continue
+        read_id_to_end[rid] = {
+            "Chrom": rinfo["chrom"],
+            "pos": pos,
+            "Strand": rinfo["strand"],
+        }
+        # Index by (chrom, strand, pos) for fast reverse lookup
+        key = (rinfo["chrom"], rinfo["strand"], pos)
+        pos_to_read_id[key] = rid
+
+    classification_summary = defaultdict(int)
+    truncation_patterns = defaultdict(int)
+    all_classifications = []
+
+    for peak_id, read_count in missed_peaks.items():
+        peak_info = peak_id_to_info.get(peak_id)
+        if not peak_info:
+            continue
+
+        peak_pos = (peak_info["Start"] + peak_info["End"]) // 2
+
+        # Find read IDs supporting this peak (within window around peak_pos)
+        supporting_reads = []
+        strands = [peak_info["Strand"]] if peak_info["Strand"] != "." else ["+", "-"]
+
+        for strand in strands:
+            key = (peak_info["Chrom"], strand)
+            for r in reads_by_chrom_strand.get(key, []):
+                # r is a 1bp interval [Start, End)
+                if abs(r["Start"] - peak_pos) <= window:
+                    # Use reverse index for O(1) lookup instead of O(N) iteration
+                    lookup_key = (r["Chrom"], r["Strand"], r["Start"])
+                    rid = pos_to_read_id.get(lookup_key)
+                    if rid:
+                        supporting_reads.append(rid)
+
+        # Deduplicate + cap for performance
+        supporting_reads = list(set(supporting_reads))[:100]
+
+        # Calculate average read length for supporting reads
+        read_lengths = []
+        for rid in supporting_reads:
+            if rid in read_ends:
+                rinfo = read_ends[rid]
+                read_length = abs(rinfo.get('end', 0) - rinfo.get('start', 0))
+                if read_length > 0:
+                    read_lengths.append(read_length)
+        avg_read_length = statistics.mean(read_lengths) if read_lengths else 0
+
+        # Classify reads (THIS is the key: pass end_type through)
+        classification = _classify_missed_peak_reads(
+            peak_id=peak_id,
+            peak_info=peak_info,
+            reads_supporting_peak=supporting_reads,
+            iso_to_reads=iso_to_reads,
+            isoforms=isoforms,
+            read_ends=read_ends,
+            end_type=end_type,
+            window=window,
+        )
+
+        classification_summary["unassigned"] += classification.get("unassigned_count", 0)
+        classification_summary["assigned_nearby"] += classification.get("assigned_nearby_count", 0)
+        classification_summary["assigned_distant"] += classification.get("assigned_distant_count", 0)
+        classification_summary["assigned_wrong_strand"] += classification.get("assigned_wrong_strand_count", 0)
+
+        # Add average read length to classification
+        classification['avg_read_length'] = avg_read_length
+
+        # Truncation pattern analysis only makes sense for 5' ends
+        if end_type == "tss" and supporting_reads:
+            read_positions = [read_id_to_end[rid]["pos"] for rid in supporting_reads if rid in read_id_to_end]
+            if read_positions:
+                pattern, details = _characterize_truncation_pattern(
+                    read_starts=read_positions,
+                    peak_pos=peak_pos,
+                    strand=peak_info["Strand"] if peak_info["Strand"] != "." else "+",
+                )
+                truncation_patterns[pattern] += 1
+                classification["truncation_pattern"] = pattern
+                classification["truncation_details"] = details
+
+        all_classifications.append(classification)
+
+    return {
+        "n_missed_peaks": len(missed_peaks),
+        "end_type": end_type,
+        "classification_summary": dict(classification_summary),
+        "truncation_patterns": dict(truncation_patterns) if end_type == "tss" else {},
+        "peak_classifications": all_classifications[:100],
+    }
+
+
+
+def _plot_read_classification_summary(
+    classification_summary: Dict[str, int],
+    output_path: Path,
+    title: str,
+) -> bool:
+    """Plot pie chart of read classification categories for missed peaks."""
+    if not HAS_MATPLOTLIB:
+        return False
+
+    if not classification_summary or sum(classification_summary.values()) == 0:
+        return False
+
+    fig, ax = plt.subplots(figsize=(8, 8))
+
+    labels = []
+    sizes = []
+    colors = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99']
+    category_labels = {
+        'unassigned': 'Unassigned',
+        'assigned_nearby': 'Assigned Nearby',
+        'assigned_distant': 'Assigned Distant',
+        'assigned_wrong_strand': 'Wrong Strand',
+    }
+
+    for cat in ['unassigned', 'assigned_nearby', 'assigned_distant', 'assigned_wrong_strand']:
+        count = classification_summary.get(cat, 0)
+        if count > 0:
+            labels.append(f"{category_labels[cat]}\n({count})")
+            sizes.append(count)
+
+    if not sizes:
+        plt.close(fig)
+        return False
+
+    ax.pie(sizes, labels=labels, colors=colors[:len(sizes)], autopct='%1.1f%%',
+           startangle=90, textprops={'fontsize': 10})
+    ax.set_title(title, fontsize=14)
+
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save classification pie chart: {e}")
+        plt.close(fig)
+        return False
+
+
+def _plot_truncation_patterns(
+    truncation_patterns: Dict[str, int],
+    output_path: Path,
+    title: str,
+) -> bool:
+    """Plot bar chart of truncation pattern categories."""
+    if not HAS_MATPLOTLIB:
+        return False
+
+    if not truncation_patterns or sum(truncation_patterns.values()) == 0:
+        return False
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    pattern_order = ['sharp', 'trailing', 'bimodal', 'dispersed', 'sparse']
+    colors = ['#2ecc71', '#e74c3c', '#9b59b6', '#3498db', '#95a5a6']
+
+    patterns = []
+    counts = []
+    bar_colors = []
+
+    for i, pattern in enumerate(pattern_order):
+        if pattern in truncation_patterns:
+            patterns.append(pattern.capitalize())
+            counts.append(truncation_patterns[pattern])
+            bar_colors.append(colors[i])
+
+    if not patterns:
+        plt.close(fig)
+        return False
+
+    bars = ax.bar(patterns, counts, color=bar_colors, edgecolor='black', alpha=0.8)
+
+    # Add count labels on bars
+    for bar, count in zip(bars, counts):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                str(count), ha='center', va='bottom', fontsize=10)
+
+    ax.set_xlabel('Truncation Pattern', fontsize=12)
+    ax.set_ylabel('Number of Peaks', fontsize=12)
+    ax.set_title(title, fontsize=14)
+
+    # Add descriptions
+    descriptions = {
+        'Sharp': 'Reads cluster at peak',
+        'Trailing': 'RT truncation gradient',
+        'Bimodal': 'Two clusters (alt TSS?)',
+        'Dispersed': 'Spread out reads',
+        'Sparse': '<5 reads',
+    }
+    desc_text = '\n'.join([f"{k}: {v}" for k, v in descriptions.items() if k in patterns])
+    ax.text(0.98, 0.98, desc_text, transform=ax.transAxes, fontsize=9,
+            verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save truncation patterns plot: {e}")
+        plt.close(fig)
+        return False
+
+
+def _write_annotated_peaks_bed(
+    peaks_path: Path,
+    missed_peaks: Dict[str, int],
+    analysis_results: dict,
+    output_path: Path,
+    end_type: str,
+) -> int:
+    """
+    Write annotated CSV file for missed recoverable peaks with classification info.
+
+    CSV format: chrom, start, end, igv_id, read_support, strand, read_classification, truncation_pattern
+    """
+    peaks_rows = _read_bed6(peaks_path)
+
+    # Build lookup from analysis results
+    classification_lookup = {}
+    for cls in analysis_results.get('peak_classifications', []):
+        peak_id = cls.get('peak_id')
+        if peak_id:
+            # Determine dominant classification
+            counts = [
+                ('unassigned', cls.get('unassigned_count', 0)),
+                ('nearby', cls.get('assigned_nearby_count', 0)),
+                ('distant', cls.get('assigned_distant_count', 0)),
+                ('wrong_strand', cls.get('assigned_wrong_strand_count', 0)),
+            ]
+            dominant = max(counts, key=lambda x: x[1])[0]
+            pattern = cls.get('truncation_pattern', 'NA')
+            avg_read_length = cls.get('avg_read_length', 0)
+            classification_lookup[peak_id] = (dominant, pattern, avg_read_length)
+
+    count = 0
+    with open(output_path, 'w', newline='') as f:
+        writer = csv.writer(f, delimiter='\t')
+        # Header
+        writer.writerow(['#chrom', 'start', 'end', 'igv_id', 'read_support',
+                        'strand', 'read_classification', 'truncation_pattern', 'avg_read_length'])
+
+        for peak in peaks_rows:
+            peak_id = f"{peak['Chrom']}_{peak['Start']}_{peak['End']}"
+            if peak_id in missed_peaks:
+                read_count = missed_peaks[peak_id]
+                classification, pattern, avg_read_length = classification_lookup.get(peak_id, ('unknown', 'NA', 0))
+                # Create IGV coordinate format
+                igv_id = f"{peak['Chrom']}:{peak['Start']}-{peak['End']}"
+                writer.writerow([
+                    peak['Chrom'], peak['Start'], peak['End'],
+                    igv_id, read_count, peak['Strand'],
+                    classification, pattern if end_type == 'tss' else 'NA',
+                    int(avg_read_length)
+                ])
+                count += 1
+
+    logger.info(f"Wrote {count} annotated missed peaks to {output_path}")
+    return count
+
+
+def _analyze_all_recoverable_peaks_truncation(
+    recoverable_peaks: Dict[str, int],
+    captured_peaks: set,
+    peaks_path: Path,
+    read_end_positions: List[dict],
+    read_ends: Dict[str, dict],
+    window: int,
+) -> Dict[str, dict]:
+    """
+    Analyze truncation patterns for ALL recoverable CAGE peaks (not just missed).
+
+    Args:
+        recoverable_peaks: Dict of peak_id -> read_count for recoverable peaks
+        captured_peaks: Set of peak IDs that were captured by isoform ends
+        peaks_path: Path to peaks BED file
+        read_end_positions: List of read end position dicts
+        read_ends: Full read ends dict with TSS/TTS positions
+        window: Distance window
+
+    Returns:
+        Dict mapping peak_id -> {pattern, details, read_count, is_captured}
+    """
+    with timed_section("analyze_all_recoverable_peaks_truncation"):
+        peaks_rows = _read_bed6(peaks_path)
+        peak_id_to_info = {
+            f"{p['Chrom']}_{p['Start']}_{p['End']}": p for p in peaks_rows
+        }
+
+    # Index read ends by position for quick lookup
+    reads_by_chrom_strand = defaultdict(list)
+    for r in read_end_positions:
+        key = (r['Chrom'], r['Strand'])
+        reads_by_chrom_strand[key].append(r)
+
+    # Build read ID to end position mapping
+    # Note: _parse_reads_bed_ends returns lowercase keys ('chrom', 'strand', 'tss', 'tts')
+    read_id_to_end = {}
+    # Create reverse index: (chrom, strand, pos) -> read_id for O(1) lookup
+    pos_to_read_id = {}
+    for rid, rinfo in read_ends.items():
+        pos = rinfo.get('tss')
+        if pos is not None:
+            read_id_to_end[rid] = {
+                'Chrom': rinfo['chrom'],
+                'pos': pos,
+                'Strand': rinfo['strand'],
+            }
+            # Index by (chrom, strand, pos) for fast reverse lookup
+            key = (rinfo['chrom'], rinfo['strand'], pos)
+            pos_to_read_id[key] = rid
+
+    peak_patterns = {}
+
+    for peak_id, read_count in recoverable_peaks.items():
+        if peak_id not in peak_id_to_info:
+            continue
+
+        peak_info = peak_id_to_info[peak_id]
+        peak_pos = (peak_info['Start'] + peak_info['End']) // 2
+
+        # Find reads supporting this peak
+        supporting_reads = []
+        strands = [peak_info['Strand']] if peak_info['Strand'] != '.' else ['+', '-']
+        for strand in strands:
+            key = (peak_info['Chrom'], strand)
+            for r in reads_by_chrom_strand.get(key, []):
+                if abs(r['Start'] - peak_pos) <= window or abs(r['End'] - peak_pos) <= window:
+                    # Use reverse index for O(1) lookup instead of O(N) nested loop
+                    lookup_key = (r['Chrom'], r['Strand'], r['Start'])
+                    rid = pos_to_read_id.get(lookup_key)
+                    if rid:
+                        supporting_reads.append(rid)
+
+        supporting_reads = list(set(supporting_reads))[:100]  # Limit for performance
+
+        # Get read positions for truncation pattern analysis
+        read_positions = []
+        for rid in supporting_reads:
+            if rid in read_id_to_end:
+                read_positions.append(read_id_to_end[rid]['pos'])
+
+        pattern = 'sparse'
+        details = {}
+        if read_positions:
+            pattern, details = _characterize_truncation_pattern(
+                read_starts=read_positions,
+                peak_pos=peak_pos,
+                strand=peak_info['Strand'] if peak_info['Strand'] != '.' else '+',
+            )
+
+        peak_patterns[peak_id] = {
+            'pattern': pattern,
+            'details': details,
+            'read_count': read_count,
+            'is_captured': peak_id in captured_peaks,
+            'chrom': peak_info['Chrom'],
+            'start': peak_info['Start'],
+            'end': peak_info['End'],
+            'strand': peak_info['Strand'],
+        }
+
+    return peak_patterns
+
+
+def _write_troubled_regions_tsv(
+    missed_peaks: Dict[str, int],
+    peak_patterns: Dict[str, dict],
+    analysis_results: dict,
+    output_path: Path,
+) -> int:
+    """
+    Write TSV file for missed recoverable peaks with IGV-compatible coordinates.
+
+    This TSV is peak-level (not per-read). It uses the classification results
+    from _analyze_missed_peaks_comprehensive to explain why each peak was missed.
+
+    Args:
+        missed_peaks: Dict of peak_id -> read_count for missed recoverable peaks
+        peak_patterns: Optional dict with chrom/start/end/strand/read_count/pattern for each peak.
+                       (For CAGE you populate this via _analyze_all_recoverable_peaks_truncation.
+                        For QuantSeq you can pass {} and coordinates will be derived from peak_id.)
+        analysis_results: Output of _analyze_missed_peaks_comprehensive
+        output_path: Path to output TSV file
+
+    Returns:
+        Number of rows written
+    """
+    # Build lookup from analysis results
+    classification_lookup = {}
+    for cls in analysis_results.get("peak_classifications", []):
+        pid = cls.get("peak_id")
+        if not pid:
+            continue
+        counts = {
+            "unassigned": cls.get("unassigned_count", 0),
+            "assigned_nearby": cls.get("assigned_nearby_count", 0),
+            "assigned_distant": cls.get("assigned_distant_count", 0),
+            "assigned_wrong_strand": cls.get("assigned_wrong_strand_count", 0),
+        }
+        dominant = max(counts.items(), key=lambda x: x[1])[0] if sum(counts.values()) > 0 else "unknown"
+        classification_lookup[pid] = {"dominant": dominant, "counts": counts}
+
+    def _parse_peak_id(peak_id: str) -> Tuple[str, int, int]:
+        # expects chrom_start_end
+        parts = peak_id.split("_")
+        if len(parts) < 3:
+            return ("", 0, 0)
+        chrom = "_".join(parts[:-2])  # tolerate chrom names that include underscores
+        try:
+            start = int(parts[-2])
+            end = int(parts[-1])
+        except ValueError:
+            start, end = 0, 0
+        return chrom, start, end
+
+    count = 0
+    with open(output_path, "w", newline="") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerow([
+            "igv_coords",
+            "chrom", "start", "end", "strand",
+            "read_support",
+            "unassigned_reads", "assigned_nearby", "assigned_distant", "wrong_strand",
+            "dominant_class",
+            "truncation_pattern",
+            "peak_id",
+        ])
+
+        for peak_id in missed_peaks:
+            cls_info = classification_lookup.get(peak_id, {})
+            counts = cls_info.get("counts", {})
+
+            # Prefer coords from peak_patterns (CAGE case), else derive from peak_id (QuantSeq ok)
+            pattern_info = peak_patterns.get(peak_id, {})
+            if pattern_info.get("chrom"):
+                chrom = pattern_info.get("chrom", "")
+                start = int(pattern_info.get("start", 0))
+                end = int(pattern_info.get("end", 0))
+                strand = pattern_info.get("strand", ".")
+                read_support = pattern_info.get("read_count", missed_peaks.get(peak_id, 0))
+                trunc_pattern = pattern_info.get("pattern", "NA")
+            else:
+                chrom, start, end = _parse_peak_id(peak_id)
+                strand = "."
+                read_support = missed_peaks.get(peak_id, 0)
+                trunc_pattern = "NA"
+
+            igv_coords = f"{chrom}:{start}-{end}" if chrom else ""
+
+            writer.writerow([
+                igv_coords,
+                chrom, start, end, strand,
+                read_support,
+                counts.get("unassigned", 0),
+                counts.get("assigned_nearby", 0),
+                counts.get("assigned_distant", 0),
+                counts.get("assigned_wrong_strand", 0),
+                cls_info.get("dominant", "unknown"),
+                trunc_pattern,
+                peak_id,
+            ])
+            count += 1
+
+    logger.info(f"Wrote {count} troubled regions to {output_path}")
+    return count
+
+
+
+def _plot_all_truncation_patterns(
+    peak_patterns: Dict[str, dict],
+    output_path: Path,
+    title: str,
+) -> bool:
+    """Plot bar chart of truncation patterns for ALL recoverable peaks, split by captured/missed."""
+    if not HAS_MATPLOTLIB:
+        return False
+
+    if not peak_patterns:
+        return False
+
+    # Count patterns separately for captured vs missed
+    captured_patterns = defaultdict(int)
+    missed_patterns = defaultdict(int)
+
+    for peak_id, info in peak_patterns.items():
+        pattern = info.get('pattern', 'unknown')
+        if info.get('is_captured'):
+            captured_patterns[pattern] += 1
+        else:
+            missed_patterns[pattern] += 1
+
+    pattern_order = ['sharp', 'trailing', 'bimodal', 'dispersed', 'sparse']
+    colors_captured = '#2ecc71'  # Green
+    colors_missed = '#e74c3c'    # Red
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    x = np.arange(len(pattern_order))
+    width = 0.35
+
+    captured_counts = [captured_patterns.get(p, 0) for p in pattern_order]
+    missed_counts = [missed_patterns.get(p, 0) for p in pattern_order]
+
+    bars1 = ax.bar(x - width/2, captured_counts, width, label='Captured', color=colors_captured, alpha=0.8)
+    bars2 = ax.bar(x + width/2, missed_counts, width, label='Missed', color=colors_missed, alpha=0.8)
+
+    # Add count labels
+    for bar, count in zip(bars1, captured_counts):
+        if count > 0:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                    str(count), ha='center', va='bottom', fontsize=9)
+    for bar, count in zip(bars2, missed_counts):
+        if count > 0:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5,
+                    str(count), ha='center', va='bottom', fontsize=9)
+
+    ax.set_xlabel('Truncation Pattern', fontsize=12)
+    ax.set_ylabel('Number of Peaks', fontsize=12)
+    ax.set_title(title, fontsize=14)
+    ax.set_xticks(x)
+    ax.set_xticklabels([p.capitalize() for p in pattern_order])
+    ax.legend()
+
+    # Add descriptions
+    descriptions = {
+        'Sharp': 'Reads cluster at peak',
+        'Trailing': 'RT truncation gradient',
+        'Bimodal': 'Two clusters (alt TSS?)',
+        'Dispersed': 'Spread out reads',
+        'Sparse': '<5 reads',
+    }
+    desc_text = '\n'.join([f"{k}: {v}" for k, v in descriptions.items()])
+    ax.text(0.98, 0.98, desc_text, transform=ax.transAxes, fontsize=9,
+            verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save truncation patterns plot: {e}")
+        plt.close(fig)
+        return False
 
 
 # ────────────────────────── Core Metrics Calculation ──────────────────────────
@@ -1200,6 +2458,9 @@ def _tss_tts_metrics(
     plot_output_dir: Optional[Path] = None,
     plot_prefix: str = "",
     test_regions_dir: Optional[Path] = None,
+    genome_path: Optional[Path] = None,
+    map_file: Optional[Path] = None,
+    n_isoforms: Optional[int] = None,
 ) -> Tuple[dict, Dict[str, List[int]]]:
     """
     Compute precision/recall/F1 for TSS/TTS and extract signed distances for plotting.
@@ -1208,8 +2469,13 @@ def _tss_tts_metrics(
         iso_bed: Isoforms BED file
         peaks: Dict with keys 'prime5', 'prime3', 'ref_prime5', 'ref_prime3'
         window: Distance window for matching (default 50bp)
+        reads_bed: Reads BED12 file (for recoverability and motif analysis)
         plot_output_dir: Directory to save distance histogram plots (optional)
         plot_prefix: Prefix for plot filenames (e.g., sample name)
+        test_regions_dir: Directory to save recoverable peak BED files (optional)
+        genome_path: Path to genome FASTA for motif analysis (optional)
+        map_file: Path to isoform.read.map.txt for read classification (optional)
+        n_isoforms: Pre-computed isoform count (optional, to avoid re-reading iso_bed)
 
     Returns:
         Tuple of (metrics dict, signed_distances dict)
@@ -1237,12 +2503,15 @@ def _tss_tts_metrics(
     if not _which("bedtools"):
         raise RuntimeError("bedtools is required for TSS/TTS metrics")
 
-    # Count transcripts
-    n_tx = 0
-    with open(iso_bed) as f:
-        for line in f:
-            if line and not line.startswith('#'):
-                n_tx += 1
+    # Count transcripts (use cached count if provided)
+    if n_isoforms is not None:
+        n_tx = n_isoforms
+    else:
+        n_tx = 0
+        with open(iso_bed) as f:
+            for line in f:
+                if line and not line.startswith('#'):
+                    n_tx += 1
 
     if n_tx == 0:
         logger.warning(f"Isoforms BED '{iso_bed}' has 0 transcripts")
@@ -1402,6 +2671,10 @@ def _tss_tts_metrics(
 
             # Plot read support distribution for missed recoverable peaks
             # (recoverable by reads but not captured by any isoform end within window)
+            missed_5 = {}
+            missed_3 = {}
+            captured_5 = set()
+            captured_3 = set()
             if recov_5prime and closest_5prime:
                 captured_5 = _find_captured_peaks(closest_5prime, window)
                 missed_5 = {pid: cnt for pid, cnt in recov_5prime.items() if pid not in captured_5}
@@ -1420,6 +2693,179 @@ def _tss_tts_metrics(
                         output_path=plot_output_dir / f"{plot_prefix}_quantseq_peak_read_support.png",
                         title=f"Read Support for Missed Recoverable QuantSeq Peaks\n{plot_prefix}",
                     )
+
+            # Comprehensive missed peak analysis with read classification and truncation patterns
+            if map_file and map_file.exists() and reads_bed and reads_bed.exists():
+                iso_to_reads = _parse_read_map(map_file)
+                isoforms = _parse_isoform_ends(iso_bed)
+                read_ends_full = _parse_reads_bed_ends(reads_bed)
+
+                # Analyze ALL recoverable CAGE peaks (5' ends) for truncation patterns
+                peak_patterns_5 = {}
+                if recov_5prime and peaks.get("prime5"):
+                    peak_patterns_5 = _analyze_all_recoverable_peaks_truncation(
+                        recoverable_peaks=recov_5prime,
+                        captured_peaks=captured_5,
+                        peaks_path=peaks["prime5"],
+                        read_end_positions=read_tss_positions,
+                        read_ends=read_ends_full,
+                        window=window,
+                    )
+
+                    # Count truncation patterns for all recoverable peaks
+                    all_trunc_5 = defaultdict(int)
+                    for pid, info in peak_patterns_5.items():
+                        all_trunc_5[info.get('pattern', 'unknown')] += 1
+
+                    if all_trunc_5:
+                        metrics["5prime_all_pattern_sharp"] = all_trunc_5.get('sharp', 0)
+                        metrics["5prime_all_pattern_trailing"] = all_trunc_5.get('trailing', 0)
+                        metrics["5prime_all_pattern_bimodal"] = all_trunc_5.get('bimodal', 0)
+                        metrics["5prime_all_pattern_dispersed"] = all_trunc_5.get('dispersed', 0)
+                        metrics["5prime_all_pattern_sparse"] = all_trunc_5.get('sparse', 0)
+
+                    # Plot truncation patterns for ALL recoverable peaks (captured vs missed)
+                    _plot_all_truncation_patterns(
+                        peak_patterns=peak_patterns_5,
+                        output_path=plot_output_dir / f"{plot_prefix}_cage_all_truncation_patterns.png",
+                        title=f"Truncation Patterns at ALL Recoverable CAGE Peaks\n{plot_prefix}",
+                    )
+
+                # Analyze missed CAGE peaks (5' ends) - classification and detailed analysis
+                analysis_5 = {}
+                if missed_5 and peaks.get("prime5"):
+                    analysis_5 = _analyze_missed_peaks_comprehensive(
+                        missed_peaks=missed_5,
+                        peaks_path=peaks["prime5"],
+                        read_end_positions=read_tss_positions,
+                        iso_to_reads=iso_to_reads,
+                        isoforms=isoforms,
+                        read_ends=read_ends_full,
+                        window=window,
+                        end_type='tss',
+                        genome_path=genome_path,
+                    )
+
+                    # Add summary metrics
+                    if analysis_5.get('classification_summary'):
+                        metrics["5prime_missed_unassigned"] = analysis_5['classification_summary'].get('unassigned', 0)
+                        metrics["5prime_missed_nearby"] = analysis_5['classification_summary'].get('assigned_nearby', 0)
+                        metrics["5prime_missed_distant"] = analysis_5['classification_summary'].get('assigned_distant', 0)
+
+                    if analysis_5.get('truncation_patterns'):
+                        metrics["5prime_missed_pattern_sharp"] = analysis_5['truncation_patterns'].get('sharp', 0)
+                        metrics["5prime_missed_pattern_trailing"] = analysis_5['truncation_patterns'].get('trailing', 0)
+                        metrics["5prime_missed_pattern_bimodal"] = analysis_5['truncation_patterns'].get('bimodal', 0)
+
+                    # Plot classification summary
+                    if analysis_5.get('classification_summary'):
+                        _plot_read_classification_summary(
+                            classification_summary=analysis_5['classification_summary'],
+                            output_path=plot_output_dir / f"{plot_prefix}_cage_read_classification.png",
+                            title=f"Read Assignment for Missed CAGE Peaks\n{plot_prefix}",
+                        )
+
+                    # Plot truncation patterns (missed only - legacy plot)
+                    if analysis_5.get('truncation_patterns'):
+                        _plot_truncation_patterns(
+                            truncation_patterns=analysis_5['truncation_patterns'],
+                            output_path=plot_output_dir / f"{plot_prefix}_cage_missed_truncation_patterns.png",
+                            title=f"Truncation Patterns at Missed CAGE Peaks\n{plot_prefix}",
+                        )
+
+                    # Write annotated BED with classifications
+                    if test_regions_dir:
+                        _write_annotated_peaks_bed(
+                            peaks_path=peaks["prime5"],
+                            missed_peaks=missed_5,
+                            analysis_results=analysis_5,
+                            output_path=test_regions_dir / f"{plot_prefix}_missed_cage_peaks_annotated.csv",
+                            end_type='tss',
+                        )
+
+                        # Write troubled regions TSV with IGV coordinates
+                        _write_troubled_regions_tsv(
+                            missed_peaks=missed_5,
+                            peak_patterns=peak_patterns_5,
+                            analysis_results=analysis_5,
+                            output_path=test_regions_dir / f"{plot_prefix}_missed_cage_peaks.tsv",
+                        )
+
+                # Analyze missed QuantSeq peaks (3' ends)
+                if missed_3 and peaks.get("prime3"):
+                    analysis_3 = _analyze_missed_peaks_comprehensive(
+                        missed_peaks=missed_3,
+                        peaks_path=peaks["prime3"],
+                        read_end_positions=read_tts_positions,
+                        iso_to_reads=iso_to_reads,
+                        isoforms=isoforms,
+                        read_ends=read_ends_full,
+                        window=window,
+                        end_type='tts',
+                        genome_path=genome_path,
+                    )
+
+                    # Add summary metrics
+                    if analysis_3.get('classification_summary'):
+                        metrics["3prime_missed_unassigned"] = analysis_3['classification_summary'].get('unassigned', 0)
+                        metrics["3prime_missed_nearby"] = analysis_3['classification_summary'].get('assigned_nearby', 0)
+                        metrics["3prime_missed_distant"] = analysis_3['classification_summary'].get('assigned_distant', 0)
+
+                    # Plot classification summary
+                    if analysis_3.get('classification_summary'):
+                        _plot_read_classification_summary(
+                            classification_summary=analysis_3['classification_summary'],
+                            output_path=plot_output_dir / f"{plot_prefix}_quantseq_read_classification.png",
+                            title=f"Read Assignment for Missed QuantSeq Peaks\n{plot_prefix}",
+                        )
+
+                    # Write annotated BED
+                    if test_regions_dir:
+                        _write_annotated_peaks_bed(
+                            peaks_path=peaks["prime3"],
+                            missed_peaks=missed_3,
+                            analysis_results=analysis_3,
+                            output_path=test_regions_dir / f"{plot_prefix}_missed_quantseq_peaks_annotated.csv",
+                            end_type='tts',
+                        )
+
+                        # Write troubled regions TSV with IGV coordinates (no truncation patterns for QuantSeq)
+                        _write_troubled_regions_tsv(
+                            missed_peaks=missed_3,
+                            peak_patterns={},  # No truncation analysis for QuantSeq
+                            analysis_results=analysis_3,
+                            output_path=test_regions_dir / f"{plot_prefix}_missed_quantseq_peaks.tsv",
+                        )
+
+                # Motif analysis around read ends (if genome available)
+                if genome_path and genome_path.exists():
+                    # TSS motif analysis
+                    tss_motifs = _analyze_motifs_at_ends(
+                        read_ends=read_ends_full,
+                        genome_path=genome_path,
+                        end_type='tss',
+                    )
+                    if tss_motifs.get('pfm'):
+                        _plot_sequence_logo(
+                            pfm=tss_motifs['pfm'],
+                            output_path=plot_output_dir / f"{plot_prefix}_tss_motif_logo.png",
+                            title=f"Sequence Context at Read 5' Ends\n{plot_prefix}",
+                        )
+                        metrics["tss_motif_mean_ic"] = tss_motifs.get('mean_ic')
+
+                    # TTS motif analysis
+                    tts_motifs = _analyze_motifs_at_ends(
+                        read_ends=read_ends_full,
+                        genome_path=genome_path,
+                        end_type='tts',
+                    )
+                    if tts_motifs.get('pfm'):
+                        _plot_sequence_logo(
+                            pfm=tts_motifs['pfm'],
+                            output_path=plot_output_dir / f"{plot_prefix}_tts_motif_logo.png",
+                            title=f"Sequence Context at Read 3' Ends\n{plot_prefix}",
+                        )
+                        metrics["tts_motif_mean_ic"] = tts_motifs.get('mean_ic')
 
         return metrics, signed_distances
     finally:
@@ -1445,6 +2891,7 @@ def calculate_ted_metrics(
     plot_output_dir: Optional[Path] = None,
     plot_prefix: str = "",
     test_regions_dir: Optional[Path] = None,
+    genome_path: Optional[Path] = None,
 ) -> dict:
     """
     Calculate all TED metrics for a single sample.
@@ -1464,38 +2911,35 @@ def calculate_ted_metrics(
         plot_output_dir: Directory to save distance histogram plots (optional)
         plot_prefix: Prefix for plot filenames (e.g., sample name)
         test_regions_dir: Directory to save recoverable peak BED files (optional)
+        genome_path: Path to genome FASTA for motif analysis (optional)
 
     Returns:
         Dict with all metrics
     """
-    # Basic counts - read isoform names
+    # Basic counts - read isoform names and extract gene IDs in single pass
     isoform_names = []
+    genes = set()
     with open(iso_bed) as f:
         reader = csv.reader(f, delimiter='\t')
         for row in reader:
             if not row or row[0].startswith('#'):
                 continue
             if len(row) >= 4:
-                isoform_names.append(row[3])
+                name = row[3]
+                isoform_names.append(name)
+                # Extract gene IDs in same loop
+                parts = str(name).split("_")
+                for part in parts:
+                    # Only count gene IDs (ENSG*, ENSMUSG*), not transcript IDs (ENST*, ENSMUST*)
+                    if part.startswith(("ENSG", "ENSMUSG")):
+                        genes.add(part.split(".")[0])
     
     n_iso = len(isoform_names)
-    
-    # Extract gene IDs (only ENSG* and ENSMUSG* patterns, not transcript IDs)
-    genes = set()
-    for name in isoform_names:
-        parts = str(name).split("_")
-        for part in parts:
-            # Only count gene IDs (ENSG*, ENSMUSG*), not transcript IDs (ENST*, ENSMUST*)
-            if part.startswith(("ENSG", "ENSMUSG")):
-                genes.add(part.split(".")[0])
     n_genes = len(genes)
     
-    # Read assignment
-    assigned_read_ids = _get_assigned_read_ids(map_file)
+    # Read assignment - parse map file once for both unique IDs and per-isoform stats
+    assigned_read_ids, reads_per_iso_stats = _parse_map_file_comprehensive(map_file)
     assigned_unique_ids = len(assigned_read_ids)
-    
-    # Reads per isoform statistics
-    reads_per_iso_stats = _count_reads_per_isoform(map_file)
     
     # Count by type if BAM available
     if bam_file and bam_file.exists():
@@ -1532,11 +2976,14 @@ def calculate_ted_metrics(
         plot_output_dir=plot_output_dir,
         plot_prefix=plot_prefix,
         test_regions_dir=test_regions_dir,
+        genome_path=genome_path,
+        map_file=map_file,
+        n_isoforms=n_iso,  # Pass cached count to avoid re-reading
     )
 
-    # Read-end entropy analysis
+    # Read-end entropy analysis (skip if no reads or no assigned reads)
     entropy_metrics = {}
-    if reads_bed and reads_bed.exists() and reads_bed.stat().st_size > 0:
+    if reads_bed and reads_bed.exists() and reads_bed.stat().st_size > 0 and assigned_unique_ids > 0:
         entropy_data = _compute_read_end_entropy(iso_bed, map_file, reads_bed)
         entropy_metrics = {
             "tss_entropy_mean": entropy_data["tss_entropy_mean"],
@@ -1591,6 +3038,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True, help="Output TSV file")
     parser.add_argument("--plot-output-dir", type=Path, help="Directory to save distance histogram plots (CAGE and QuantSeq)")
     parser.add_argument("--test-regions-dir", type=Path, help="Directory to save recoverable peak BED files")
+    parser.add_argument("--genome", type=Path, help="Genome FASTA file (for motif analysis)")
+    parser.add_argument("--timing-output", type=Path, help="Output file for performance timing report")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     # Metadata arguments for result tracking
     parser.add_argument("--test-name", type=str, help="Test set name")
@@ -1635,6 +3084,7 @@ def main():
         plot_output_dir=args.plot_output_dir,
         plot_prefix=plot_prefix,
         test_regions_dir=args.test_regions_dir,
+        genome_path=args.genome,
     )
     
     # Add metadata to metrics if provided
@@ -1665,6 +3115,34 @@ def main():
         writer.writerow(metrics)
     
     logger.info(f"Wrote metrics to {args.output}")
+    
+    # Write timing report if requested
+    if args.timing_output:
+        with open(args.timing_output, 'w') as tf:
+            tf.write("TED Performance Timing Report\n")
+            tf.write("=" * 80 + "\n\n")
+            
+            # Sort by total time (sum of all calls)
+            sorted_sections = sorted(
+                _TIMING_DATA.items(),
+                key=lambda x: sum(x[1]),
+                reverse=True
+            )
+            
+            total_time = sum(sum(times) for times in _TIMING_DATA.values())
+            tf.write(f"Total instrumented time: {total_time:.2f}s\n\n")
+            
+            tf.write(f"{'Section':<50} {'Calls':>8} {'Total (s)':>12} {'Avg (s)':>12} {'% of Total':>12}\n")
+            tf.write("-" * 100 + "\n")
+            
+            for section, times in sorted_sections:
+                n_calls = len(times)
+                total = sum(times)
+                avg = total / n_calls
+                pct = (total / total_time * 100) if total_time > 0 else 0
+                tf.write(f"{section:<50} {n_calls:>8} {total:>12.2f} {avg:>12.2f} {pct:>11.1f}%\n")
+        
+        logger.info(f"Wrote timing report to {args.timing_output}")
     
     # Print summary
     logger.info(f"Isoforms: {metrics['isoforms_observed']}")
