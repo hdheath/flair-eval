@@ -1906,75 +1906,76 @@ def _analyze_missed_peaks_comprehensive(
     truncation_patterns = defaultdict(int)
     all_classifications = []
 
-    for peak_id, read_count in missed_peaks.items():
-        peak_info = peak_id_to_info.get(peak_id)
-        if not peak_info:
-            continue
+    with timed_section(f"analyze_missed_peaks_loop_{end_type}"):
+        for peak_id, read_count in missed_peaks.items():
+            peak_info = peak_id_to_info.get(peak_id)
+            if not peak_info:
+                continue
 
-        peak_pos = (peak_info["Start"] + peak_info["End"]) // 2
+            peak_pos = (peak_info["Start"] + peak_info["End"]) // 2
 
-        # Find read IDs supporting this peak (within window around peak_pos)
-        supporting_reads = []
-        strands = [peak_info["Strand"]] if peak_info["Strand"] != "." else ["+", "-"]
+            # Find read IDs supporting this peak (within window around peak_pos)
+            supporting_reads = []
+            strands = [peak_info["Strand"]] if peak_info["Strand"] != "." else ["+", "-"]
 
-        for strand in strands:
-            key = (peak_info["Chrom"], strand)
-            for r in reads_by_chrom_strand.get(key, []):
-                # r is a 1bp interval [Start, End)
-                if abs(r["Start"] - peak_pos) <= window:
-                    # Use reverse index for O(1) lookup instead of O(N) iteration
-                    lookup_key = (r["Chrom"], r["Strand"], r["Start"])
-                    rid = pos_to_read_id.get(lookup_key)
-                    if rid:
-                        supporting_reads.append(rid)
+            for strand in strands:
+                key = (peak_info["Chrom"], strand)
+                for r in reads_by_chrom_strand.get(key, []):
+                    # r is a 1bp interval [Start, End)
+                    if abs(r["Start"] - peak_pos) <= window:
+                        # Use reverse index for O(1) lookup instead of O(N) iteration
+                        lookup_key = (r["Chrom"], r["Strand"], r["Start"])
+                        rid = pos_to_read_id.get(lookup_key)
+                        if rid:
+                            supporting_reads.append(rid)
 
-        # Deduplicate + cap for performance
-        supporting_reads = list(set(supporting_reads))[:100]
+            # Deduplicate + cap for performance
+            supporting_reads = list(set(supporting_reads))[:100]
 
-        # Calculate average read length for supporting reads
-        read_lengths = []
-        for rid in supporting_reads:
-            if rid in read_ends:
-                rinfo = read_ends[rid]
-                read_length = abs(rinfo.get('end', 0) - rinfo.get('start', 0))
-                if read_length > 0:
-                    read_lengths.append(read_length)
-        avg_read_length = statistics.mean(read_lengths) if read_lengths else 0
+            # Calculate average read length for supporting reads
+            read_lengths = []
+            for rid in supporting_reads:
+                if rid in read_ends:
+                    rinfo = read_ends[rid]
+                    read_length = abs(rinfo.get('end', 0) - rinfo.get('start', 0))
+                    if read_length > 0:
+                        read_lengths.append(read_length)
+            avg_read_length = statistics.mean(read_lengths) if read_lengths else 0
 
-        # Classify reads (THIS is the key: pass end_type through)
-        classification = _classify_missed_peak_reads(
-            peak_id=peak_id,
-            peak_info=peak_info,
-            reads_supporting_peak=supporting_reads,
-            iso_to_reads=iso_to_reads,
-            isoforms=isoforms,
-            read_ends=read_ends,
-            end_type=end_type,
-            window=window,
-        )
+            # Classify reads (THIS is the key: pass end_type through)
+            classification = _classify_missed_peak_reads(
+                peak_id=peak_id,
+                peak_info=peak_info,
+                reads_supporting_peak=supporting_reads,
+                iso_to_reads=iso_to_reads,
+                isoforms=isoforms,
+                read_ends=read_ends,
+                end_type=end_type,
+                window=window,
+            )
 
-        classification_summary["unassigned"] += classification.get("unassigned_count", 0)
-        classification_summary["assigned_nearby"] += classification.get("assigned_nearby_count", 0)
-        classification_summary["assigned_distant"] += classification.get("assigned_distant_count", 0)
-        classification_summary["assigned_wrong_strand"] += classification.get("assigned_wrong_strand_count", 0)
+            classification_summary["unassigned"] += classification.get("unassigned_count", 0)
+            classification_summary["assigned_nearby"] += classification.get("assigned_nearby_count", 0)
+            classification_summary["assigned_distant"] += classification.get("assigned_distant_count", 0)
+            classification_summary["assigned_wrong_strand"] += classification.get("assigned_wrong_strand_count", 0)
 
-        # Add average read length to classification
-        classification['avg_read_length'] = avg_read_length
+            # Add average read length to classification
+            classification['avg_read_length'] = avg_read_length
 
-        # Truncation pattern analysis only makes sense for 5' ends
-        if end_type == "tss" and supporting_reads:
-            read_positions = [read_id_to_end[rid]["pos"] for rid in supporting_reads if rid in read_id_to_end]
-            if read_positions:
-                pattern, details = _characterize_truncation_pattern(
-                    read_starts=read_positions,
-                    peak_pos=peak_pos,
-                    strand=peak_info["Strand"] if peak_info["Strand"] != "." else "+",
-                )
-                truncation_patterns[pattern] += 1
-                classification["truncation_pattern"] = pattern
-                classification["truncation_details"] = details
+            # Truncation pattern analysis only makes sense for 5' ends
+            if end_type == "tss" and supporting_reads:
+                read_positions = [read_id_to_end[rid]["pos"] for rid in supporting_reads if rid in read_id_to_end]
+                if read_positions:
+                    pattern, details = _characterize_truncation_pattern(
+                        read_starts=read_positions,
+                        peak_pos=peak_pos,
+                        strand=peak_info["Strand"] if peak_info["Strand"] != "." else "+",
+                    )
+                    truncation_patterns[pattern] += 1
+                    classification["truncation_pattern"] = pattern
+                    classification["truncation_details"] = details
 
-        all_classifications.append(classification)
+            all_classifications.append(classification)
 
     return {
         "n_missed_peaks": len(missed_peaks),
@@ -2528,9 +2529,10 @@ def _tss_tts_metrics(
     tmp_local = []
     try:
         # Extract single-position TSS and TTS BED files
-        tss_bed, tts_bed = _extract_tss_tts_bed(iso_bed, tmp_local)
-        tss_sorted = _prepare_bed6_sorted(tss_bed, tmp_local)
-        tts_sorted = _prepare_bed6_sorted(tts_bed, tmp_local)
+        with timed_section("extract_tss_tts_bed"):
+            tss_bed, tts_bed = _extract_tss_tts_bed(iso_bed, tmp_local)
+            tss_sorted = _prepare_bed6_sorted(tss_bed, tmp_local)
+            tts_sorted = _prepare_bed6_sorted(tts_bed, tmp_local)
 
         def _side(key: str, label: str, endpoint_bed: Path, read_end_positions: List[dict]
                   ) -> Tuple[Optional[float], Optional[float], Optional[float], List[int], List[bool], Dict[str, int], List[List[str]]]:
@@ -2550,8 +2552,10 @@ def _tss_tts_metrics(
             recoverable_ids: Dict[str, int] = {}
             recov_mask = []
             if read_end_positions:
-                recoverable_ids = _find_recoverable_peaks(pth, read_end_positions, window)
-                recov_mask = _classify_isoform_recoverability(closest_rows, recoverable_ids)
+                with timed_section(f"find_recoverable_peaks_{label}"):
+                    recoverable_ids = _find_recoverable_peaks(pth, read_end_positions, window)
+                with timed_section(f"classify_isoform_recoverability_{label}"):
+                    recov_mask = _classify_isoform_recoverability(closest_rows, recoverable_ids)
 
             # Count isoforms within window
             m = sum(1 for dist, _ in dist_map.values() if dist <= window)
@@ -2938,13 +2942,15 @@ def calculate_ted_metrics(
     n_genes = len(genes)
     
     # Read assignment - parse map file once for both unique IDs and per-isoform stats
-    assigned_read_ids, reads_per_iso_stats = _parse_map_file_comprehensive(map_file)
-    assigned_unique_ids = len(assigned_read_ids)
+    with timed_section("parse_map_file_comprehensive"):
+        assigned_read_ids, reads_per_iso_stats = _parse_map_file_comprehensive(map_file)
+        assigned_unique_ids = len(assigned_read_ids)
     
     # Count by type if BAM available
     if bam_file and bam_file.exists():
-        assigned_by_type = _count_assigned_reads_by_type(bam_file, assigned_read_ids)
-        total_alignments = _count_total_alignments_bam(bam_file)
+        with timed_section("count_alignments_by_type"):
+            assigned_by_type = _count_assigned_reads_by_type(bam_file, assigned_read_ids)
+            total_alignments = _count_total_alignments_bam(bam_file)
     else:
         assigned_by_type = {
             "assigned_primary": 0,
@@ -2970,29 +2976,31 @@ def calculate_ted_metrics(
         "ref_prime5": ref_prime5_peaks,
         "ref_prime3": ref_prime3_peaks,
     }
-    tss_tts, signed_distances = _tss_tts_metrics(
-        iso_bed, peaks, window,
-        reads_bed=reads_bed,
-        plot_output_dir=plot_output_dir,
-        plot_prefix=plot_prefix,
-        test_regions_dir=test_regions_dir,
-        genome_path=genome_path,
-        map_file=map_file,
-        n_isoforms=n_iso,  # Pass cached count to avoid re-reading
-    )
+    with timed_section("tss_tts_metrics"):
+        tss_tts, signed_distances = _tss_tts_metrics(
+            iso_bed, peaks, window,
+            reads_bed=reads_bed,
+            plot_output_dir=plot_output_dir,
+            plot_prefix=plot_prefix,
+            test_regions_dir=test_regions_dir,
+            genome_path=genome_path,
+            map_file=map_file,
+            n_isoforms=n_iso,  # Pass cached count to avoid re-reading
+        )
 
     # Read-end entropy analysis (skip if no reads or no assigned reads)
     entropy_metrics = {}
     if reads_bed and reads_bed.exists() and reads_bed.stat().st_size > 0 and assigned_unique_ids > 0:
-        entropy_data = _compute_read_end_entropy(iso_bed, map_file, reads_bed)
-        entropy_metrics = {
-            "tss_entropy_mean": entropy_data["tss_entropy_mean"],
-            "tss_entropy_median": entropy_data["tss_entropy_median"],
-            "tts_entropy_mean": entropy_data["tts_entropy_mean"],
-            "tts_entropy_median": entropy_data["tts_entropy_median"],
-        }
-        if plot_output_dir:
-            _plot_read_end_entropy(entropy_data, plot_output_dir, plot_prefix)
+        with timed_section("compute_read_end_entropy"):
+            entropy_data = _compute_read_end_entropy(iso_bed, map_file, reads_bed)
+            entropy_metrics = {
+                "tss_entropy_mean": entropy_data["tss_entropy_mean"],
+                "tss_entropy_median": entropy_data["tss_entropy_median"],
+                "tts_entropy_mean": entropy_data["tts_entropy_mean"],
+                "tts_entropy_median": entropy_data["tts_entropy_median"],
+            }
+            if plot_output_dir:
+                _plot_read_end_entropy(entropy_data, plot_output_dir, plot_prefix)
 
     # Build result
     result = {
