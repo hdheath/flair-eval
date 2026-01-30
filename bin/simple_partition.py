@@ -27,18 +27,37 @@ def partition_bam(input_bam, output_bam, region):
     if not bai_file.exists():
         print(f"Indexing input BAM file: {input_bam}")
         run_command(["samtools", "index", str(input_bam)])
-    
+
     # Extract region - samtools accepts both 'chr1' and 'chr1:1000-2000' formats
     print(f"Extracting region {region} from {input_bam}")
     run_command([
-        "samtools", "view", "-b", 
+        "samtools", "view", "-b",
         "-o", str(output_bam),
         str(input_bam), region
     ])
-    
+
     # Index the output BAM file (required for FLAIR transcriptome)
     print(f"Indexing output BAM file: {output_bam}")
     run_command(["samtools", "index", str(output_bam)])
+
+
+def bam_to_bed12(input_bam, output_bed):
+    """Convert BAM file to BED12 format using bedtools.
+
+    This is used when generating BED from a partitioned BAM file,
+    avoiding the need to convert the entire BAM before partitioning.
+    """
+    print(f"Converting BAM to BED12: {input_bam} -> {output_bed}")
+
+    # Use shell redirection for output
+    cmd = f"bedtools bamtobed -bed12 -i {input_bam} > {output_bed}"
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        print(f"Error converting BAM to BED: {result.stderr}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Created BED12: {output_bed}")
 
 
 
@@ -241,7 +260,9 @@ def partition_gtf_file(input_file, output_file, chrom, start, end):
 def main():
     parser = argparse.ArgumentParser(description="Simple partition script for FLAIR BAM/BED files")
     parser.add_argument("--bam", required=True, help="Input BAM file from FLAIR align")
-    parser.add_argument("--bed", required=True, help="Input BED file from FLAIR align") 
+    parser.add_argument("--bed", help="Input BED file from FLAIR align (optional if --generate-bed is used)")
+    parser.add_argument("--generate-bed", action="store_true",
+                        help="Generate BED12 from BAM after partitioning (saves time/storage for region partitions)")
     parser.add_argument("--region", help="Region to extract (e.g., chr1:1000-2000)")
     parser.add_argument("--all", action="store_true", help="Pass through all data (no filtering)")
     parser.add_argument("--output-prefix", required=True, help="Prefix for output files")
@@ -265,20 +286,25 @@ def main():
         print("Error: Cannot specify both --all and --region", file=sys.stderr)
         sys.exit(1)
     
+    # Validate BED input requirements
+    if not args.generate_bed and not args.bed:
+        print("Error: Must specify either --bed or --generate-bed", file=sys.stderr)
+        sys.exit(1)
+
     # Parse inputs
     input_bam = Path(args.bam)
-    input_bed = Path(args.bed)
-    
+    input_bed = Path(args.bed) if args.bed else None
+
     if args.region:
         chrom, start, end = parse_region(args.region)
     else:
         chrom, start, end = None, None, None  # For --all mode
-    
+
     # Check inputs exist
     if not input_bam.exists():
         print(f"Error: BAM file not found: {input_bam}", file=sys.stderr)
         sys.exit(1)
-    if not input_bed.exists():
+    if input_bed and not input_bed.exists():
         print(f"Error: BED file not found: {input_bed}", file=sys.stderr)
         sys.exit(1)
     
@@ -289,14 +315,12 @@ def main():
     if args.all:
         print("Pass-through mode: creating symlinks to original files")
         print(f"Input BAM: {input_bam}")
-        print(f"Input BED: {input_bed}")
         print(f"Output BAM: {output_bam}")
         print(f"Output BED: {output_bed}")
-        
-        # Create symlinks instead of copying
+
+        # Create symlink for BAM
         output_bam.symlink_to(input_bam.resolve())
-        output_bed.symlink_to(input_bed.resolve())
-        
+
         # For BAM index - symlink if exists, create if doesn't
         input_bai = Path(str(input_bam) + ".bai")
         output_bai = Path(str(output_bam) + ".bai")
@@ -305,22 +329,43 @@ def main():
         else:
             print(f"Creating BAM index for: {output_bam}")
             run_command(["samtools", "index", str(output_bam)])
+
+        # Handle BED: either symlink existing or generate from BAM
+        if args.generate_bed:
+            print("Generating BED12 from BAM (--generate-bed mode)")
+            bam_to_bed12(input_bam, output_bed)
+        elif input_bed:
+            print(f"Input BED: {input_bed}")
+            output_bed.symlink_to(input_bed.resolve())
+        else:
+            print("Error: No BED source available in --all mode", file=sys.stderr)
+            sys.exit(1)
     else:
         # Format region string for logging
         if start is None or end is None:
             region_display = chrom
         else:
             region_display = f"{chrom}:{start}-{end}"
-        
+
         print(f"Partitioning to region: {region_display}")
         print(f"Input BAM: {input_bam}")
-        print(f"Input BED: {input_bed}")
         print(f"Output BAM: {output_bam}")
         print(f"Output BED: {output_bed}")
-        
-        # Do the work - core BAM/BED files
+
+        # Partition BAM first (fast with samtools)
         partition_bam(input_bam, output_bam, args.region)
-        partition_bed_file(input_bed, output_bed, chrom, start, end)
+
+        # Handle BED: either partition existing or generate from partitioned BAM
+        if args.generate_bed:
+            # Convert the partitioned BAM to BED12 (more efficient than partitioning full BED)
+            print("Generating BED12 from partitioned BAM (--generate-bed mode)")
+            bam_to_bed12(output_bam, output_bed)
+        elif input_bed:
+            print(f"Input BED: {input_bed}")
+            partition_bed_file(input_bed, output_bed, chrom, start, end)
+        else:
+            print("Error: No BED source available", file=sys.stderr)
+            sys.exit(1)
     
     created_files = [str(output_bam), str(output_bed)]
     

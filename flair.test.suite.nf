@@ -138,35 +138,12 @@ process FlairAlign {
     """
 }
 
-process BamToBed {
-    // Converts pre-aligned BAM files to BED12 format for downstream FLAIR processes
-    // Used when user provides pre-aligned BAM instead of raw reads
-    publishDir "results/align", mode: 'symlink'
-    tag "${dataset_name}_${align_mode}"
-
-    input:
-    // test_name: Passed through for downstream tracking (not used in script)
-    // dataset_name: Used for output file naming
-    // align_mode: Mode identifier for this alignment
-    // bam: Pre-aligned BAM file
-    // bai: BAM index file (required implicitly for efficient BAM access)
-    tuple val(test_name), val(dataset_name), val(align_mode), path(bam), path(bai)
-
-    output:
-    // Returns original BAM/BAI plus newly generated BED12 file
-    tuple val(test_name), val(dataset_name), val(align_mode),
-          path(bam), path(bai), path("${dataset_name}_${align_mode}.bed"), emit: alignments
-
-    script:
-    """
-    # Convert BAM alignments to BED12 format (preserves splice junctions)
-    bedtools bamtobed -bed12 -i ${bam} > ${dataset_name}_${align_mode}.bed
-    """
-}
-
 process FlairPartition {
     // Partitions data to a specific genomic region or subset for testing
     // Extracts alignments, genome sequence, annotations, and experimental peak files for the specified region
+    // Supports two modes:
+    //   1. With pre-computed BED file (from FlairAlign)
+    //   2. With NO_BED placeholder (from pre-aligned BAM) - generates BED from partitioned BAM
     publishDir "results/partition/${test_name}", mode: 'symlink'
     tag "${dataset_name}_${align_mode}_${partition_mode}"
 
@@ -174,7 +151,7 @@ process FlairPartition {
     // test_name: Used for publishDir organization (not used in script)
     // dataset_name, align_mode, partition_mode: Used for output file naming
     // bam, bai: Input alignment files (bai required implicitly by samtools)
-    // bed: BED12 representation of alignments
+    // bed: BED12 representation of alignments (or NO_BED placeholder for pre-aligned BAM)
     // partition_mode: Mode identifier for this partition configuration
     // partition_args: Arguments specifying region (e.g., --region chr19:1000-2000 or --all)
     // genome: Full reference genome FASTA
@@ -200,13 +177,17 @@ process FlairPartition {
     def output_prefix = "${dataset_name}_${align_mode}_${partition_mode}"
     def cage_arg = cage_peaks.name != 'NO_CAGE' ? "--cage-peaks ${cage_peaks}" : ""
     def quantseq_arg = quantseq_peaks.name != 'NO_QUANTSEQ' ? "--quantseq-peaks ${quantseq_peaks}" : ""
+    // If BED is a placeholder (NO_BED), use --generate-bed to create BED from partitioned BAM
+    // This avoids expensive full BAM->BED conversion for pre-aligned data
+    def bed_arg = bed.name != 'NO_BED' ? "--bed ${bed}" : "--generate-bed"
 
     """
     # Custom script to partition data to a specific genomic region
     # Subsets BAM, BED, genome sequence, GTF annotation, and experimental peak files to the target region
+    # When --generate-bed is used, BED is created from the partitioned BAM (more efficient for large files)
     python ${projectDir}/bin/simple_partition.py \\
         --bam ${bam} \\
-        --bed ${bed} \\
+        ${bed_arg} \\
         --genome ${genome} \\
         --gtf ${gtf} \\
         ${cage_arg} \\
@@ -362,6 +343,7 @@ process FlairEvaluation {
     # Measures distance between predicted and actual TSS/TTS positions
     # Uses CAGE-seq (5' ends) and QuantSeq (3' ends) data if available
     # Also generates distance histogram plots showing transcript end accuracy
+    # Histograms automatically use consistent y-axes within each peak type category
     python ${projectDir}/bin/ted.py \\
         --isoforms-bed ${isoforms_bed} \\
         --map-file ${isoform_read_map} \\
@@ -598,33 +580,37 @@ workflow {
         }
     }
 
-    // Prepare inputs for BamToBed process (pre-aligned data)
-    // Creates one job per align mode for each pre-aligned BAM file
-    prealigned_bam_inputs = datasets_with_bam.flatMap { test_name, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
-        ds_align_modes.collect { align_mode, align_args ->
-            [test_name, dataset.name, align_mode, file(dataset.bam), file(dataset.bai)]
+    // Prepare inputs for partition process from pre-aligned BAM (no BED conversion)
+    // Uses NO_BED placeholder - FlairPartition will generate BED from partitioned BAM
+    // This avoids expensive full BAM->BED conversion for large pre-aligned files
+    prealigned_partition_inputs = datasets_with_bam.flatMap { test_name, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
+        // Prepare CAGE and QuantSeq files (use placeholders if not provided)
+        def cage_file = dataset.cage ? file(dataset.cage) : file("${workflow.workDir}/NO_CAGE", checkIfExists: false)
+        def quantseq_file = dataset.quantseq ? file(dataset.quantseq) : file("${workflow.workDir}/NO_QUANTSEQ", checkIfExists: false)
+        // Use NO_BED placeholder - FlairPartition will use --generate-bed flag
+        def bed_placeholder = file("${workflow.workDir}/NO_BED", checkIfExists: false)
+        // Generate tuples for each align_mode x partition_mode combination
+        ds_align_modes.collectMany { align_mode, align_args ->
+            ds_partition_modes.collect { partition_mode, partition_args ->
+                [test_name, dataset.name, align_mode, file(dataset.bam), file(dataset.bai), bed_placeholder,
+                 partition_mode, partition_args, file(dataset.genome), file(dataset.gtf),
+                 cage_file, quantseq_file]
+            }
         }
     }
 
     // =============================================================================
-    // ALIGNMENT STAGE - Run alignment or convert pre-aligned BAMs
+    // ALIGNMENT STAGE - Run alignment (only for datasets without pre-aligned BAM)
     // =============================================================================
 
     FlairAlign(align_inputs)
-    BamToBed(prealigned_bam_inputs)
-
-    // Merge alignment outputs from both branches (FlairAlign and BamToBed)
-    // Both produce: [test_name, dataset_name, align_mode, bam, bai, bed]
-    // Use concat instead of mix for better empty channel handling
-    all_alignments = FlairAlign.out.alignments.concat(BamToBed.out.alignments)
 
     // =============================================================================
     // PARTITION STAGE - Subset data to specific genomic regions
     // =============================================================================
 
-    // Prepare inputs for FlairPartition by combining alignments with partition modes
-    // For each alignment, create one partition job per partition mode
-    partition_inputs = all_alignments.combine(datasets_ch, by: 0).flatMap {
+    // For FlairAlign outputs: standard partition (BED already exists from alignment)
+    partition_inputs_from_align = FlairAlign.out.alignments.combine(datasets_ch, by: 0).flatMap {
         test_name, dataset_name, align_mode, bam, bai, bed, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
         // Prepare CAGE and QuantSeq files (use placeholders if not provided)
         def cage_file = dataset.cage ? file(dataset.cage) : file("${workflow.workDir}/NO_CAGE", checkIfExists: false)
@@ -636,7 +622,14 @@ workflow {
         }
     }
 
-    FlairPartition(partition_inputs)
+    // Merge partition inputs from both branches (FlairAlign with BED, pre-aligned with NO_BED)
+    // FlairPartition handles both cases - uses --bed or --generate-bed based on placeholder
+    all_partition_inputs = partition_inputs_from_align.concat(prealigned_partition_inputs)
+
+    FlairPartition(all_partition_inputs)
+
+    // Use FlairPartition output directly (no merging needed anymore)
+    all_partitioned = FlairPartition.out.partitioned
 
     // =============================================================================
     // TRANSCRIPTOME STAGE - Generate isoform predictions
@@ -644,7 +637,7 @@ workflow {
 
     // Prepare inputs for FlairTranscriptome by combining partitioned data with transcriptome modes
     // For each partitioned output, generate one transcriptome job per transcriptome mode
-    transcriptome_inputs = FlairPartition.out.partitioned.combine(datasets_ch, by: 0).flatMap {
+    transcriptome_inputs = all_partitioned.combine(datasets_ch, by: 0).flatMap {
         test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
         dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes ->
         // Retrieve partition arguments for this specific partition mode
@@ -666,17 +659,12 @@ workflow {
     // =============================================================================
 
     // Extract GTF files from partitioned data to generate reference TSS/TTS peaks
-    ref_peak_inputs = FlairPartition.out.partitioned.map {
+    ref_peak_inputs = all_partitioned.map {
         test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks ->
         [test_name, dataset_name, align_mode, partition_mode, gtf]
     }
 
     PrepareReferencePeaks(ref_peak_inputs)
-
-    // Prepare alignment data for evaluation (keep only necessary fields)
-    align_for_eval = all_alignments.map { test_name, dataset_name, align_mode, bam, bai, bed ->
-        [test_name, dataset_name, align_mode, bam, bai, bed]
-    }
 
     // =============================================================================
     // EVALUATION STAGE - Combine all data sources for comprehensive evaluation
@@ -700,7 +688,7 @@ workflow {
              "transcriptome", isoforms_bed, isoform_read_map, file("${workflow.workDir}/NO_CORRECTED", checkIfExists: false)]
         }
         // Step 2: Add partitioned BAM/BED/genome/GTF/CAGE/QuantSeq (match on test_name, dataset_name, align_mode, partition_mode)
-        .combine(FlairPartition.out.partitioned.map { test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks ->
+        .combine(all_partitioned.map { test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks ->
             [test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks]
         }, by: [0, 1, 2, 3])
         // Step 3: Add reference TSS/TTS peaks (match on test_name, dataset_name, align_mode, partition_mode)
@@ -749,7 +737,7 @@ workflow {
             region_size > 0 && region_size <= 400000
         }
         // Add BAM files from partition output (match on test_name, dataset_name, align_mode, partition_mode)
-        .combine(FlairPartition.out.partitioned.map { test_name, dataset_name, align_mode, partition_mode,
+        .combine(all_partitioned.map { test_name, dataset_name, align_mode, partition_mode,
                                                         bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks ->
             [test_name, dataset_name, align_mode, partition_mode, bam, bai]
         }, by: [0, 1, 2, 3])
