@@ -16,7 +16,11 @@ logger = get_logger()
 
 
 def read_bed6(path: Path) -> List[dict]:
-    """Read peaks as BED6 if possible; tolerate BED3 by adding Strand='.'"""
+    """Read peaks as BED6 if possible; tolerate BED3 by adding Strand='.'
+
+    Captures Name (col 4) and Score (col 5) when available.
+    Score is stored as float to support TPM values.
+    """
     rows = []
     try:
         with open(path) as f:
@@ -25,18 +29,26 @@ def read_bed6(path: Path) -> List[dict]:
                 if not row or row[0].startswith('#'):
                     continue
                 if len(row) >= 6:
+                    try:
+                        score = float(row[4])
+                    except (ValueError, IndexError):
+                        score = 0.0
                     rows.append({
                         'Chrom': row[0],
                         'Start': int(row[1]),
                         'End': int(row[2]),
-                        'Strand': row[5]
+                        'Name': row[3],
+                        'Score': score,
+                        'Strand': row[5],
                     })
                 elif len(row) >= 3:
                     rows.append({
                         'Chrom': row[0],
                         'Start': int(row[1]),
                         'End': int(row[2]),
-                        'Strand': '.'
+                        'Name': '',
+                        'Score': 0.0,
+                        'Strand': '.',
                     })
         return rows
     except Exception as e:

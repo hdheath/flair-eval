@@ -193,6 +193,58 @@ def find_captured_peaks(
     return captured
 
 
+def parse_read_sj_chains(reads_bed: Path) -> Dict[str, tuple]:
+    """Extract splice junction chains per read from BED12 file.
+
+    Returns {read_name: intron_chain_tuple} where intron_chain_tuple is a
+    tuple of (intron_start, intron_end) pairs, or () for single-exon reads.
+    Only keeps the first (primary) alignment for duplicate read names.
+    """
+    read_chains = {}
+    with open(reads_bed) as f:
+        for line in f:
+            if not line or line.startswith('#'):
+                continue
+            cols = line.rstrip().split('\t')
+            if len(cols) < 12:
+                continue
+            name = cols[3]
+            if name in read_chains:
+                continue  # keep primary alignment
+            start = int(cols[1])
+            try:
+                esizes = [int(x) for x in cols[10].rstrip(',').split(',')]
+                estarts = [int(x) for x in cols[11].rstrip(',').split(',')]
+            except (ValueError, IndexError):
+                read_chains[name] = ()
+                continue
+            exons = [(start + estarts[i], start + estarts[i] + esizes[i])
+                     for i in range(len(esizes))]
+            introns = tuple((exons[x][1], exons[x + 1][0])
+                            for x in range(len(exons) - 1))
+            read_chains[name] = introns
+    return read_chains
+
+
+def classify_read_sj_support(
+    read_chain: tuple,
+    found_sjc: dict,
+    found_subsets: dict,
+    chrom: str,
+) -> str:
+    """Classify a single read's splice junction chain support.
+
+    Returns one of: 'full_match', 'subset_match', 'unsupported', 'single_exon'.
+    """
+    if not read_chain:
+        return 'single_exon'
+    if chrom in found_sjc and read_chain in found_sjc[chrom]:
+        return 'full_match'
+    if chrom in found_subsets and read_chain in found_subsets[chrom]:
+        return 'subset_match'
+    return 'unsupported'
+
+
 def get_reads_to_isoforms(iso_to_reads: Dict[str, List[str]]) -> Dict[str, str]:
     """Invert isoform->reads map to get read->isoform mapping."""
     read_to_iso = {}
@@ -306,9 +358,13 @@ def analyze_missed_peaks_comprehensive(
     window: int,
     end_type: str,
     genome_path: Optional[Path] = None,
+    read_sj_chains: Optional[Dict[str, tuple]] = None,
+    found_sjc: Optional[dict] = None,
+    found_subsets: Optional[dict] = None,
 ) -> dict:
     """
-    Comprehensive analysis of missed peaks including read classification and truncation patterns.
+    Comprehensive analysis of missed peaks including read classification,
+    truncation patterns, and splice junction chain support.
 
     Args:
         missed_peaks: Dict of peak_id -> read_count for missed recoverable peaks
@@ -320,9 +376,12 @@ def analyze_missed_peaks_comprehensive(
         window: Distance window used to define "recoverable"
         end_type: 'tss' for CAGE missed peaks, 'tts' for QuantSeq missed peaks
         genome_path: (optional) genome FASTA path (currently unused here)
+        read_sj_chains: (optional) per-read SJ chains from parse_read_sj_chains
+        found_sjc: (optional) isoform SJ chains from extract_sj_info
+        found_subsets: (optional) pre-computed SJ chain subsets for subset matching
 
     Returns:
-        Dict with analysis results
+        Dict with analysis results including per-peak SJ support breakdown
     """
     with timed_section("analyze_missed_peaks_comprehensive"):
         if end_type not in ("tss", "tts"):
@@ -354,8 +413,13 @@ def analyze_missed_peaks_comprehensive(
         key = (rinfo["chrom"], rinfo["strand"], pos)
         pos_to_read_id[key] = rid
 
+    # Determine whether SJ support analysis is possible
+    has_sj_data = (read_sj_chains is not None and found_sjc is not None
+                   and found_subsets is not None)
+
     classification_summary = defaultdict(int)
     truncation_patterns = defaultdict(int)
+    sj_support_summary = defaultdict(int)  # aggregate SJ support across all peaks
     all_classifications = []
 
     with timed_section(f"analyze_missed_peaks_loop_{end_type}"):
@@ -414,6 +478,38 @@ def analyze_missed_peaks_comprehensive(
             # Add average read length to classification
             classification['avg_read_length'] = avg_read_length
 
+            # Splice junction chain support analysis for supporting reads
+            if has_sj_data and supporting_reads:
+                chrom = peak_info["Chrom"]
+                sj_counts = defaultdict(int)
+                for rid in supporting_reads:
+                    chain = read_sj_chains.get(rid)
+                    if chain is None:
+                        continue
+                    level = classify_read_sj_support(chain, found_sjc, found_subsets, chrom)
+                    sj_counts[level] += 1
+
+                classification['sj_full_match'] = sj_counts.get('full_match', 0)
+                classification['sj_subset_match'] = sj_counts.get('subset_match', 0)
+                classification['sj_unsupported'] = sj_counts.get('unsupported', 0)
+                classification['sj_single_exon'] = sj_counts.get('single_exon', 0)
+
+                # Determine best SJ support level for this peak
+                if sj_counts.get('full_match', 0) > 0:
+                    best_sj = 'full_match'
+                elif sj_counts.get('subset_match', 0) > 0:
+                    best_sj = 'subset_match'
+                elif sj_counts.get('single_exon', 0) > 0:
+                    best_sj = 'single_exon'
+                else:
+                    best_sj = 'unsupported'
+                classification['best_sj_support'] = best_sj
+
+                # Aggregate across all peaks
+                sj_support_summary[best_sj] += 1
+                for level, cnt in sj_counts.items():
+                    sj_support_summary[f"reads_{level}"] += cnt
+
             # Truncation pattern analysis only makes sense for 5' ends
             if end_type == "tss" and supporting_reads:
                 read_positions = [read_id_to_end[rid]["pos"] for rid in supporting_reads if rid in read_id_to_end]
@@ -434,6 +530,7 @@ def analyze_missed_peaks_comprehensive(
         "end_type": end_type,
         "classification_summary": dict(classification_summary),
         "truncation_patterns": dict(truncation_patterns) if end_type == "tss" else {},
+        "sj_support_summary": dict(sj_support_summary),
         "peak_classifications": all_classifications,
     }
 
@@ -571,27 +668,48 @@ def write_annotated_peaks_bed(
             dominant = max(counts, key=lambda x: x[1])[0]
             pattern = cls.get('truncation_pattern', 'NA')
             avg_read_length = cls.get('avg_read_length', 0)
-            classification_lookup[peak_id] = (dominant, pattern, avg_read_length)
+            best_sj = cls.get('best_sj_support', 'NA')
+            sj_full = cls.get('sj_full_match', 0)
+            sj_subset = cls.get('sj_subset_match', 0)
+            sj_unsupported = cls.get('sj_unsupported', 0)
+            sj_single_exon = cls.get('sj_single_exon', 0)
+            classification_lookup[peak_id] = {
+                'dominant': dominant, 'pattern': pattern,
+                'avg_read_length': avg_read_length,
+                'best_sj': best_sj,
+                'sj_full': sj_full, 'sj_subset': sj_subset,
+                'sj_unsupported': sj_unsupported, 'sj_single_exon': sj_single_exon,
+            }
 
     count = 0
     with open(output_path, 'w', newline='') as f:
         writer = csv.writer(f, delimiter='\t')
         # Header
-        writer.writerow(['#chrom', 'start', 'end', 'igv_id', 'read_support',
-                        'strand', 'read_classification', 'truncation_pattern', 'avg_read_length'])
+        writer.writerow([
+            '#chrom', 'start', 'end', 'igv_id', 'read_support',
+            'strand', 'read_classification', 'truncation_pattern', 'avg_read_length',
+            'best_sj_support', 'sj_full_match', 'sj_subset_match',
+            'sj_unsupported', 'sj_single_exon',
+        ])
 
         for peak in peaks_rows:
             peak_id = f"{peak['Chrom']}_{peak['Start']}_{peak['End']}"
             if peak_id in missed_peaks:
                 read_count = missed_peaks[peak_id]
-                classification, pattern, avg_read_length = classification_lookup.get(peak_id, ('unknown', 'NA', 0))
+                info = classification_lookup.get(peak_id, {})
+                classification = info.get('dominant', 'unknown')
+                pattern = info.get('pattern', 'NA')
+                avg_read_length = info.get('avg_read_length', 0)
                 # Create IGV coordinate format
                 igv_id = f"{peak['Chrom']}:{peak['Start']}-{peak['End']}"
                 writer.writerow([
                     peak['Chrom'], peak['Start'], peak['End'],
                     igv_id, read_count, peak['Strand'],
                     classification, pattern if end_type == 'tss' else 'NA',
-                    int(avg_read_length)
+                    int(avg_read_length),
+                    info.get('best_sj', 'NA'),
+                    info.get('sj_full', 0), info.get('sj_subset', 0),
+                    info.get('sj_unsupported', 0), info.get('sj_single_exon', 0),
                 ])
                 count += 1
 
@@ -635,7 +753,14 @@ def write_troubled_regions_tsv(
             "assigned_wrong_strand": cls.get("assigned_wrong_strand_count", 0),
         }
         dominant = max(counts.items(), key=lambda x: x[1])[0] if sum(counts.values()) > 0 else "unknown"
-        classification_lookup[pid] = {"dominant": dominant, "counts": counts}
+        classification_lookup[pid] = {
+            "dominant": dominant, "counts": counts,
+            "best_sj": cls.get("best_sj_support", "NA"),
+            "sj_full": cls.get("sj_full_match", 0),
+            "sj_subset": cls.get("sj_subset_match", 0),
+            "sj_unsupported": cls.get("sj_unsupported", 0),
+            "sj_single_exon": cls.get("sj_single_exon", 0),
+        }
 
     def _parse_peak_id(peak_id: str) -> Tuple[str, int, int]:
         # expects chrom_start_end
@@ -660,6 +785,8 @@ def write_troubled_regions_tsv(
             "unassigned_reads", "assigned_nearby", "assigned_distant", "wrong_strand",
             "dominant_class",
             "truncation_pattern",
+            "best_sj_support", "sj_full_match", "sj_subset_match",
+            "sj_unsupported", "sj_single_exon",
             "peak_id",
         ])
 
@@ -694,6 +821,11 @@ def write_troubled_regions_tsv(
                 counts.get("assigned_wrong_strand", 0),
                 cls_info.get("dominant", "unknown"),
                 trunc_pattern,
+                cls_info.get("best_sj", "NA"),
+                cls_info.get("sj_full", 0),
+                cls_info.get("sj_subset", 0),
+                cls_info.get("sj_unsupported", 0),
+                cls_info.get("sj_single_exon", 0),
                 peak_id,
             ])
             count += 1

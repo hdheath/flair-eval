@@ -62,6 +62,8 @@ from .peak_analysis import (
     analyze_all_recoverable_peaks_truncation,
     write_annotated_peaks_bed,
     write_troubled_regions_tsv,
+    parse_read_sj_chains,
+    classify_read_sj_support,
 )
 
 from .motif import (
@@ -84,6 +86,9 @@ from .plots import (
     plot_sequence_logo,
     plot_transcript_classification,
     plot_splice_junction_support,
+    plot_missed_peak_sj_support,
+    plot_peak_recovery_by_expression,
+    plot_peak_recovery_by_width,
 )
 
 from .ted_core import (
@@ -167,6 +172,8 @@ __all__ = [
     'analyze_all_recoverable_peaks_truncation',
     'write_annotated_peaks_bed',
     'write_troubled_regions_tsv',
+    'parse_read_sj_chains',
+    'classify_read_sj_support',
     # motif
     'extract_sequences_batch',
     'extract_sequence_context',
@@ -185,6 +192,9 @@ __all__ = [
     'plot_sequence_logo',
     'plot_transcript_classification',
     'plot_splice_junction_support',
+    'plot_missed_peak_sj_support',
+    'plot_peak_recovery_by_expression',
+    'plot_peak_recovery_by_width',
     # ted_core
     'tss_tts_metrics',
     'calculate_ted_metrics',

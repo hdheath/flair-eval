@@ -359,11 +359,11 @@ def plot_read_support_distribution(
         else:
             overflow += 1
 
-    # X positions: 0..100, plus overflow at 101 labeled "100+"
+    # X positions: 0..100, plus overflow bar with a visible gap from the main histogram
     x_main = list(range(0, max_bin + 1))
     y_main = freq
 
-    overflow_x = max_bin + 1  # 101
+    overflow_x = max_bin + 5  # 105 — gap separates it from the 100 bar
     ax.bar(x_main, y_main, width=1.0, edgecolor='black', alpha=0.7)
     ax.bar([overflow_x], [overflow], width=1.0, edgecolor='black', alpha=0.7)
 
@@ -417,7 +417,7 @@ def plot_read_classification_summary(
     output_path: Path,
     title: str,
 ) -> bool:
-    """Plot pie chart of read classification categories for missed peaks."""
+    """Plot bar chart of read classification categories for missed peaks."""
     if not HAS_MATPLOTLIB:
         return False
 
@@ -427,29 +427,41 @@ def plot_read_classification_summary(
     fig_width = 8
     fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
 
-    labels = []
-    sizes = []
-    colors = ['#ff9999', '#66b3ff', '#99ff99', '#ffcc99']
+    category_order = ['unassigned', 'assigned_nearby', 'assigned_distant', 'assigned_wrong_strand']
     category_labels = {
         'unassigned': 'Unassigned',
-        'assigned_nearby': 'Assigned Nearby',
-        'assigned_distant': 'Assigned Distant',
+        'assigned_nearby': 'Nearby',
+        'assigned_distant': 'Distant',
         'assigned_wrong_strand': 'Wrong Strand',
     }
+    colors = ['#E57373', '#64B5F6', '#81C784', '#FFB74D']
 
-    for cat in ['unassigned', 'assigned_nearby', 'assigned_distant', 'assigned_wrong_strand']:
+    bar_labels = []
+    counts = []
+    bar_colors = []
+    for i, cat in enumerate(category_order):
         count = classification_summary.get(cat, 0)
         if count > 0:
-            labels.append(f"{category_labels[cat]}\n({count})")
-            sizes.append(count)
+            bar_labels.append(category_labels[cat])
+            counts.append(count)
+            bar_colors.append(colors[i])
 
-    if not sizes:
+    if not counts:
         plt.close(fig)
         return False
 
-    ax.pie(sizes, labels=labels, colors=colors[:len(sizes)], autopct='%1.1f%%',
-           startangle=90, textprops={'fontsize': 10})
-    ax.set_title(title, fontsize=14)
+    total = sum(counts)
+    bars = ax.bar(bar_labels, counts, color=bar_colors, edgecolor='black', alpha=0.85)
+    for bar, count in zip(bars, counts):
+        pct = 100.0 * count / total
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + total * 0.01,
+                f"{count}\n({pct:.1f}%)", ha='center', va='bottom', fontsize=10)
+
+    ax.set_xlabel('Read Classification', fontsize=11)
+    ax.set_ylabel('Number of Peaks', fontsize=11)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax.set_axisbelow(True)
 
     plt.tight_layout()
     try:
@@ -458,7 +470,7 @@ def plot_read_classification_summary(
         plt.close(fig)
         return True
     except Exception as e:
-        logger.error(f"Failed to save classification pie chart: {e}")
+        logger.error(f"Failed to save classification bar chart: {e}")
         plt.close(fig)
         return False
 
@@ -895,5 +907,315 @@ def plot_splice_junction_support(
         return True
     except Exception as e:
         logger.error(f"Failed to save splice junction support plot: {e}")
+        plt.close(fig)
+        return False
+
+
+def plot_missed_peak_sj_support(
+    sj_support_summary: Dict[str, int],
+    output_path: Path,
+    title: str = "Splice Junction Support at Missed Recoverable Peaks",
+) -> bool:
+    """Plot bar chart showing SJ support levels for missed recoverable peaks.
+
+    Shows how many missed peaks have reads with full splice junction match,
+    subset match, unsupported junctions, or single-exon reads as their best
+    SJ evidence.
+
+    Args:
+        sj_support_summary: Dict from analyze_missed_peaks_comprehensive with
+            keys like 'full_match', 'subset_match', 'unsupported', 'single_exon'
+            (peak-level best SJ support) and 'reads_full_match', etc. (read counts)
+        output_path: Path to save the plot
+        title: Plot title
+
+    Returns:
+        True if plot was created successfully, False otherwise
+    """
+    if not HAS_MATPLOTLIB:
+        return False
+
+    # Peak-level best SJ support counts
+    categories = ['full_match', 'subset_match', 'unsupported', 'single_exon']
+    labels = ['Full Match', 'Subset Match', 'Unsupported', 'Single-Exon']
+    colors = ['#2ecc71', '#f39c12', '#e74c3c', '#95a5a6']
+
+    peak_counts = [sj_support_summary.get(cat, 0) for cat in categories]
+    total_peaks = sum(peak_counts)
+    if total_peaks == 0:
+        return False
+
+    fig_width = 10
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_width / GOLDEN_RATIO))
+
+    # Left panel: peak-level best SJ support
+    present = [(l, c, col) for l, c, col in zip(labels, peak_counts, colors) if c > 0]
+    if present:
+        bar_labels, bar_counts, bar_colors = zip(*present)
+        bars = ax1.bar(bar_labels, bar_counts, color=bar_colors, edgecolor='black', alpha=0.8)
+        for bar, cnt in zip(bars, bar_counts):
+            ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                     str(cnt), ha='center', va='bottom', fontsize=10)
+    ax1.set_xlabel('Best SJ Support Level', fontsize=11)
+    ax1.set_ylabel('Number of Missed Peaks', fontsize=11)
+    ax1.set_title('Best Read SJ Support per Peak', fontsize=12, fontweight='bold')
+    ax1.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax1.set_axisbelow(True)
+    ax1.tick_params(axis='x', rotation=20)
+
+    # Right panel: read-level SJ support counts
+    read_counts = [sj_support_summary.get(f'reads_{cat}', 0) for cat in categories]
+    total_reads = sum(read_counts)
+    present_r = [(l, c, col) for l, c, col in zip(labels, read_counts, colors) if c > 0]
+    if present_r:
+        bar_labels_r, bar_counts_r, bar_colors_r = zip(*present_r)
+        bars_r = ax2.bar(bar_labels_r, bar_counts_r, color=bar_colors_r, edgecolor='black', alpha=0.8)
+        for bar, cnt in zip(bars_r, bar_counts_r):
+            ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                     str(cnt), ha='center', va='bottom', fontsize=10)
+    ax2.set_xlabel('SJ Support Level', fontsize=11)
+    ax2.set_ylabel('Number of Supporting Reads', fontsize=11)
+    ax2.set_title('All Supporting Reads SJ Support', fontsize=12, fontweight='bold')
+    ax2.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax2.set_axisbelow(True)
+    ax2.tick_params(axis='x', rotation=20)
+
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved missed peak SJ support plot to {output_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save missed peak SJ support plot: {e}")
+        plt.close(fig)
+        return False
+
+
+def plot_peak_recovery_by_expression(
+    peak_metadata: List[dict],
+    output_path: Path,
+    title: str = "Peak Recovery Rate by Expression Level",
+) -> bool:
+    """Plot peak recovery rate as a function of TPM expression.
+
+    Two-panel plot:
+    - Left: recovery rate per TPM bin with bar chart and count annotations
+    - Right: cumulative recovery curve (peaks sorted by TPM descending)
+
+    Args:
+        peak_metadata: list of dicts with keys 'score' (TPM), 'status' ('captured'|'missed'|'no_reads')
+        output_path: where to save the plot
+        title: figure title
+    """
+    if not HAS_MATPLOTLIB or not peak_metadata:
+        return False
+
+    scores = [p['score'] for p in peak_metadata]
+    statuses = [p['status'] for p in peak_metadata]
+
+    if not scores or max(scores) == 0:
+        logger.warning("No TPM data available for recovery-by-expression plot")
+        return False
+
+    # Define TPM bins: 0-10, 10-25, 25-50, 50-100, 100-250, 250-500, 500+
+    bin_edges = [0, 10, 25, 50, 100, 250, 500, float('inf')]
+    bin_labels = ['0-10', '10-25', '25-50', '50-100', '100-250', '250-500', '500+']
+
+    bin_captured = [0] * len(bin_labels)
+    bin_total = [0] * len(bin_labels)
+
+    for score, status in zip(scores, statuses):
+        for i in range(len(bin_edges) - 1):
+            if bin_edges[i] <= score < bin_edges[i + 1]:
+                bin_total[i] += 1
+                if status == 'captured':
+                    bin_captured[i] += 1
+                break
+
+    bin_rates = []
+    for c, t in zip(bin_captured, bin_total):
+        bin_rates.append(c / t if t > 0 else 0)
+
+    fig_width = 10
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_width / GOLDEN_RATIO))
+
+    # Left panel: recovery rate per TPM bin
+    non_empty = [(lbl, rate, cap, tot) for lbl, rate, cap, tot in
+                 zip(bin_labels, bin_rates, bin_captured, bin_total) if tot > 0]
+    if non_empty:
+        x_labels, x_rates, x_cap, x_tot = zip(*non_empty)
+        colors = [plt.cm.RdYlGn(r) for r in x_rates]
+        bars = ax1.bar(range(len(x_labels)), x_rates, color=colors, edgecolor='black', alpha=0.85)
+        for i, (bar, cap, tot) in enumerate(zip(bars, x_cap, x_tot)):
+            ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                     f"{cap}/{tot}", ha='center', va='bottom', fontsize=9)
+        ax1.set_xticks(range(len(x_labels)))
+        ax1.set_xticklabels(x_labels, rotation=30, ha='right')
+    ax1.set_xlabel('Peak Expression (TPM)', fontsize=11)
+    ax1.set_ylabel('Recovery Rate', fontsize=11)
+    ax1.set_title('Recovery Rate by TPM Bin', fontsize=12, fontweight='bold')
+    ax1.set_ylim(0, 1.15)
+    ax1.axhline(y=1.0, color='gray', linestyle='--', alpha=0.4)
+    ax1.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax1.set_axisbelow(True)
+
+    # Right panel: cumulative recovery curve sorted by TPM descending
+    paired = sorted(zip(scores, statuses), key=lambda x: -x[0])
+    cum_total = 0
+    cum_captured = 0
+    cum_totals = []
+    cum_rates = []
+    tpm_thresholds = []
+    for score, status in paired:
+        cum_total += 1
+        if status == 'captured':
+            cum_captured += 1
+        cum_totals.append(cum_total)
+        cum_rates.append(cum_captured / cum_total)
+        tpm_thresholds.append(score)
+
+    ax2.plot(range(len(cum_rates)), cum_rates, color='#2166AC', linewidth=1.5)
+    ax2.fill_between(range(len(cum_rates)), cum_rates, alpha=0.15, color='#2166AC')
+
+    # Add TPM threshold markers
+    marker_tpms = [10, 25, 50, 100, 250, 500]
+    for mtpm in marker_tpms:
+        idx = None
+        for j, t in enumerate(tpm_thresholds):
+            if t <= mtpm:
+                idx = j
+                break
+        if idx is not None and idx < len(cum_rates):
+            ax2.axvline(x=idx, color='gray', linestyle=':', alpha=0.4)
+            ax2.text(idx, 0.02, f'TPM\u2264{mtpm}', fontsize=7, rotation=90,
+                     va='bottom', ha='right', alpha=0.6)
+
+    ax2.set_xlabel(f'Peaks (sorted by TPM, n={len(cum_rates)})', fontsize=11)
+    ax2.set_ylabel('Cumulative Recovery Rate', fontsize=11)
+    ax2.set_title('Cumulative Recovery (High TPM First)', fontsize=12, fontweight='bold')
+    ax2.set_ylim(0, 1.05)
+    ax2.grid(True, alpha=0.3, linestyle='--')
+    ax2.set_axisbelow(True)
+
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved peak recovery by expression plot to {output_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save peak recovery by expression plot: {e}")
+        plt.close(fig)
+        return False
+
+
+def plot_peak_recovery_by_width(
+    peak_metadata: List[dict],
+    output_path: Path,
+    title: str = "Peak Recovery Rate by Peak Width",
+) -> bool:
+    """Plot peak recovery rate as a function of peak width (CAGE peaks only).
+
+    Two-panel plot:
+    - Left: recovery rate per width bin with bar chart
+    - Right: scatter of peak width vs TPM, colored by recovery status
+
+    Args:
+        peak_metadata: list of dicts with keys 'width', 'score' (TPM), 'status'
+        output_path: where to save the plot
+        title: figure title
+    """
+    if not HAS_MATPLOTLIB or not peak_metadata:
+        return False
+
+    widths = [p['width'] for p in peak_metadata]
+    if not widths or max(widths) <= 1:
+        logger.warning("No variable-width peaks for recovery-by-width plot")
+        return False
+
+    scores = [p['score'] for p in peak_metadata]
+    statuses = [p['status'] for p in peak_metadata]
+
+    # Define width bins: 1, 2-5, 6-10, 11-25, 26-50, 51-100, 100+
+    bin_edges = [0, 2, 6, 11, 26, 51, 101, float('inf')]
+    bin_labels = ['1', '2-5', '6-10', '11-25', '26-50', '51-100', '100+']
+
+    bin_captured = [0] * len(bin_labels)
+    bin_total = [0] * len(bin_labels)
+
+    for width, status in zip(widths, statuses):
+        for i in range(len(bin_edges) - 1):
+            if bin_edges[i] <= width < bin_edges[i + 1]:
+                bin_total[i] += 1
+                if status == 'captured':
+                    bin_captured[i] += 1
+                break
+
+    bin_rates = []
+    for c, t in zip(bin_captured, bin_total):
+        bin_rates.append(c / t if t > 0 else 0)
+
+    fig_width = 10
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_width / GOLDEN_RATIO))
+
+    # Left panel: recovery rate per width bin
+    non_empty = [(lbl, rate, cap, tot) for lbl, rate, cap, tot in
+                 zip(bin_labels, bin_rates, bin_captured, bin_total) if tot > 0]
+    if non_empty:
+        x_labels, x_rates, x_cap, x_tot = zip(*non_empty)
+        colors = [plt.cm.RdYlGn(r) for r in x_rates]
+        bars = ax1.bar(range(len(x_labels)), x_rates, color=colors, edgecolor='black', alpha=0.85)
+        for i, (bar, cap, tot) in enumerate(zip(bars, x_cap, x_tot)):
+            ax1.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                     f"{cap}/{tot}", ha='center', va='bottom', fontsize=9)
+        ax1.set_xticks(range(len(x_labels)))
+        ax1.set_xticklabels(x_labels, rotation=30, ha='right')
+    ax1.set_xlabel('Peak Width (bp)', fontsize=11)
+    ax1.set_ylabel('Recovery Rate', fontsize=11)
+    ax1.set_title('Recovery Rate by Peak Width', fontsize=12, fontweight='bold')
+    ax1.set_ylim(0, 1.15)
+    ax1.axhline(y=1.0, color='gray', linestyle='--', alpha=0.4)
+    ax1.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax1.set_axisbelow(True)
+
+    # Right panel: scatter of width vs TPM colored by status
+    captured_w = [w for w, s in zip(widths, statuses) if s == 'captured']
+    captured_s = [sc for sc, s in zip(scores, statuses) if s == 'captured']
+    missed_w = [w for w, s in zip(widths, statuses) if s == 'missed']
+    missed_s = [sc for sc, s in zip(scores, statuses) if s == 'missed']
+    noread_w = [w for w, s in zip(widths, statuses) if s == 'no_reads']
+    noread_s = [sc for sc, s in zip(scores, statuses) if s == 'no_reads']
+
+    if noread_w:
+        ax2.scatter(noread_w, noread_s, c='#BDBDBD', alpha=0.4, s=15, label=f'No reads ({len(noread_w)})', zorder=1)
+    if missed_w:
+        ax2.scatter(missed_w, missed_s, c='#D32F2F', alpha=0.5, s=20, label=f'Missed ({len(missed_w)})', zorder=2)
+    if captured_w:
+        ax2.scatter(captured_w, captured_s, c='#388E3C', alpha=0.5, s=20, label=f'Captured ({len(captured_w)})', zorder=3)
+
+    ax2.set_xlabel('Peak Width (bp)', fontsize=11)
+    ax2.set_ylabel('Peak Expression (TPM)', fontsize=11)
+    ax2.set_title('Width vs Expression by Recovery', fontsize=12, fontweight='bold')
+    if scores and max(scores) > 100:
+        ax2.set_yscale('log')
+    ax2.legend(fontsize=9, loc='lower right', framealpha=0.9)
+    ax2.grid(True, alpha=0.3, linestyle='--')
+    ax2.set_axisbelow(True)
+
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved peak recovery by width plot to {output_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save peak recovery by width plot: {e}")
         plt.close(fig)
         return False

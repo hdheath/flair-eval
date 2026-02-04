@@ -39,7 +39,9 @@ from .peak_analysis import (
     analyze_all_recoverable_peaks_truncation,
     write_annotated_peaks_bed,
     write_troubled_regions_tsv,
+    parse_read_sj_chains,
 )
+from .flair_structural import extract_sj_info
 from .motif import analyze_motifs_at_ends
 from .plots import (
     HAS_MATPLOTLIB,
@@ -51,6 +53,9 @@ from .plots import (
     plot_truncation_patterns,
     plot_all_truncation_patterns,
     plot_sequence_logo,
+    plot_missed_peak_sj_support,
+    plot_peak_recovery_by_expression,
+    plot_peak_recovery_by_width,
 )
 
 logger = get_logger()
@@ -342,11 +347,85 @@ def tss_tts_metrics(
                         title="Read Support at Missed Recoverable QuantSeq Peaks",
                     )
 
+            # Peak recovery analysis by expression (TPM) and width
+            def _build_peak_metadata(peaks_path, recoverable_ids, captured_ids):
+                """Build per-peak metadata with TPM, width, and recovery status."""
+                all_peaks = read_bed6(peaks_path)
+                metadata = []
+                for peak in all_peaks:
+                    pid = f"{peak['Chrom']}_{peak['Start']}_{peak['End']}"
+                    width = peak['End'] - peak['Start']
+                    score = peak.get('Score', 0.0)
+                    if pid in captured_ids:
+                        status = 'captured'
+                    elif pid in recoverable_ids:
+                        status = 'missed'
+                    else:
+                        status = 'no_reads'
+                    metadata.append({
+                        'peak_id': pid, 'score': score, 'width': width, 'status': status,
+                    })
+                return metadata
+
+            if peaks.get("prime5") and closest_5prime:
+                cage_meta = _build_peak_metadata(peaks["prime5"], recov_5prime, captured_5)
+                if cage_meta:
+                    total_5 = len(cage_meta)
+                    captured_5_count = sum(1 for p in cage_meta if p['status'] == 'captured')
+                    missed_5_count = sum(1 for p in cage_meta if p['status'] == 'missed')
+                    no_reads_5 = sum(1 for p in cage_meta if p['status'] == 'no_reads')
+                    metrics["5prime_peaks_total"] = total_5
+                    metrics["5prime_peaks_captured"] = captured_5_count
+                    metrics["5prime_peaks_missed_recoverable"] = missed_5_count
+                    metrics["5prime_peaks_no_reads"] = no_reads_5
+                    plot_peak_recovery_by_expression(
+                        peak_metadata=cage_meta,
+                        output_path=plot_output_dir / f"{plot_prefix}_cage_recovery_by_expression.png",
+                        title="CAGE Peak Recovery by Expression Level",
+                    )
+                    # CAGE peaks have variable widths
+                    widths = [p['width'] for p in cage_meta]
+                    if max(widths) > 1:
+                        plot_peak_recovery_by_width(
+                            peak_metadata=cage_meta,
+                            output_path=plot_output_dir / f"{plot_prefix}_cage_recovery_by_width.png",
+                            title="CAGE Peak Recovery by Peak Width",
+                        )
+
+            if peaks.get("prime3") and closest_3prime:
+                quantseq_meta = _build_peak_metadata(peaks["prime3"], recov_3prime, captured_3)
+                if quantseq_meta:
+                    total_3 = len(quantseq_meta)
+                    captured_3_count = sum(1 for p in quantseq_meta if p['status'] == 'captured')
+                    missed_3_count = sum(1 for p in quantseq_meta if p['status'] == 'missed')
+                    no_reads_3 = sum(1 for p in quantseq_meta if p['status'] == 'no_reads')
+                    metrics["3prime_peaks_total"] = total_3
+                    metrics["3prime_peaks_captured"] = captured_3_count
+                    metrics["3prime_peaks_missed_recoverable"] = missed_3_count
+                    metrics["3prime_peaks_no_reads"] = no_reads_3
+                    plot_peak_recovery_by_expression(
+                        peak_metadata=quantseq_meta,
+                        output_path=plot_output_dir / f"{plot_prefix}_quantseq_recovery_by_expression.png",
+                        title="QuantSeq Peak Recovery by Expression Level",
+                    )
+
             # Comprehensive missed peak analysis with read classification and truncation patterns
             if map_file and map_file.exists() and reads_bed and reads_bed.exists():
                 iso_to_reads = parse_read_map(map_file)
                 isoforms = parse_isoform_ends(iso_bed)
                 read_ends_full = parse_reads_bed_ends(reads_bed)
+
+                # Parse splice junction chains for reads and isoforms
+                read_sj_chains = parse_read_sj_chains(reads_bed)
+                found_sjc, _ = extract_sj_info(str(iso_bed))
+                # Pre-compute SJ chain subsets for subset matching
+                found_subsets = {}
+                for cs in found_sjc:
+                    found_subsets[cs] = set()
+                    for sjc in found_sjc[cs]:
+                        for slen in range(len(sjc) - 1, 0, -1):
+                            for i in range(0, len(sjc) - slen + 1):
+                                found_subsets[cs].add(sjc[i:i + slen])
 
                 # Analyze ALL recoverable CAGE peaks (5' ends) for truncation patterns
                 peak_patterns_5 = {}
@@ -392,6 +471,9 @@ def tss_tts_metrics(
                         window=window,
                         end_type='tss',
                         genome_path=genome_path,
+                        read_sj_chains=read_sj_chains,
+                        found_sjc=found_sjc,
+                        found_subsets=found_subsets,
                     )
 
                     # Add summary metrics
@@ -404,6 +486,14 @@ def tss_tts_metrics(
                         metrics["5prime_missed_pattern_sharp"] = analysis_5['truncation_patterns'].get('sharp', 0)
                         metrics["5prime_missed_pattern_trailing"] = analysis_5['truncation_patterns'].get('trailing', 0)
                         metrics["5prime_missed_pattern_bimodal"] = analysis_5['truncation_patterns'].get('bimodal', 0)
+
+                    # Add SJ support summary metrics
+                    if analysis_5.get('sj_support_summary'):
+                        sj_5 = analysis_5['sj_support_summary']
+                        metrics["5prime_missed_sj_full_match"] = sj_5.get('full_match', 0)
+                        metrics["5prime_missed_sj_subset_match"] = sj_5.get('subset_match', 0)
+                        metrics["5prime_missed_sj_unsupported"] = sj_5.get('unsupported', 0)
+                        metrics["5prime_missed_sj_single_exon"] = sj_5.get('single_exon', 0)
 
                     # Plot classification summary
                     if analysis_5.get('classification_summary'):
@@ -419,6 +509,14 @@ def tss_tts_metrics(
                             truncation_patterns=analysis_5['truncation_patterns'],
                             output_path=plot_output_dir / f"{plot_prefix}_cage_missed_truncation_patterns.png",
                             title="Truncation Patterns at Missed CAGE Peaks",
+                        )
+
+                    # Plot SJ support for missed CAGE peaks
+                    if analysis_5.get('sj_support_summary'):
+                        plot_missed_peak_sj_support(
+                            sj_support_summary=analysis_5['sj_support_summary'],
+                            output_path=plot_output_dir / f"{plot_prefix}_cage_missed_sj_support.png",
+                            title="SJ Support at Missed Recoverable CAGE Peaks",
                         )
 
                     # Write annotated BED with classifications
@@ -451,6 +549,9 @@ def tss_tts_metrics(
                         window=window,
                         end_type='tts',
                         genome_path=genome_path,
+                        read_sj_chains=read_sj_chains,
+                        found_sjc=found_sjc,
+                        found_subsets=found_subsets,
                     )
 
                     # Add summary metrics
@@ -459,12 +560,28 @@ def tss_tts_metrics(
                         metrics["3prime_missed_nearby"] = analysis_3['classification_summary'].get('assigned_nearby', 0)
                         metrics["3prime_missed_distant"] = analysis_3['classification_summary'].get('assigned_distant', 0)
 
+                    # Add SJ support summary metrics for QuantSeq
+                    if analysis_3.get('sj_support_summary'):
+                        sj_3 = analysis_3['sj_support_summary']
+                        metrics["3prime_missed_sj_full_match"] = sj_3.get('full_match', 0)
+                        metrics["3prime_missed_sj_subset_match"] = sj_3.get('subset_match', 0)
+                        metrics["3prime_missed_sj_unsupported"] = sj_3.get('unsupported', 0)
+                        metrics["3prime_missed_sj_single_exon"] = sj_3.get('single_exon', 0)
+
                     # Plot classification summary
                     if analysis_3.get('classification_summary'):
                         plot_read_classification_summary(
                             classification_summary=analysis_3['classification_summary'],
                             output_path=plot_output_dir / f"{plot_prefix}_quantseq_read_classification.png",
                             title="Read Assignment at Missed QuantSeq Peaks",
+                        )
+
+                    # Plot SJ support for missed QuantSeq peaks
+                    if analysis_3.get('sj_support_summary'):
+                        plot_missed_peak_sj_support(
+                            sj_support_summary=analysis_3['sj_support_summary'],
+                            output_path=plot_output_dir / f"{plot_prefix}_quantseq_missed_sj_support.png",
+                            title="SJ Support at Missed Recoverable QuantSeq Peaks",
                         )
 
                     # Write annotated BED

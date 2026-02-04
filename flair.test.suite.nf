@@ -452,6 +452,12 @@ process Evaluation {
     path "ted_plots/*_cage_read_classification.png", optional: true, emit: cage_read_classification_plots
     path "ted_plots/*_quantseq_read_classification.png", optional: true, emit: quantseq_read_classification_plots
     path "ted_plots/*_cage_truncation_patterns.png", optional: true, emit: cage_truncation_plots
+    path "ted_plots/*_cage_missed_sj_support.png", optional: true, emit: cage_missed_sj_support_plots
+    path "ted_plots/*_quantseq_missed_sj_support.png", optional: true, emit: quantseq_missed_sj_support_plots
+    // Peak recovery by expression/width
+    path "ted_plots/*_cage_recovery_by_expression.png", optional: true, emit: cage_recovery_expression_plots
+    path "ted_plots/*_cage_recovery_by_width.png", optional: true, emit: cage_recovery_width_plots
+    path "ted_plots/*_quantseq_recovery_by_expression.png", optional: true, emit: quantseq_recovery_expression_plots
     path "ted_plots/*_tss_motif_logo.png", optional: true, emit: tss_motif_plots
     path "ted_plots/*_tts_motif_logo.png", optional: true, emit: tts_motif_plots
     // Structural evaluation plots (all assemblers)
