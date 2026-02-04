@@ -25,6 +25,10 @@ except ImportError:
     HAS_MATPLOTLIB = False
     np = None
 
+# Golden ratio for aesthetically proportioned figures
+GOLDEN_RATIO = 1.618
+PLOT_DPI = 300
+
 
 def calculate_histogram_max_count(
     distances: List[int],
@@ -96,8 +100,9 @@ def plot_distance_histogram(
     n_clamped_low = sum(1 for d in distances if d < min_dist)
     n_clamped_high = sum(1 for d in distances if d > max_dist)
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # Create figure with golden ratio proportions
+    fig_width = 10
+    fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
 
     # Calculate bins
     bins = list(range(min_dist, max_dist + bin_size, bin_size))
@@ -141,7 +146,7 @@ def plot_distance_histogram(
     # Save figure
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
         logger.info(f"Saved distance histogram to {output_path}")
         return True
@@ -199,7 +204,8 @@ def plot_distance_histogram_colored(
     n_clamped_low = sum(1 for d in distances if d < min_dist)
     n_clamped_high = sum(1 for d in distances if d > max_dist)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig_width = 10
+    fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
     bins = list(range(min_dist, max_dist + bin_size, bin_size))
 
     # Stacked histogram: recoverable on bottom, unrecoverable on top
@@ -237,7 +243,7 @@ def plot_distance_histogram_colored(
 
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
         return True
     except Exception as e:
@@ -266,7 +272,7 @@ def plot_read_end_entropy(
         plot_distance_histogram(
             distances=tss_offsets,
             output_path=plot_output_dir / f"{plot_prefix}_read_tss_offset_histogram.png",
-            title=f"Read 5' End Offset from Isoform Model TSS\n{plot_prefix}",
+            title="Read 5' End Offset from Isoform TSS",
         )
 
     # Plot 1b: Aggregate TTS offset histogram
@@ -275,17 +281,18 @@ def plot_read_end_entropy(
         plot_distance_histogram(
             distances=tts_offsets,
             output_path=plot_output_dir / f"{plot_prefix}_read_tts_offset_histogram.png",
-            title=f"Read 3' End Offset from Isoform Model TTS\n{plot_prefix}",
+            title="Read 3' End Offset from Isoform TTS",
         )
 
     # Plot 2a: Per-isoform TSS entropy distribution
     tss_entropies = [e for _, e, _ in entropy_data["tss_entropy_per_isoform"]]
     if tss_entropies:
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig_width = 10
+        fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
         ax.hist(tss_entropies, bins=50, edgecolor='black', alpha=0.7, color='coral')
         ax.set_xlabel("Shannon Entropy (bits, 10bp bins)", fontsize=12)
         ax.set_ylabel("Number of Isoforms", fontsize=12)
-        ax.set_title(f"Per-Isoform TSS Read-End Entropy (5' End)\n{plot_prefix}", fontsize=14)
+        ax.set_title("Per-Isoform 5' Read-End Entropy", fontsize=14)
         mean_e = statistics.mean(tss_entropies)
         median_e = statistics.median(tss_entropies)
         stats_text = f'n = {len(tss_entropies)}\nMean = {mean_e:.2f} bits\nMedian = {median_e:.2f} bits'
@@ -294,17 +301,18 @@ def plot_read_end_entropy(
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         plt.tight_layout()
         plt.savefig(plot_output_dir / f"{plot_prefix}_tss_entropy_distribution.png",
-                    dpi=150, bbox_inches='tight')
+                    dpi=PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
 
     # Plot 2b: Per-isoform TTS entropy distribution
     tts_entropies = [e for _, e, _ in entropy_data["tts_entropy_per_isoform"]]
     if tts_entropies:
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig_width = 10
+        fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
         ax.hist(tts_entropies, bins=50, edgecolor='black', alpha=0.7, color='mediumpurple')
         ax.set_xlabel("Shannon Entropy (bits, 10bp bins)", fontsize=12)
         ax.set_ylabel("Number of Isoforms", fontsize=12)
-        ax.set_title(f"Per-Isoform TTS Read-End Entropy (3' End)\n{plot_prefix}", fontsize=14)
+        ax.set_title("Per-Isoform 3' Read-End Entropy", fontsize=14)
         mean_e = statistics.mean(tts_entropies)
         median_e = statistics.median(tts_entropies)
         stats_text = f'n = {len(tts_entropies)}\nMean = {mean_e:.2f} bits\nMedian = {median_e:.2f} bits'
@@ -313,7 +321,7 @@ def plot_read_end_entropy(
                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         plt.tight_layout()
         plt.savefig(plot_output_dir / f"{plot_prefix}_tts_entropy_distribution.png",
-                    dpi=150, bbox_inches='tight')
+                    dpi=PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
 
 
@@ -335,7 +343,8 @@ def plot_read_support_distribution(
 
     counts = list(recoverable_counts.values())
 
-    fig, ax = plt.subplots(figsize=(12, 6))  # wider helps readability
+    fig_width = 12
+    fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
 
     # Build frequency table for 0..100 and overflow (100+)
     max_bin = 100
@@ -394,7 +403,7 @@ def plot_read_support_distribution(
     plt.tight_layout()
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
         return True
     except Exception as e:
@@ -415,7 +424,8 @@ def plot_read_classification_summary(
     if not classification_summary or sum(classification_summary.values()) == 0:
         return False
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig_width = 8
+    fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
 
     labels = []
     sizes = []
@@ -444,7 +454,7 @@ def plot_read_classification_summary(
     plt.tight_layout()
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
         return True
     except Exception as e:
@@ -465,7 +475,8 @@ def plot_truncation_patterns(
     if not truncation_patterns or sum(truncation_patterns.values()) == 0:
         return False
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig_width = 10
+    fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
 
     pattern_order = ['sharp', 'trailing', 'bimodal', 'dispersed', 'sparse']
     colors = ['#2ecc71', '#e74c3c', '#9b59b6', '#3498db', '#95a5a6']
@@ -511,7 +522,7 @@ def plot_truncation_patterns(
     plt.tight_layout()
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
         return True
     except Exception as e:
@@ -549,7 +560,8 @@ def plot_all_truncation_patterns(
     colors_captured = '#2ecc71'  # Green
     colors_missed = '#e74c3c'    # Red
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig_width = 12
+    fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
 
     x = np.arange(len(pattern_order))
     width = 0.35
@@ -593,7 +605,7 @@ def plot_all_truncation_patterns(
     plt.tight_layout()
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
         plt.close(fig)
         return True
     except Exception as e:
@@ -704,3 +716,184 @@ cat("Saved sequence logo to {output_path}\\n")
 
     logger.info(f"Saved sequence logo to {output_path}")
     return True
+
+
+def plot_transcript_classification(
+    classification_counts: Dict[str, int],
+    output_path: Path,
+    title: str = "Transcript Structural Classification",
+) -> bool:
+    """Plot bar chart of transcript structural classification categories.
+
+    Categories: FSM, ISM, NIC, NNC, SEM, SEN
+    (Full Splice Match, Incomplete Splice Match, Novel In Catalog,
+     Novel Not in Catalog, Single-Exon Match, Single-Exon Novel)
+
+    Args:
+        classification_counts: Dict mapping category name to count
+        output_path: Path to save the plot
+        title: Plot title
+
+    Returns:
+        True if plot was created successfully, False otherwise
+    """
+    if not HAS_MATPLOTLIB:
+        return False
+
+    if not classification_counts or sum(classification_counts.values()) == 0:
+        return False
+
+    # Canonical category order and colors
+    category_order = ['FSM', 'ISM', 'NIC', 'NNC', 'SEM', 'SEN']
+    category_colors = {
+        'FSM': '#2ecc71',   # green - full splice match
+        'ISM': '#3498db',   # blue - incomplete splice match
+        'NIC': '#f39c12',   # yellow/orange - novel in catalog
+        'NNC': '#e74c3c',   # red - novel not in catalog
+        'SEM': '#9b59b6',   # purple - single-exon match
+        'SEN': '#95a5a6',   # gray - single-exon novel
+    }
+
+    categories = []
+    counts = []
+    colors = []
+    for cat in category_order:
+        count = classification_counts.get(cat, 0)
+        if count > 0:
+            categories.append(cat)
+            counts.append(count)
+            colors.append(category_colors.get(cat, '#7f8c8d'))
+
+    if not categories:
+        return False
+
+    fig_width = 10
+    fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
+
+    bars = ax.bar(categories, counts, color=colors, edgecolor='black', alpha=0.8)
+
+    # Add count labels on bars
+    for bar, count in zip(bars, counts):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                str(count), ha='center', va='bottom', fontsize=10)
+
+    ax.set_xlabel('Classification', fontsize=12)
+    ax.set_ylabel('Number of Transcripts', fontsize=12)
+    ax.set_title(title, fontsize=14)
+
+    total = sum(counts)
+    pct_text = '\n'.join(
+        f"{cat}: {cnt} ({100 * cnt / total:.1f}%)" for cat, cnt in zip(categories, counts)
+    )
+    ax.text(0.98, 0.98, f'Total: {total}\n{pct_text}',
+            transform=ax.transAxes, fontsize=9,
+            verticalalignment='top', horizontalalignment='right',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax.set_axisbelow(True)
+
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved transcript classification plot to {output_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save transcript classification plot: {e}")
+        plt.close(fig)
+        return False
+
+
+def plot_splice_junction_support(
+    supported_sjc: int,
+    subset_sjc: int,
+    unsupported_sjc: int,
+    supported_se: int,
+    unsupported_se: int,
+    output_path: Path,
+    title: str = "Splice Junction Support",
+) -> bool:
+    """Plot stacked bar chart of splice junction support categories.
+
+    Shows multi-exon (supported / subset / unsupported) and single-exon
+    (supported / unsupported) splice junction chain counts.
+
+    Args:
+        supported_sjc: Fully supported splice junction chains
+        subset_sjc: Subset-supported splice junction chains
+        unsupported_sjc: Unsupported splice junction chains
+        supported_se: Supported single-exon transcripts
+        unsupported_se: Unsupported single-exon transcripts
+        output_path: Path to save the plot
+        title: Plot title
+
+    Returns:
+        True if plot was created successfully, False otherwise
+    """
+    if not HAS_MATPLOTLIB:
+        return False
+
+    total_sjc = supported_sjc + subset_sjc + unsupported_sjc
+    total_se = supported_se + unsupported_se
+    if total_sjc == 0 and total_se == 0:
+        return False
+
+    fig_width = 8
+    fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
+
+    bar_labels = []
+    bar_data = []  # list of (bottom_vals, heights, colors, labels)
+
+    if total_sjc > 0:
+        bar_labels.append('Multi-Exon')
+        bar_data.append([
+            (0, supported_sjc, '#2ecc71', 'Supported'),
+            (supported_sjc, subset_sjc, '#f39c12', 'Subset'),
+            (supported_sjc + subset_sjc, unsupported_sjc, '#e74c3c', 'Unsupported'),
+        ])
+    if total_se > 0:
+        bar_labels.append('Single-Exon')
+        bar_data.append([
+            (0, supported_se, '#2ecc71', 'Supported'),
+            (supported_se, unsupported_se, '#e74c3c', 'Unsupported'),
+        ])
+
+    x = np.arange(len(bar_labels))
+    width = 0.5
+
+    # Track legend entries (avoid duplicates)
+    legend_entries = {}
+    for i, segments in enumerate(bar_data):
+        for bottom, height, color, label in segments:
+            if height == 0:
+                continue
+            bar = ax.bar(x[i], height, width, bottom=bottom, color=color, edgecolor='black', alpha=0.8)
+            if label not in legend_entries:
+                legend_entries[label] = bar[0]
+            # Add count label
+            if height > 0:
+                ax.text(x[i], bottom + height / 2, str(height),
+                        ha='center', va='center', fontsize=10, fontweight='bold')
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(bar_labels, fontsize=11)
+    ax.set_ylabel('Number of Read Splice Junction Chains', fontsize=12)
+    ax.set_title(title, fontsize=14)
+    ax.legend(legend_entries.values(), legend_entries.keys(), loc='upper right')
+
+    ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax.set_axisbelow(True)
+
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved splice junction support plot to {output_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save splice junction support plot: {e}")
+        plt.close(fig)
+        return False

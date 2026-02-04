@@ -267,14 +267,14 @@ def tss_tts_metrics(
                         distances=dists_5prime,
                         recoverable_mask=mask_5prime,
                         output_path=cage_plot_path,
-                        title=f"Distance to Nearest CAGE Peak (5' End)\n{plot_prefix}",
+                        title="5' End Distance to Nearest CAGE Peak",
                         max_count=final_max_cage,
                     )
                 else:
                     plot_distance_histogram(
                         distances=dists_5prime,
                         output_path=cage_plot_path,
-                        title=f"Distance to Nearest CAGE Peak (5' End)\n{plot_prefix}",
+                        title="5' End Distance to Nearest CAGE Peak",
                         max_count=final_max_cage,
                     )
 
@@ -286,14 +286,14 @@ def tss_tts_metrics(
                         distances=dists_3prime,
                         recoverable_mask=mask_3prime,
                         output_path=quantseq_plot_path,
-                        title=f"Distance to Nearest QuantSeq Peak (3' End)\n{plot_prefix}",
+                        title="3' End Distance to Nearest QuantSeq Peak",
                         max_count=final_max_quantseq,
                     )
                 else:
                     plot_distance_histogram(
                         distances=dists_3prime,
                         output_path=quantseq_plot_path,
-                        title=f"Distance to Nearest QuantSeq Peak (3' End)\n{plot_prefix}",
+                        title="3' End Distance to Nearest QuantSeq Peak",
                         max_count=final_max_quantseq,
                     )
 
@@ -303,7 +303,7 @@ def tss_tts_metrics(
                 plot_distance_histogram(
                     distances=dists_ref5prime,
                     output_path=ref_tss_plot_path,
-                    title=f"Distance to Nearest Reference TSS (5' End)\n{plot_prefix}",
+                    title="5' End Distance to Nearest Reference TSS",
                     max_count=final_max_ref_tss,
                 )
 
@@ -313,7 +313,7 @@ def tss_tts_metrics(
                 plot_distance_histogram(
                     distances=dists_ref3prime,
                     output_path=ref_tts_plot_path,
-                    title=f"Distance to Nearest Reference TTS (3' End)\n{plot_prefix}",
+                    title="3' End Distance to Nearest Reference TTS",
                     max_count=final_max_ref_tts,
                 )
 
@@ -330,7 +330,7 @@ def tss_tts_metrics(
                     plot_read_support_distribution(
                         recoverable_counts=missed_5,
                         output_path=plot_output_dir / f"{plot_prefix}_cage_peak_read_support.png",
-                        title=f"Read Support for Missed Recoverable CAGE Peaks\n{plot_prefix}",
+                        title="Read Support at Missed Recoverable CAGE Peaks",
                     )
             if recov_3prime and closest_3prime:
                 captured_3 = find_captured_peaks(closest_3prime, window)
@@ -339,7 +339,7 @@ def tss_tts_metrics(
                     plot_read_support_distribution(
                         recoverable_counts=missed_3,
                         output_path=plot_output_dir / f"{plot_prefix}_quantseq_peak_read_support.png",
-                        title=f"Read Support for Missed Recoverable QuantSeq Peaks\n{plot_prefix}",
+                        title="Read Support at Missed Recoverable QuantSeq Peaks",
                     )
 
             # Comprehensive missed peak analysis with read classification and truncation patterns
@@ -376,7 +376,7 @@ def tss_tts_metrics(
                     plot_all_truncation_patterns(
                         peak_patterns=peak_patterns_5,
                         output_path=plot_output_dir / f"{plot_prefix}_cage_all_truncation_patterns.png",
-                        title=f"Truncation Patterns at ALL Recoverable CAGE Peaks\n{plot_prefix}",
+                        title="Truncation Patterns at Recoverable CAGE Peaks",
                     )
 
                 # Analyze missed CAGE peaks (5' ends) - classification and detailed analysis
@@ -410,7 +410,7 @@ def tss_tts_metrics(
                         plot_read_classification_summary(
                             classification_summary=analysis_5['classification_summary'],
                             output_path=plot_output_dir / f"{plot_prefix}_cage_read_classification.png",
-                            title=f"Read Assignment for Missed CAGE Peaks\n{plot_prefix}",
+                            title="Read Assignment at Missed CAGE Peaks",
                         )
 
                     # Plot truncation patterns (missed only - legacy plot)
@@ -418,7 +418,7 @@ def tss_tts_metrics(
                         plot_truncation_patterns(
                             truncation_patterns=analysis_5['truncation_patterns'],
                             output_path=plot_output_dir / f"{plot_prefix}_cage_missed_truncation_patterns.png",
-                            title=f"Truncation Patterns at Missed CAGE Peaks\n{plot_prefix}",
+                            title="Truncation Patterns at Missed CAGE Peaks",
                         )
 
                     # Write annotated BED with classifications
@@ -464,7 +464,7 @@ def tss_tts_metrics(
                         plot_read_classification_summary(
                             classification_summary=analysis_3['classification_summary'],
                             output_path=plot_output_dir / f"{plot_prefix}_quantseq_read_classification.png",
-                            title=f"Read Assignment for Missed QuantSeq Peaks\n{plot_prefix}",
+                            title="Read Assignment at Missed QuantSeq Peaks",
                         )
 
                     # Write annotated BED
@@ -497,7 +497,7 @@ def tss_tts_metrics(
                         plot_sequence_logo(
                             pfm=tss_motifs['pfm'],
                             output_path=plot_output_dir / f"{plot_prefix}_tss_motif_logo.png",
-                            title=f"Sequence Context at Read 5' Ends\n{plot_prefix}",
+                            title="Sequence Context at Read 5' Ends",
                         )
                         metrics["tss_motif_mean_ic"] = tss_motifs.get('mean_ic')
 
@@ -511,7 +511,7 @@ def tss_tts_metrics(
                         plot_sequence_logo(
                             pfm=tts_motifs['pfm'],
                             output_path=plot_output_dir / f"{plot_prefix}_tts_motif_logo.png",
-                            title=f"Sequence Context at Read 3' Ends\n{plot_prefix}",
+                            title="Sequence Context at Read 3' Ends",
                         )
                         metrics["tts_motif_mean_ic"] = tts_motifs.get('mean_ic')
 
@@ -526,7 +526,7 @@ def tss_tts_metrics(
 
 def calculate_ted_metrics(
     iso_bed: Path,
-    map_file: Path,
+    map_file: Optional[Path] = None,
     bam_file: Optional[Path] = None,
     corrected_bed: Optional[Path] = None,
     reads_bed: Optional[Path] = None,
@@ -544,13 +544,14 @@ def calculate_ted_metrics(
     max_count_quantseq: Optional[int] = None,
     max_count_ref_tss: Optional[int] = None,
     max_count_ref_tts: Optional[int] = None,
+    skip_read_metrics: bool = False,
 ) -> dict:
     """
     Calculate all TED metrics for a single sample.
 
     Args:
         iso_bed: Isoforms BED file (*.isoforms.bed)
-        map_file: Read map file (*.isoform.read.map.txt)
+        map_file: Read map file (*.isoform.read.map.txt) - optional if skip_read_metrics=True
         bam_file: BAM file (for alignment metrics)
         corrected_bed: Corrected BED (for collapse denominator)
         reads_bed: Reads BED12 file (for read-end entropy and recoverability analysis)
@@ -564,6 +565,7 @@ def calculate_ted_metrics(
         plot_prefix: Prefix for plot filenames (e.g., sample name)
         test_regions_dir: Directory to save recoverable peak BED files (optional)
         genome_path: Path to genome FASTA for motif analysis (optional)
+        skip_read_metrics: If True, skip read-level metrics (for Bambu/IsoQuant evaluation)
 
     Returns:
         Dict with all metrics
@@ -589,35 +591,46 @@ def calculate_ted_metrics(
     n_iso = len(isoform_names)
     n_genes = len(genes)
 
-    # Read assignment - parse map file once for both unique IDs and per-isoform stats
-    with timed_section("parse_map_file_comprehensive"):
-        assigned_read_ids, reads_per_iso_stats = parse_map_file_comprehensive(map_file)
-        assigned_unique_ids = len(assigned_read_ids)
+    # Initialize read metrics - will be populated only if not skip_read_metrics
+    assigned_unique_ids = 0
+    assigned_by_type = {
+        "assigned_primary": None,
+        "assigned_supplementary": None,
+        "assigned_total": None,
+    }
+    total_alignments = {
+        "total_primary": None,
+        "total_supplementary": None,
+        "total_alignments": None,
+    }
+    reads_per_iso_stats = {
+        "reads_per_isoform_mean": None,
+        "reads_per_isoform_median": None,
+        "reads_per_isoform_min": None,
+        "reads_per_isoform_max": None,
+    }
+    input_molecules = None
 
-    # Count by type if BAM available
-    if bam_file and bam_file.exists():
-        with timed_section("count_alignments_by_type"):
-            assigned_by_type = count_assigned_reads_by_type(bam_file, assigned_read_ids)
-            total_alignments = count_total_alignments_bam(bam_file)
-    else:
-        assigned_by_type = {
-            "assigned_primary": 0,
-            "assigned_supplementary": 0,
-            "assigned_total": 0,
-        }
-        total_alignments = {
-            "total_primary": 0,
-            "total_supplementary": 0,
-            "total_alignments": 0,
-        }
+    # Read assignment metrics (skip if skip_read_metrics)
+    if not skip_read_metrics and map_file and map_file.exists():
+        # Read assignment - parse map file once for both unique IDs and per-isoform stats
+        with timed_section("parse_map_file_comprehensive"):
+            assigned_read_ids, reads_per_iso_stats = parse_map_file_comprehensive(map_file)
+            assigned_unique_ids = len(assigned_read_ids)
 
-    # Denominator for assignment_rate
-    if stage == "collapse" and corrected_bed and corrected_bed.exists():
-        input_molecules = count_lines(corrected_bed)
-    else:
-        input_molecules = total_alignments.get("total_primary", 0) or None
+        # Count by type if BAM available
+        if bam_file and bam_file.exists():
+            with timed_section("count_alignments_by_type"):
+                assigned_by_type = count_assigned_reads_by_type(bam_file, assigned_read_ids)
+                total_alignments = count_total_alignments_bam(bam_file)
 
-    # TSS/TTS metrics
+        # Denominator for assignment_rate
+        if stage == "collapse" and corrected_bed and corrected_bed.exists():
+            input_molecules = count_lines(corrected_bed)
+        else:
+            input_molecules = total_alignments.get("total_primary", 0) or None
+
+    # TSS/TTS metrics (always computed - this is the core evaluation)
     peaks = {
         "prime5": prime5_peaks,
         "prime3": prime3_peaks,
@@ -625,14 +638,15 @@ def calculate_ted_metrics(
         "ref_prime3": ref_prime3_peaks,
     }
     with timed_section("tss_tts_metrics"):
+        # Only pass reads_bed if not skipping read metrics
         tss_tts, signed_distances = tss_tts_metrics(
             iso_bed, peaks, window,
-            reads_bed=reads_bed,
+            reads_bed=None if skip_read_metrics else reads_bed,
             plot_output_dir=plot_output_dir,
             plot_prefix=plot_prefix,
-            test_regions_dir=test_regions_dir,
-            genome_path=genome_path,
-            map_file=map_file,
+            test_regions_dir=None if skip_read_metrics else test_regions_dir,
+            genome_path=None if skip_read_metrics else genome_path,
+            map_file=None if skip_read_metrics else map_file,
             n_isoforms=n_iso,  # Pass cached count to avoid re-reading
             max_count_cage=max_count_cage,
             max_count_quantseq=max_count_quantseq,
@@ -640,9 +654,9 @@ def calculate_ted_metrics(
             max_count_ref_tts=max_count_ref_tts,
         )
 
-    # Read-end entropy analysis (skip if no reads or no assigned reads)
+    # Read-end entropy analysis (skip if skip_read_metrics or no reads/assigned reads)
     entropy_metrics = {}
-    if reads_bed and reads_bed.exists() and reads_bed.stat().st_size > 0 and assigned_unique_ids > 0:
+    if not skip_read_metrics and reads_bed and reads_bed.exists() and reads_bed.stat().st_size > 0 and assigned_unique_ids > 0:
         with timed_section("compute_read_end_entropy"):
             entropy_data = compute_read_end_entropy(iso_bed, map_file, reads_bed)
             entropy_metrics = {
@@ -667,12 +681,12 @@ def calculate_ted_metrics(
         "reads_per_isoform_median": reads_per_iso_stats.get("reads_per_isoform_median"),
         "reads_per_isoform_min": reads_per_iso_stats.get("reads_per_isoform_min"),
         "reads_per_isoform_max": reads_per_iso_stats.get("reads_per_isoform_max"),
-        "input_primary_alignments": total_alignments.get("total_primary", 0) or None,
-        "input_supplementary_alignments": total_alignments.get("total_supplementary", 0) or None,
-        "input_total_alignments": total_alignments.get("total_alignments", 0) or None,
+        "input_primary_alignments": total_alignments.get("total_primary") if total_alignments.get("total_primary") is not None else None,
+        "input_supplementary_alignments": total_alignments.get("total_supplementary") if total_alignments.get("total_supplementary") is not None else None,
+        "input_total_alignments": total_alignments.get("total_alignments") if total_alignments.get("total_alignments") is not None else None,
         "assignment_rate": (assigned_unique_ids / input_molecules) if (input_molecules and input_molecules > 0) else None,
-        "primary_alignment_utilization": (assigned_by_type.get("assigned_primary", 0) / total_alignments.get("total_primary", 1)) if total_alignments.get("total_primary", 0) > 0 else None,
-        "total_alignment_utilization": (assigned_by_type.get("assigned_total", 0) / total_alignments.get("total_alignments", 1)) if total_alignments.get("total_alignments", 0) > 0 else None,
+        "primary_alignment_utilization": (assigned_by_type.get("assigned_primary", 0) / total_alignments["total_primary"]) if total_alignments.get("total_primary") is not None and total_alignments["total_primary"] > 0 else None,
+        "total_alignment_utilization": (assigned_by_type.get("assigned_total", 0) / total_alignments["total_alignments"]) if total_alignments.get("total_alignments") is not None and total_alignments["total_alignments"] > 0 else None,
         **tss_tts,
         **entropy_metrics,
     }

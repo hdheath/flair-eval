@@ -26,8 +26,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="TED: Transcriptome End Distribution metrics for FLAIR outputs"
     )
-    parser.add_argument("--isoforms-bed", required=True, type=Path, help="Isoforms BED file (*.isoforms.bed)")
-    parser.add_argument("--map-file", required=True, type=Path, help="Read map file (*.isoform.read.map.txt)")
+    # Input options - either BED+map or GTF-only
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--isoforms-bed", type=Path, help="Isoforms BED file (*.isoforms.bed)")
+    input_group.add_argument("--gtf-input", type=Path, help="Isoforms GTF file (for Bambu/IsoQuant outputs)")
+    
+    parser.add_argument("--map-file", type=Path, help="Read map file (*.isoform.read.map.txt) - required unless --skip-read-metrics")
     parser.add_argument("--bam", type=Path, help="BAM file for alignment metrics")
     parser.add_argument("--corrected-bed", type=Path, help="Corrected BED (for collapse stage)")
     parser.add_argument("--reads-bed", type=Path, help="Reads BED12 file (for read-end entropy analysis)")
@@ -46,6 +50,9 @@ def main():
     parser.add_argument("--max-count-quantseq", type=int, help="Fixed y-axis limit for QuantSeq histograms across runs (optional)")
     parser.add_argument("--max-count-ref-tss", type=int, help="Fixed y-axis limit for Reference TSS histograms across runs (optional)")
     parser.add_argument("--max-count-ref-tts", type=int, help="Fixed y-axis limit for Reference TTS histograms across runs (optional)")
+    # Simplified evaluation mode (for Bambu/IsoQuant - no read-level metrics)
+    parser.add_argument("--skip-read-metrics", action="store_true", 
+                        help="Skip read-level metrics (entropy, motifs, truncation). Use for Bambu/IsoQuant evaluation.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     # Metadata arguments for result tracking
     parser.add_argument("--test-name", type=str, help="Test set name")
@@ -56,8 +63,30 @@ def main():
 
     args = parser.parse_args()
 
+    # Validate arguments
+    if not args.skip_read_metrics and not args.map_file:
+        parser.error("--map-file is required unless --skip-read-metrics is specified")
+
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+
+    # Handle GTF input - convert to BED12 internally
+    iso_bed = args.isoforms_bed
+    if args.gtf_input:
+        import tempfile
+        import subprocess
+        # Convert GTF to BED12 using our converter script
+        temp_bed = Path(tempfile.mktemp(suffix='.bed'))
+        logger.info(f"Converting GTF to BED12: {args.gtf_input} -> {temp_bed}")
+        from pathlib import Path as P
+        gtf_to_bed12_script = P(__file__).parent / "gtf_to_bed12.py"
+        subprocess.run([
+            "python", str(gtf_to_bed12_script),
+            "--gtf", str(args.gtf_input),
+            "--output", str(temp_bed),
+            "--verbose" if args.verbose else ""
+        ], check=True)
+        iso_bed = temp_bed
 
     # Build plot prefix from metadata
     plot_prefix_parts = []
@@ -74,9 +103,10 @@ def main():
     plot_prefix = "_".join(plot_prefix_parts) if plot_prefix_parts else "ted"
 
     # Calculate metrics
-    logger.info(f"Calculating TED metrics for {args.isoforms_bed}")
+    input_file = args.gtf_input if args.gtf_input else args.isoforms_bed
+    logger.info(f"Calculating TED metrics for {input_file}")
     metrics = calculate_ted_metrics(
-        iso_bed=args.isoforms_bed,
+        iso_bed=iso_bed,
         map_file=args.map_file,
         bam_file=args.bam,
         corrected_bed=args.corrected_bed,
@@ -95,7 +125,12 @@ def main():
         max_count_quantseq=args.max_count_quantseq,
         max_count_ref_tss=args.max_count_ref_tss,
         max_count_ref_tts=args.max_count_ref_tts,
+        skip_read_metrics=args.skip_read_metrics,
     )
+
+    # Clean up temp file if we created one
+    if args.gtf_input and iso_bed.exists():
+        iso_bed.unlink()
 
     # Add metadata to metrics if provided
     if args.test_name:

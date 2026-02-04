@@ -82,6 +82,8 @@ from .plots import (
     plot_truncation_patterns,
     plot_all_truncation_patterns,
     plot_sequence_logo,
+    plot_transcript_classification,
+    plot_splice_junction_support,
 )
 
 from .ted_core import (
@@ -107,6 +109,19 @@ from .synthesize import (
     write_tsv_merged,
     METADATA_FIELDS,
 )
+
+# precision_recall_plot requires pandas/matplotlib - import conditionally
+try:
+    from .precision_recall_plot import (
+        identify_assembler,
+        load_evaluation_files,
+        create_precision_recall_plot,
+        ASSEMBLER_COLORS,
+        ASSEMBLER_NAMES,
+    )
+    HAS_PRECISION_RECALL_PLOT = True
+except ImportError:
+    HAS_PRECISION_RECALL_PLOT = False
 
 __all__ = [
     # utils
@@ -168,6 +183,8 @@ __all__ = [
     'plot_truncation_patterns',
     'plot_all_truncation_patterns',
     'plot_sequence_logo',
+    'plot_transcript_classification',
+    'plot_splice_junction_support',
     # ted_core
     'tss_tts_metrics',
     'calculate_ted_metrics',
@@ -186,4 +203,16 @@ __all__ = [
     'process_evaluation_files',
     'write_tsv_merged',
     'METADATA_FIELDS',
+    # precision_recall_plot availability flag
+    'HAS_PRECISION_RECALL_PLOT',
 ]
+
+# Conditionally add precision_recall_plot exports if available
+if HAS_PRECISION_RECALL_PLOT:
+    __all__.extend([
+        'identify_assembler',
+        'load_evaluation_files',
+        'create_precision_recall_plot',
+        'ASSEMBLER_COLORS',
+        'ASSEMBLER_NAMES',
+    ])
