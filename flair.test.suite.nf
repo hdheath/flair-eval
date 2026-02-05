@@ -460,6 +460,13 @@ process Evaluation {
     path "ted_plots/*_quantseq_recovery_by_expression.png", optional: true, emit: quantseq_recovery_expression_plots
     path "ted_plots/*_tss_motif_logo.png", optional: true, emit: tss_motif_plots
     path "ted_plots/*_tts_motif_logo.png", optional: true, emit: tts_motif_plots
+    // Isoform end motif plots
+    path "ted_plots/*_isoform_tss_motif_logo.png", optional: true, emit: isoform_tss_motif_plots
+    path "ted_plots/*_isoform_tts_motif_logo.png", optional: true, emit: isoform_tts_motif_plots
+    // Read end frequency around peaks
+    path "ted_plots/*_cage_peak_width_histogram.png", optional: true, emit: cage_width_histogram_plots
+    path "ted_plots/*_cage_read_frequency_by_width.png", optional: true, emit: cage_read_frequency_plots
+    path "ted_plots/*_quantseq_read_frequency.png", optional: true, emit: quantseq_read_frequency_plots
     // Structural evaluation plots (all assemblers)
     path "ted_plots/*_transcript_classification.png", optional: true, emit: transcript_classification_plots
     path "ted_plots/*_splice_junction_support.png", optional: true, emit: splice_junction_support_plots
@@ -689,6 +696,74 @@ process PlotIsoforms {
         --output ${dataset_name}_${align_mode}_${partition_mode}_isoform_plot
     """
 }
+
+
+process TrainingDataGeneration {
+    // Generates training data for transcript end prediction models
+    // Creates feature vectors for candidate end positions, labeled with orthogonal peak data
+    // Only runs for FLAIR outputs (requires reads BED file)
+    publishDir "results/training_data/${test_name}", mode: 'copy'
+    publishDir "results/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_training_${it}" }
+    tag "${dataset_name}_${align_mode}_${partition_mode}"
+
+    input:
+    // Core inputs for feature extraction
+    tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
+          path(reads_bed), path(genome), path(gtf),
+          path(cage_peaks), path(quantseq_peaks)
+
+    output:
+    // TSS training data (from CAGE peaks)
+    path "${dataset_name}_${align_mode}_${partition_mode}_tss_training.tsv", optional: true, emit: tss_training
+    // TTS training data (from QuantSeq peaks)
+    path "${dataset_name}_${align_mode}_${partition_mode}_tts_training.tsv", optional: true, emit: tts_training
+
+    script:
+    def output_prefix = "${dataset_name}_${align_mode}_${partition_mode}"
+    def genome_arg = genome.name != 'NO_GENOME' ? "--genome ${genome}" : ""
+    def gtf_arg = gtf.name != 'NO_GTF' ? "--gtf ${gtf}" : ""
+    def has_cage = cage_peaks.name != 'NO_CAGE' && cage_peaks.size() > 0
+    def has_quantseq = quantseq_peaks.name != 'NO_QUANTSEQ' && quantseq_peaks.size() > 0
+
+    """
+    # Generate TSS training data from CAGE peaks
+    if [ "${has_cage}" = "true" ]; then
+        python ${projectDir}/bin/generate_training_data.py \\
+            --reads-bed ${reads_bed} \\
+            --peaks-bed ${cage_peaks} \\
+            --output ${output_prefix}_tss_training.tsv \\
+            --end-type tss \\
+            ${genome_arg} \\
+            ${gtf_arg} \\
+            --window 50 \\
+            --min-reads 2 \\
+            --negative-ratio 3.0
+    fi
+
+    # Generate TTS training data from QuantSeq peaks
+    if [ "${has_quantseq}" = "true" ]; then
+        python ${projectDir}/bin/generate_training_data.py \\
+            --reads-bed ${reads_bed} \\
+            --peaks-bed ${quantseq_peaks} \\
+            --output ${output_prefix}_tts_training.tsv \\
+            --end-type tts \\
+            ${genome_arg} \\
+            ${gtf_arg} \\
+            --window 50 \\
+            --min-reads 2 \\
+            --negative-ratio 3.0
+    fi
+
+    # Create empty files if no peaks available (for nextflow output handling)
+    if [ ! -f "${output_prefix}_tss_training.tsv" ]; then
+        touch "${output_prefix}_tss_training.tsv.skip"
+    fi
+    if [ ! -f "${output_prefix}_tts_training.tsv" ]; then
+        touch "${output_prefix}_tts_training.tsv.skip"
+    fi
+    """
+}
+
 
 workflow {
     // Validate input parameters
@@ -1024,8 +1099,17 @@ workflow {
              cage_file, quantseq_file, ref_tss, ref_tts]
         }
 
+    // Branch flair_eval_inputs for both Evaluation and TrainingDataGeneration
+    // (channels can only be consumed once, so we need to fork)
+    flair_eval_inputs
+        .multiMap { it ->
+            for_evaluation: it
+            for_training: it
+        }
+        .set { flair_eval_branched }
+
     // Merge all evaluation inputs and run unified Evaluation process
-    all_eval_inputs = flair_eval_inputs.concat(bambu_eval_inputs).concat(isoquant_eval_inputs)
+    all_eval_inputs = flair_eval_branched.for_evaluation.concat(bambu_eval_inputs).concat(isoquant_eval_inputs)
     Evaluation(all_eval_inputs)
 
     // =============================================================================
@@ -1081,5 +1165,49 @@ workflow {
         .groupTuple()
 
     SummaryPlots(all_evaluations)
+
+    // =============================================================================
+    // TRAINING DATA GENERATION - For ML model development
+    // =============================================================================
+
+    // Generate training data for transcript end prediction models
+    // Uses read positions and orthogonal peak labels (CAGE for TSS, QuantSeq for TTS)
+    // Only runs for FLAIR "max_recall" mode - this mode generates the most candidate
+    // positions, providing the best training data for learning end selection
+    training_data_inputs = flair_eval_branched.for_training
+        .filter { test_name, dataset_name, align_mode, partition_mode, transcriptome_mode,
+                  isoforms_bed, isoforms_gtf, isoform_read_map,
+                  bam, bai, reads_bed, genome, gtf,
+                  cage_peaks, quantseq_peaks, ref_tss, ref_tts ->
+            // Only run for max_recall transcriptome mode
+            // Note: sanitizeModeName() converts underscores to hyphens, so check for 'max-recall'
+            def match = transcriptome_mode == 'max-recall'
+            if (!match) {
+                log.debug "TrainingData: Skipping transcriptome_mode='${transcriptome_mode}' (not max-recall)"
+            }
+            match
+        }
+        .map { test_name, dataset_name, align_mode, partition_mode, transcriptome_mode,
+               isoforms_bed, isoforms_gtf, isoform_read_map,
+               bam, bai, reads_bed, genome, gtf,
+               cage_peaks, quantseq_peaks, ref_tss, ref_tts ->
+            // Extract only the fields needed for training data generation
+            log.info "TrainingData: Found max-recall run: ${dataset_name}_${align_mode}_${partition_mode}"
+            [test_name, dataset_name, align_mode, partition_mode, reads_bed, genome, gtf, cage_peaks, quantseq_peaks]
+        }
+        .filter { test_name, dataset_name, align_mode, partition_mode, reads_bed, genome, gtf, cage_peaks, quantseq_peaks ->
+            // Only generate training data if we have reads and at least one orthogonal peak file
+            def has_reads = reads_bed.name != 'NO_BED' && reads_bed.size() > 0
+            def has_peaks = cage_peaks.name != 'NO_CAGE' || quantseq_peaks.name != 'NO_QUANTSEQ'
+            if (!has_reads) {
+                log.warn "TrainingData: Skipping ${dataset_name} - no valid reads BED (name=${reads_bed.name}, size=${reads_bed.size()})"
+            }
+            if (!has_peaks) {
+                log.warn "TrainingData: Skipping ${dataset_name} - no orthogonal peaks (cage=${cage_peaks.name}, quantseq=${quantseq_peaks.name})"
+            }
+            has_reads && has_peaks
+        }
+
+    TrainingDataGeneration(training_data_inputs)
 
 }

@@ -56,6 +56,9 @@ from .plots import (
     plot_missed_peak_sj_support,
     plot_peak_recovery_by_expression,
     plot_peak_recovery_by_width,
+    plot_read_end_frequency_at_peaks,
+    plot_read_end_frequency_stratified_by_width,
+    plot_peak_width_histogram,
 )
 
 logger = get_logger()
@@ -409,6 +412,39 @@ def tss_tts_metrics(
                         title="QuantSeq Peak Recovery by Expression Level",
                     )
 
+            # Read end frequency plots around orthogonal peaks
+            if peaks.get("prime5") and read_tss_positions:
+                cage_peaks_full = read_bed6(peaks["prime5"])
+                if cage_peaks_full:
+                    # CAGE peak width histogram with recovery status
+                    if cage_meta:
+                        plot_peak_width_histogram(
+                            peak_metadata=cage_meta,
+                            output_path=plot_output_dir / f"{plot_prefix}_cage_peak_width_histogram.png",
+                            title="CAGE Peak Width Distribution",
+                        )
+                    # Read end frequency stratified by peak width
+                    plot_read_end_frequency_stratified_by_width(
+                        read_positions=read_tss_positions,
+                        peaks=cage_peaks_full,
+                        output_path=plot_output_dir / f"{plot_prefix}_cage_read_frequency_by_width.png",
+                        window=100,
+                        title="Read 5' End Frequency Around CAGE Peaks",
+                    )
+
+            if peaks.get("prime3") and read_tts_positions:
+                quantseq_peaks_full = read_bed6(peaks["prime3"])
+                if quantseq_peaks_full:
+                    # QuantSeq peaks are ~1bp, use simple frequency plot
+                    plot_read_end_frequency_at_peaks(
+                        read_positions=read_tts_positions,
+                        peaks=quantseq_peaks_full,
+                        output_path=plot_output_dir / f"{plot_prefix}_quantseq_read_frequency.png",
+                        window=100,
+                        title="Read 3' End Frequency Around QuantSeq Peaks",
+                        end_type='tts',
+                    )
+
             # Comprehensive missed peak analysis with read classification and truncation patterns
             if map_file and map_file.exists() and reads_bed and reads_bed.exists():
                 iso_to_reads = parse_read_map(map_file)
@@ -631,6 +667,33 @@ def tss_tts_metrics(
                             title="Sequence Context at Read 3' Ends",
                         )
                         metrics["tts_motif_mean_ic"] = tts_motifs.get('mean_ic')
+
+                    # Isoform end motif analysis (assembled transcript ends)
+                    iso_tss_motifs = analyze_motifs_at_ends(
+                        read_ends=isoforms,  # isoforms dict has same format as read_ends
+                        genome_path=genome_path,
+                        end_type='tss',
+                    )
+                    if iso_tss_motifs.get('pfm'):
+                        plot_sequence_logo(
+                            pfm=iso_tss_motifs['pfm'],
+                            output_path=plot_output_dir / f"{plot_prefix}_isoform_tss_motif_logo.png",
+                            title="Sequence Context at Isoform 5' Ends",
+                        )
+                        metrics["isoform_tss_motif_mean_ic"] = iso_tss_motifs.get('mean_ic')
+
+                    iso_tts_motifs = analyze_motifs_at_ends(
+                        read_ends=isoforms,
+                        genome_path=genome_path,
+                        end_type='tts',
+                    )
+                    if iso_tts_motifs.get('pfm'):
+                        plot_sequence_logo(
+                            pfm=iso_tts_motifs['pfm'],
+                            output_path=plot_output_dir / f"{plot_prefix}_isoform_tts_motif_logo.png",
+                            title="Sequence Context at Isoform 3' Ends",
+                        )
+                        metrics["isoform_tts_motif_mean_ic"] = iso_tts_motifs.get('mean_ic')
 
         return metrics, signed_distances
     finally:

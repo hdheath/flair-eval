@@ -1219,3 +1219,316 @@ def plot_peak_recovery_by_width(
         logger.error(f"Failed to save peak recovery by width plot: {e}")
         plt.close(fig)
         return False
+
+
+def plot_read_end_frequency_at_peaks(
+    read_positions: List[dict],
+    peaks: List[dict],
+    output_path: Path,
+    window: int = 100,
+    title: str = "Read End Frequency Around Peaks",
+    end_type: str = "tts",
+) -> bool:
+    """Plot read end frequency distribution relative to peak positions.
+
+    For 1bp peaks (QuantSeq): single histogram of read end offsets from peak center.
+    Shows where reads terminate relative to the orthogonal peak signal.
+
+    Args:
+        read_positions: List of dicts with 'Chrom', 'Start', 'End', 'Strand'
+        peaks: List of dicts with 'Chrom', 'Start', 'End', 'Strand', 'Score'
+        output_path: Where to save the plot
+        window: bp upstream/downstream to consider
+        title: Figure title
+        end_type: 'tss' or 'tts' for labeling
+    """
+    if not HAS_MATPLOTLIB or not read_positions or not peaks:
+        return False
+
+    # Build lookup by chrom/strand for efficient matching
+    from collections import defaultdict
+    reads_by_cs = defaultdict(list)
+    for r in read_positions:
+        key = (r['Chrom'], r['Strand'])
+        pos = (r['Start'] + r['End']) // 2  # midpoint of 1bp interval
+        reads_by_cs[key].append(pos)
+
+    # Compute offsets from peak centers
+    offsets = []
+    for peak in peaks:
+        peak_center = (peak['Start'] + peak['End']) // 2
+        strands = [peak['Strand']] if peak['Strand'] != '.' else ['+', '-']
+        for strand in strands:
+            key = (peak['Chrom'], strand)
+            for read_pos in reads_by_cs.get(key, []):
+                offset = read_pos - peak_center
+                # Flip offset for minus strand so upstream is always negative
+                if strand == '-':
+                    offset = -offset
+                if -window <= offset <= window:
+                    offsets.append(offset)
+
+    if not offsets:
+        logger.warning("No read ends found within window of peaks")
+        return False
+
+    fig_width = 10
+    fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
+
+    bins = np.arange(-window, window + 2, 2)  # 2bp resolution
+    ax.hist(offsets, bins=bins, color='#2196F3', edgecolor='black', alpha=0.7)
+    ax.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Peak center')
+    ax.set_xlabel(f'Distance from peak center (bp)\n← Upstream | Downstream →', fontsize=11)
+    ax.set_ylabel('Read end count', fontsize=11)
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.legend(fontsize=10)
+    ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax.set_axisbelow(True)
+
+    # Add summary stats
+    median_offset = np.median(offsets)
+    ax.text(0.98, 0.95, f'n={len(offsets):,}\nmedian={median_offset:.1f}bp',
+            transform=ax.transAxes, ha='right', va='top', fontsize=10,
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved read end frequency plot to {output_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save read end frequency plot: {e}")
+        plt.close(fig)
+        return False
+
+
+def plot_read_end_frequency_stratified_by_width(
+    read_positions: List[dict],
+    peaks: List[dict],
+    output_path: Path,
+    window: int = 100,
+    title: str = "Read End Frequency Around CAGE Peaks by Width",
+) -> bool:
+    """Plot read end frequency stratified by peak width quartiles.
+
+    For variable-width peaks (CAGE): 2x2 grid showing read end distributions
+    for narrow, medium, wide, and very wide peaks separately.
+
+    Args:
+        read_positions: List of dicts with 'Chrom', 'Start', 'End', 'Strand'
+        peaks: List of dicts with 'Chrom', 'Start', 'End', 'Strand', 'Score'
+        output_path: Where to save the plot
+        window: bp upstream/downstream to consider (scaled by peak width for wider peaks)
+        title: Figure title
+    """
+    if not HAS_MATPLOTLIB or not read_positions or not peaks:
+        return False
+
+    # Calculate peak widths and stratify
+    widths = [p['End'] - p['Start'] for p in peaks]
+    if max(widths) <= 1:
+        logger.warning("All peaks are 1bp, use plot_read_end_frequency_at_peaks instead")
+        return False
+
+    # Define width bins: 1-10bp, 11-25bp, 26-50bp, 51+bp
+    width_bins = [
+        ('1-10bp', 1, 10),
+        ('11-25bp', 11, 25),
+        ('26-50bp', 26, 50),
+        ('51+bp', 51, float('inf')),
+    ]
+
+    # Build read lookup
+    from collections import defaultdict
+    reads_by_cs = defaultdict(list)
+    for r in read_positions:
+        key = (r['Chrom'], r['Strand'])
+        pos = (r['Start'] + r['End']) // 2
+        reads_by_cs[key].append(pos)
+
+    # Compute offsets for each width bin
+    offsets_by_bin = {label: [] for label, _, _ in width_bins}
+    peak_counts = {label: 0 for label, _, _ in width_bins}
+
+    for peak in peaks:
+        peak_width = peak['End'] - peak['Start']
+        peak_center = (peak['Start'] + peak['End']) // 2
+
+        # Find which bin this peak belongs to
+        bin_label = None
+        for label, lo, hi in width_bins:
+            if lo <= peak_width <= hi:
+                bin_label = label
+                break
+        if bin_label is None:
+            continue
+
+        peak_counts[bin_label] += 1
+        strands = [peak['Strand']] if peak['Strand'] != '.' else ['+', '-']
+
+        # Use window scaled to peak width (at least 'window', at most 2x window)
+        effective_window = max(window, min(peak_width * 2, window * 2))
+
+        for strand in strands:
+            key = (peak['Chrom'], strand)
+            for read_pos in reads_by_cs.get(key, []):
+                offset = read_pos - peak_center
+                if strand == '-':
+                    offset = -offset
+                if -effective_window <= offset <= effective_window:
+                    # Normalize offset relative to peak half-width for comparison
+                    half_width = max(peak_width // 2, 1)
+                    normalized_offset = offset / half_width
+                    offsets_by_bin[bin_label].append((offset, normalized_offset))
+
+    fig_width = 12
+    fig, axes = plt.subplots(2, 2, figsize=(fig_width, fig_width / GOLDEN_RATIO * 1.2))
+    axes = axes.flatten()
+
+    colors = ['#4CAF50', '#2196F3', '#FF9800', '#9C27B0']
+
+    for idx, (label, lo, hi) in enumerate(width_bins):
+        ax = axes[idx]
+        data = offsets_by_bin[label]
+        n_peaks = peak_counts[label]
+
+        if data:
+            raw_offsets = [d[0] for d in data]
+            # Use appropriate binning based on peak width range
+            if hi <= 10:
+                bins = np.arange(-window, window + 2, 2)
+            elif hi <= 25:
+                bins = np.arange(-window * 1.5, window * 1.5 + 3, 3)
+            else:
+                bins = np.arange(-window * 2, window * 2 + 5, 5)
+
+            ax.hist(raw_offsets, bins=bins, color=colors[idx], edgecolor='black', alpha=0.7)
+            median_off = np.median(raw_offsets)
+            ax.text(0.98, 0.95, f'n={len(raw_offsets):,}\npeaks={n_peaks}\nmed={median_off:.0f}bp',
+                    transform=ax.transAxes, ha='right', va='top', fontsize=9,
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        else:
+            ax.text(0.5, 0.5, f'No data\n({n_peaks} peaks)', transform=ax.transAxes,
+                    ha='center', va='center', fontsize=12)
+
+        ax.axvline(x=0, color='red', linestyle='--', linewidth=1.5)
+        ax.set_title(f'Peak width: {label}', fontsize=11, fontweight='bold')
+        ax.set_xlabel('Distance from peak center (bp)', fontsize=10)
+        ax.set_ylabel('Read end count', fontsize=10)
+        ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+        ax.set_axisbelow(True)
+
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved stratified read end frequency plot to {output_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save stratified read end frequency plot: {e}")
+        plt.close(fig)
+        return False
+
+
+def plot_peak_width_histogram(
+    peak_metadata: List[dict],
+    output_path: Path,
+    title: str = "CAGE Peak Width Distribution by Recovery Status",
+) -> bool:
+    """Plot histogram of peak widths with stacked bars colored by recovery status.
+
+    Args:
+        peak_metadata: List of dicts with 'width' and 'status' ('captured'/'missed'/'no_reads')
+        output_path: Where to save the plot
+        title: Figure title
+    """
+    if not HAS_MATPLOTLIB or not peak_metadata:
+        return False
+
+    widths = [p['width'] for p in peak_metadata]
+    if max(widths) <= 1:
+        logger.warning("All peaks are 1bp, width histogram not meaningful")
+        return False
+
+    # Separate by status
+    captured_widths = [p['width'] for p in peak_metadata if p['status'] == 'captured']
+    missed_widths = [p['width'] for p in peak_metadata if p['status'] == 'missed']
+    no_reads_widths = [p['width'] for p in peak_metadata if p['status'] == 'no_reads']
+
+    fig_width = 10
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(fig_width, fig_width / GOLDEN_RATIO))
+
+    # Left panel: stacked histogram
+    max_width = max(widths)
+    if max_width <= 50:
+        bins = np.arange(0, max_width + 2, 1)
+    elif max_width <= 200:
+        bins = np.arange(0, max_width + 5, 5)
+    else:
+        bins = np.arange(0, min(max_width + 10, 500), 10)
+
+    ax1.hist([captured_widths, missed_widths, no_reads_widths], bins=bins, stacked=True,
+             color=['#388E3C', '#D32F2F', '#BDBDBD'], edgecolor='black', alpha=0.85,
+             label=[f'Captured ({len(captured_widths)})',
+                    f'Missed ({len(missed_widths)})',
+                    f'No reads ({len(no_reads_widths)})'])
+    ax1.set_xlabel('Peak Width (bp)', fontsize=11)
+    ax1.set_ylabel('Number of Peaks', fontsize=11)
+    ax1.set_title('Peak Count by Width', fontsize=12, fontweight='bold')
+    ax1.legend(fontsize=9, loc='upper right')
+    ax1.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax1.set_axisbelow(True)
+
+    # Right panel: recovery rate by width bin
+    bin_edges = [0, 5, 10, 20, 30, 50, 100, float('inf')]
+    bin_labels = ['1-5', '6-10', '11-20', '21-30', '31-50', '51-100', '100+']
+    bin_captured = [0] * len(bin_labels)
+    bin_total = [0] * len(bin_labels)
+
+    for p in peak_metadata:
+        w = p['width']
+        for i in range(len(bin_edges) - 1):
+            if bin_edges[i] < w <= bin_edges[i + 1]:
+                bin_total[i] += 1
+                if p['status'] == 'captured':
+                    bin_captured[i] += 1
+                break
+
+    bin_rates = [c / t if t > 0 else 0 for c, t in zip(bin_captured, bin_total)]
+    non_empty = [(lbl, rate, cap, tot) for lbl, rate, cap, tot in
+                 zip(bin_labels, bin_rates, bin_captured, bin_total) if tot > 0]
+
+    if non_empty:
+        x_labels, x_rates, x_cap, x_tot = zip(*non_empty)
+        colors = [plt.cm.RdYlGn(r) for r in x_rates]
+        bars = ax2.bar(range(len(x_labels)), x_rates, color=colors, edgecolor='black', alpha=0.85)
+        for i, (bar, cap, tot) in enumerate(zip(bars, x_cap, x_tot)):
+            ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                     f"{cap}/{tot}", ha='center', va='bottom', fontsize=9)
+        ax2.set_xticks(range(len(x_labels)))
+        ax2.set_xticklabels(x_labels, rotation=30, ha='right')
+
+    ax2.set_xlabel('Peak Width (bp)', fontsize=11)
+    ax2.set_ylabel('Recovery Rate', fontsize=11)
+    ax2.set_title('Recovery Rate by Width', fontsize=12, fontweight='bold')
+    ax2.set_ylim(0, 1.15)
+    ax2.axhline(y=1.0, color='gray', linestyle='--', alpha=0.4)
+    ax2.grid(True, alpha=0.3, linestyle='--', axis='y')
+    ax2.set_axisbelow(True)
+
+    fig.suptitle(title, fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=PLOT_DPI, bbox_inches='tight')
+        plt.close(fig)
+        logger.info(f"Saved peak width histogram to {output_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save peak width histogram: {e}")
+        plt.close(fig)
+        return False

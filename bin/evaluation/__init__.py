@@ -89,11 +89,27 @@ from .plots import (
     plot_missed_peak_sj_support,
     plot_peak_recovery_by_expression,
     plot_peak_recovery_by_width,
+    plot_read_end_frequency_at_peaks,
+    plot_read_end_frequency_stratified_by_width,
+    plot_peak_width_histogram,
 )
 
 from .ted_core import (
     tss_tts_metrics,
     calculate_ted_metrics,
+)
+
+from .training_data import (
+    cluster_read_ends,
+    compute_cluster_features,
+    compute_sequence_features,
+    parse_gtf_ends,
+    label_clusters_with_peaks,
+    generate_training_data,
+    write_training_data,
+    generate_and_write_training_data,
+    check_internal_priming,
+    compute_internal_priming_features,
 )
 
 from .flair_structural import (
@@ -195,9 +211,23 @@ __all__ = [
     'plot_missed_peak_sj_support',
     'plot_peak_recovery_by_expression',
     'plot_peak_recovery_by_width',
+    'plot_read_end_frequency_at_peaks',
+    'plot_read_end_frequency_stratified_by_width',
+    'plot_peak_width_histogram',
     # ted_core
     'tss_tts_metrics',
     'calculate_ted_metrics',
+    # training_data
+    'cluster_read_ends',
+    'compute_cluster_features',
+    'compute_sequence_features',
+    'parse_gtf_ends',
+    'label_clusters_with_peaks',
+    'generate_training_data',
+    'write_training_data',
+    'generate_and_write_training_data',
+    'check_internal_priming',
+    'compute_internal_priming_features',
     # flair_structural
     'get_chromtoint',
     'get_regions',
