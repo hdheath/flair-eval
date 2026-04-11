@@ -3,6 +3,7 @@ data/
 work/
 .results/
 results/
+results_dryrun/
 reports/
 .nextflow*
 *.log
@@ -10,3 +11,27 @@ reports/
 # macOS cruft
 .DS_Store
 ._*
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Temp / scratch
+.tmp/
+tmp_panel_smoke/
+*.err
+*.out
+
+# Archives of removed features
+archived/
+
+# Stale files
+flair.test.suite.nf.bak
+plots/
+plots_tech/
+scripts/
+
+# SLURM / cluster
+*.err
+*.out

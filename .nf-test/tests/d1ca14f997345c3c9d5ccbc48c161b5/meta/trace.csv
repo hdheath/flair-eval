@@ -1,0 +1,2 @@
+task_id	hash	native_id	process	tag	name	status	exit	submit	start	complete	duration	realtime	workdir
+1	92/facd70	2370613	PrepareReferencePeaks	sample1_pre-aligned_chr-test	PrepareReferencePeaks (sample1_pre-aligned_chr-test)	COMPLETED	0	2026-02-20 14:18:55.795	2026-02-20 14:18:55.871	2026-02-20 14:19:02.458	6.7s	125ms	/private/groups/brookslab/hdheath/projects/flair-eval/.nf-test/tests/d1ca14f997345c3c9d5ccbc48c161b5/work/92/facd7071e341abd1177f4d45cf1e78

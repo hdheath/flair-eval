@@ -1,0 +1,91 @@
+nextflow_process {
+    name "FlairPartition"
+    script "../../../modules/partition/main.nf"
+    process "FlairPartition"
+
+    test("Extracts region from BAM with pre-aligned BED") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        'sample1',
+                        'pre-aligned',
+                        file("${params.test_data_dir}/tiny_reads.bam"),
+                        file("${params.test_data_dir}/tiny_reads.bam.bai"),
+                        file("${params.test_data_dir}/tiny_reads.bed"),
+                        'chr-test',
+                        '--region chr_test:1000-40000',
+                        file("${params.test_data_dir}/tiny_genome.fa"),
+                        file("${params.test_data_dir}/tiny_annotation.gtf"),
+                        file("${params.test_data_dir}/tiny_cage_peaks.bed"),
+                        file("${params.test_data_dir}/tiny_quantseq_peaks.bed")
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.partitioned.size() == 1
+
+            def result = process.out.partitioned[0]
+            assert result[0] == 'test_set'
+            assert result[1] == 'sample1'
+            assert result[2] == 'pre-aligned'
+            assert result[3] == 'chr-test'
+
+            // BAM, BAI, BED, genome, GTF should all exist
+            assert path(result[4]).exists()
+            assert path(result[5]).exists()
+            assert path(result[6]).exists()
+            assert path(result[7]).exists()
+            assert path(result[8]).exists()
+        }
+    }
+
+    test("Handles missing CAGE peaks") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                def no_cage = file("NO_CAGE")
+                no_cage.text = ''
+
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        'sample1',
+                        'pre-aligned',
+                        file("${params.test_data_dir}/tiny_reads.bam"),
+                        file("${params.test_data_dir}/tiny_reads.bam.bai"),
+                        file("${params.test_data_dir}/tiny_reads.bed"),
+                        'chr-test',
+                        '--region chr_test:1000-40000',
+                        file("${params.test_data_dir}/tiny_genome.fa"),
+                        file("${params.test_data_dir}/tiny_annotation.gtf"),
+                        no_cage,
+                        file("${params.test_data_dir}/tiny_quantseq_peaks.bed")
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            def result = process.out.partitioned[0]
+            assert path(result[4]).exists()   // partitioned BAM
+            assert path(result[6]).exists()   // partitioned BED
+        }
+    }
+}

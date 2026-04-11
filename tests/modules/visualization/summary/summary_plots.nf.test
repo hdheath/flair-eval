@@ -1,0 +1,57 @@
+nextflow_process {
+    name "SummaryPlots"
+    script "../../../../modules/visualization/summary/main.nf"
+    process "SummaryPlots"
+
+    test("Generates precision-recall plot from evaluation TSVs") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        file("${params.test_data_dir}/tiny_evaluation.tsv")
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.precision_recall_plot.size() == 1
+            def plot = path(process.out.precision_recall_plot[0])
+            assert plot.exists()
+            assert plot.toString().endsWith('.png')
+        }
+    }
+
+    test("Handles list of evaluation files") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        [file("${params.test_data_dir}/tiny_evaluation.tsv"),
+                         file("${params.test_data_dir}/tiny_evaluation_2.tsv")]
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.precision_recall_plot.size() >= 1
+        }
+    }
+}

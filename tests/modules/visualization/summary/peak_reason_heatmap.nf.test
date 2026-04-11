@@ -1,0 +1,52 @@
+nextflow_process {
+    name "PeakReasonHeatmap"
+    script "../../../../modules/visualization/summary/main.nf"
+    process "PeakReasonHeatmap"
+
+    test("Generates heatmap from CAGE peak reasons") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        [file("${params.test_data_dir}/tiny_cage_peak_reasons.tsv")]
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+
+    test("Handles combined CAGE and QuantSeq reasons") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        [file("${params.test_data_dir}/tiny_cage_peak_reasons.tsv"),
+                         file("${params.test_data_dir}/tiny_quantseq_peak_reasons.tsv")]
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+}

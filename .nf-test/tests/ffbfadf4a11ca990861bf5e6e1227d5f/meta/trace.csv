@@ -1,0 +1,2 @@
+task_id	hash	native_id	process	tag	name	status	exit	submit	start	complete	duration	realtime	workdir
+1	55/48030e	2378039	SummaryPlots	test_set	SummaryPlots (test_set)	COMPLETED	0	2026-02-20 14:21:36.948	2026-02-20 14:21:37.055	2026-02-20 14:21:51.644	14.7s	8.3s	/private/groups/brookslab/hdheath/projects/flair-eval/.nf-test/tests/ffbfadf4a11ca990861bf5e6e1227d5f/work/55/48030ed88da8c48879d10db0ceba4d

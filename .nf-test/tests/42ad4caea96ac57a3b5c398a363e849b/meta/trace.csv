@@ -1,0 +1,2 @@
+task_id	hash	native_id	process	tag	name	status	exit	submit	start	complete	duration	realtime	workdir
+1	75/d51be3	2354755	UTRFeatures	test_set	UTRFeatures (test_set)	COMPLETED	0	2026-02-20 14:11:03.449	2026-02-20 14:11:03.502	2026-02-20 14:11:13.085	9.6s	4.5s	/private/groups/brookslab/hdheath/projects/flair-eval/.nf-test/tests/42ad4caea96ac57a3b5c398a363e849b/work/75/d51be36674c89fb3c8ff326dfc58dc
