@@ -17,6 +17,7 @@ from evaluation import (
     get_timing_data,
     write_timing_report,
 )
+from evaluation.ted_internal_stats import aggregate_ted_log
 from evaluation.utils import get_logger
 
 logger = get_logger()
@@ -35,28 +36,45 @@ def main():
     parser.add_argument("--bam", type=Path, help="BAM file for alignment metrics")
     parser.add_argument("--corrected-bed", type=Path, help="Corrected BED (for collapse stage)")
     parser.add_argument("--reads-bed", type=Path, help="Reads BED12 file (for read-end entropy analysis)")
-    parser.add_argument("--prime5-peaks", type=Path, help="Experimental 5' peaks (CAGE)")
-    parser.add_argument("--prime3-peaks", type=Path, help="Experimental 3' peaks (QuantSeq/PolyA)")
+    parser.add_argument("--prime5-peaks", type=Path, help="Experimental 5' peaks (e.g. CAGE)")
+    parser.add_argument("--prime3-peaks", type=Path, help="Experimental 3' peaks (e.g. QuantSeq, dRNA)")
     parser.add_argument("--ref-prime5-peaks", type=Path, help="Reference 5' peaks")
     parser.add_argument("--ref-prime3-peaks", type=Path, help="Reference 3' peaks")
     parser.add_argument("--window", type=int, default=50, help="Distance window for TSS/TTS matching (default: 50)")
+    parser.add_argument("--window-5prime", type=int, default=None, help="Override window for 5' (TSS) matching (default: use --window)")
+    parser.add_argument("--window-3prime", type=int, default=None, help="Override window for 3' (TTS) matching (default: use --window)")
     parser.add_argument("--stage", choices=["collapse", "transcriptome"], default="collapse", help="Pipeline stage")
     parser.add_argument("--output", type=Path, required=True, help="Output TSV file")
-    parser.add_argument("--plot-output-dir", type=Path, help="Directory to save distance histogram plots (CAGE and QuantSeq)")
+    parser.add_argument("--plot-output-dir", type=Path, help="Directory to save distance histogram plots (5' and 3' peaks)")
+    parser.add_argument(
+        "--plot-mode",
+        choices=["panel", "individual", "both"],
+        default="panel",
+        help="Plot output mode: combined panel plots, individual legacy plots, or both (default: panel)",
+    )
+    parser.add_argument("--plot-dpi", type=int, default=1000, help="DPI for generated plots (default: 1000)")
     parser.add_argument("--test-regions-dir", type=Path, help="Directory to save recoverable peak BED files")
     parser.add_argument("--genome", type=Path, help="Genome FASTA file (for motif analysis)")
+    parser.add_argument("--gtf", type=Path, help="Reference GTF file (for gene-name annotation in region TSVs)")
     parser.add_argument("--timing-output", type=Path, help="Output file for performance timing report")
-    parser.add_argument("--max-count-cage", type=int, help="Fixed y-axis limit for CAGE histograms across runs (optional)")
-    parser.add_argument("--max-count-quantseq", type=int, help="Fixed y-axis limit for QuantSeq histograms across runs (optional)")
+    parser.add_argument("--max-count-cage", type=int, help="Fixed y-axis limit for 5' peak histograms across runs (optional)")
+    parser.add_argument("--max-count-quantseq", type=int, help="Fixed y-axis limit for 3' peak histograms across runs (optional)")
     parser.add_argument("--max-count-ref-tss", type=int, help="Fixed y-axis limit for Reference TSS histograms across runs (optional)")
     parser.add_argument("--max-count-ref-tts", type=int, help="Fixed y-axis limit for Reference TTS histograms across runs (optional)")
     # Simplified evaluation mode (for Bambu/IsoQuant - no read-level metrics)
     parser.add_argument("--skip-read-metrics", action="store_true", 
                         help="Skip read-level metrics (entropy, motifs, truncation). Use for Bambu/IsoQuant evaluation.")
+    # Signal bedGraph files for Phase 4.1 signal-based evaluation metrics
+    parser.add_argument("--cage-signal-plus", type=Path, help="5' signal plus-strand bedGraph")
+    parser.add_argument("--cage-signal-minus", type=Path, help="5' signal minus-strand bedGraph")
+    parser.add_argument("--quantseq-signal-plus", type=Path, help="3' signal plus-strand bedGraph")
+    parser.add_argument("--quantseq-signal-minus", type=Path, help="3' signal minus-strand bedGraph")
+    parser.add_argument("--ted-log", type=Path, help="Path to FLAIR's per-locus TED decision log (produced by --ted --ted_log). Aggregated into run-level ted_internal_* metrics.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     # Metadata arguments for result tracking
     parser.add_argument("--test-name", type=str, help="Test set name")
     parser.add_argument("--dataset-name", type=str, help="Dataset name")
+    parser.add_argument("--library-type", type=str, help="Library type (e.g., pacbio_cDNA, ont_cDNA, ont_dRNA)")
     parser.add_argument("--align-mode", type=str, help="Alignment mode")
     parser.add_argument("--partition-mode", type=str, help="Partition mode")
     parser.add_argument("--pipeline-mode", type=str, help="Pipeline mode (process label)")
@@ -121,11 +139,20 @@ def main():
         plot_prefix=plot_prefix,
         test_regions_dir=args.test_regions_dir,
         genome_path=args.genome,
+        gtf_path=args.gtf,
         max_count_cage=args.max_count_cage,
         max_count_quantseq=args.max_count_quantseq,
         max_count_ref_tss=args.max_count_ref_tss,
         max_count_ref_tts=args.max_count_ref_tts,
+        plot_mode=args.plot_mode,
+        plot_dpi=args.plot_dpi,
         skip_read_metrics=args.skip_read_metrics,
+        window_5prime=args.window_5prime,
+        window_3prime=args.window_3prime,
+        cage_signal_plus=args.cage_signal_plus,
+        cage_signal_minus=args.cage_signal_minus,
+        quantseq_signal_plus=args.quantseq_signal_plus,
+        quantseq_signal_minus=args.quantseq_signal_minus,
     )
 
     # Clean up temp file if we created one
@@ -137,6 +164,8 @@ def main():
         metrics = {'test_name': args.test_name, **metrics}
     if args.dataset_name:
         metrics = {'dataset': args.dataset_name, **metrics}
+    if args.library_type:
+        metrics = {'library_type': args.library_type, **metrics}
     if args.align_mode:
         metrics = {'align_mode': args.align_mode, **metrics}
     if args.partition_mode:
@@ -152,6 +181,18 @@ def main():
         else:
             transcriptome_mode = args.pipeline_mode
         metrics = {'transcriptome_mode': transcriptome_mode, **metrics}
+
+    # Aggregate FLAIR TED internal stats from per-locus log if provided
+    if args.ted_log and args.ted_log.exists() and args.ted_log.stat().st_size > 0:
+        logger.info(f"Aggregating TED internal stats from {args.ted_log}")
+        ted_internal = aggregate_ted_log(str(args.ted_log))
+        if ted_internal:
+            metrics.update(ted_internal)
+            logger.info(f"Added {len(ted_internal)} TED internal metrics")
+        else:
+            logger.warning(f"No locus_summary rows found in TED log: {args.ted_log}")
+    elif args.ted_log:
+        logger.warning(f"TED log file not found or empty: {args.ted_log}")
 
     # Write output as TSV
     with open(args.output, 'w', newline='') as f:

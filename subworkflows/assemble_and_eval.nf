@@ -1,0 +1,281 @@
+// =============================================================================
+// Subworkflow: ASSEMBLE_AND_EVAL
+// =============================================================================
+// Runs all transcriptome assemblers (FLAIR, Bambu, IsoQuant, IsoSeq, FLAMES,
+// StringTie2) on partitioned data, prepares reference peaks, and runs the
+// unified Evaluation process.
+//
+// Inputs:
+//   partitioned_ch    — FlairPartition.out.partitioned
+//   datasets_ch       — master datasets channel (for mode maps + junction_tab)
+//   dataset_signal_ch — per-dataset signal bedGraph paths
+//   placeholders      — map of placeholder file paths (NO_ISOFORMS_BED, etc.)
+//
+// Emits:
+//   evaluation_results     — tupled Evaluation TSVs
+//   cage_peak_reason_tsvs  — per-peak CAGE reason TSVs
+//   quantseq_peak_reason_tsvs — per-peak QuantSeq reason TSVs
+//   all_eval_inputs        — full joined eval channel (for divergence/UTR downstream)
+//   flair_transcriptome    — FlairTranscriptome.out.transcriptome (for PlotIsoforms)
+// =============================================================================
+
+include { FlairTranscriptome   } from '../modules/transcriptome/flair/main'
+include { BambuAssembly        } from '../modules/transcriptome/bambu/main'
+include { IsoQuantAssembly     } from '../modules/transcriptome/isoquant/main'
+include { IsoSeqAssembly       } from '../modules/transcriptome/isoseq/main'
+include { FlamesAssembly       } from '../modules/transcriptome/flames/main'
+include { StringTie2Assembly    } from '../modules/transcriptome/stringtie2/main'
+include { PrepareReferencePeaks} from '../modules/evaluation/prepare_ref_peaks/main'
+include { Evaluation           } from '../modules/evaluation/main'
+include { TedEndPrecision       } from '../modules/evaluation/main'
+include { FirstpassComparison   } from '../modules/evaluation/main'
+
+workflow ASSEMBLE_AND_EVAL {
+
+    take:
+        partitioned_ch     // [test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks]
+        datasets_ch        // [test_name, dataset, align_modes, partition_modes, transcriptome_modes, bambu_modes, isoquant_modes, isoseq_modes, flames_modes, stringtie2_modes]
+        dataset_signal_ch  // [test_name, library_type, cage_signal_plus, cage_signal_minus, quantseq_signal_plus, quantseq_signal_minus]
+        placeholders       // val: map with keys NO_ISOFORMS_BED, NO_ISOFORMS_GTF, NO_JUNCTION_TAB, NO_CAGE, NO_QUANTSEQ
+
+    main:
+        // Cache the join of partitioned outputs × dataset modes
+        partitioned_with_modes = partitioned_ch.combine(datasets_ch, by: 0)
+
+        // --- FLAIR ---
+        transcriptome_inputs = partitioned_with_modes.flatMap {
+            test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            def partition_args = ds_partition_modes[partition_mode] ?: ''
+            def junction_tab_file = dataset.junction_tab ? file(dataset.junction_tab) : placeholders.NO_JUNCTION_TAB
+            ds_transcriptome_modes.collect { transcriptome_mode, transcriptome_args ->
+                [test_name, dataset_name, align_mode, partition_mode, partition_args, bam, bai, genome, gtf,
+                 transcriptome_mode, transcriptome_args, junction_tab_file]
+            }
+        }
+        FlairTranscriptome(transcriptome_inputs)
+
+        // --- Bambu ---
+        bambu_inputs = partitioned_with_modes.flatMap {
+            test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            if (ds_bambu_modes.isEmpty()) return []
+            ds_bambu_modes.collect { bambu_mode, bambu_args ->
+                [test_name, dataset_name, align_mode, partition_mode, bam, bai, genome, gtf,
+                 bambu_mode, bambu_args]
+            }
+        }
+        BambuAssembly(bambu_inputs)
+
+        // --- IsoQuant ---
+        // Filter isoquant modes by library_type: pacbio samples → isoquant_pacbio only,
+        // ont samples → isoquant_ont only, unknown → run all modes.
+        // Special mode "auto": automatically injects --data_type based on library_type,
+        // so all samples share the same mode name in results.
+        isoquant_inputs = partitioned_with_modes.flatMap {
+            test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            if (ds_isoquant_modes.isEmpty()) return []
+            def lib = dataset.library_type ?: 'unknown'
+            ds_isoquant_modes.findAll { isoquant_mode, isoquant_args ->
+                if (isoquant_mode == 'auto') return true
+                if (lib == 'unknown') return true
+                if (lib.startsWith('pacbio') && isoquant_mode == 'pacbio') return true
+                if (lib.startsWith('ont') && isoquant_mode == 'ont') return true
+                return false
+            }.collect { isoquant_mode, isoquant_args ->
+                def resolved_args = isoquant_args
+                if (isoquant_mode == 'auto') {
+                    def auto_data_type = lib.startsWith('pacbio') ? 'pacbio_ccs' : 'nanopore'
+                    resolved_args = "--data_type ${auto_data_type}" + (isoquant_args ? " ${isoquant_args}" : "")
+                }
+                [test_name, dataset_name, align_mode, partition_mode, bam, bai, genome, gtf,
+                 isoquant_mode, resolved_args]
+            }
+        }
+        IsoQuantAssembly(isoquant_inputs)
+
+        // --- IsoSeq ---
+        // IsoSeq is designed for PacBio CCS/HiFi data; only run on pacbio samples.
+        isoseq_inputs = partitioned_with_modes.flatMap {
+            test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            if (ds_isoseq_modes.isEmpty()) return []
+            def lib = dataset.library_type ?: 'unknown'
+            // Only run IsoSeq on PacBio data or unknown library type
+            if (lib != 'unknown' && !lib.startsWith('pacbio')) return []
+            ds_isoseq_modes.collect { isoseq_mode, isoseq_args ->
+                [test_name, dataset_name, align_mode, partition_mode, bam, bai, genome, gtf,
+                 isoseq_mode, isoseq_args]
+            }
+        }
+        IsoSeqAssembly(isoseq_inputs)
+
+        // --- FLAMES ---
+        flames_inputs = partitioned_with_modes.flatMap {
+            test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            if (ds_flames_modes.isEmpty()) return []
+            ds_flames_modes.collect { flames_mode, flames_args ->
+                [test_name, dataset_name, align_mode, partition_mode, bam, bai, genome, gtf,
+                 flames_mode, flames_args]
+            }
+        }
+        FlamesAssembly(flames_inputs)
+
+        // --- StringTie2 ---
+        stringtie2_inputs = partitioned_with_modes.flatMap {
+            test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            if (ds_stringtie2_modes.isEmpty()) return []
+            ds_stringtie2_modes.collect { stringtie2_mode, stringtie2_args ->
+                [test_name, dataset_name, align_mode, partition_mode, bam, bai, genome, gtf,
+                 stringtie2_mode, stringtie2_args]
+            }
+        }
+        StringTie2Assembly(stringtie2_inputs)
+
+        // --- Reference peaks ---
+        ref_peak_inputs = partitioned_ch.map {
+            test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks ->
+            [test_name, dataset_name, align_mode, partition_mode, gtf]
+        }
+        PrepareReferencePeaks(ref_peak_inputs)
+
+        // --- Evaluation context: partition + ref peaks + signals + metadata ---
+        eval_context_ch = partitioned_ch
+            .combine(PrepareReferencePeaks.out.ref_peaks, by: [0, 1, 2, 3])
+            .combine(dataset_signal_ch, by: [0])
+            .map { test_name, dataset_name, align_mode, partition_mode,
+                   bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
+                   ref_tss, ref_tts,
+                   library_type,
+                   cage_signal_plus, cage_signal_minus, quantseq_signal_plus, quantseq_signal_minus ->
+                [test_name, dataset_name, align_mode, partition_mode,
+                 bam, bai, bed, genome, gtf,
+                 cage_peaks ?: placeholders.NO_CAGE, quantseq_peaks ?: placeholders.NO_QUANTSEQ,
+                 ref_tss, ref_tts,
+                 library_type,
+                 cage_signal_plus, cage_signal_minus, quantseq_signal_plus, quantseq_signal_minus]
+            }
+
+        // --- Normalize assembler outputs to common shape ---
+        flair_isoform_ch = FlairTranscriptome.out.transcriptome.map {
+            test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode,
+            isoforms_bed, isoforms_gtf, isoforms_fa, isoform_counts, isoform_read_map, ted_log ->
+            [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode,
+             isoforms_bed, placeholders.NO_ISOFORMS_GTF, isoform_read_map, ted_log]
+        }
+
+        // NO_TED_LOG placeholder for non-FLAIR assemblers
+        def NO_TED_LOG = file("${workflow.workDir}/NO_TED_LOG")
+        if (!NO_TED_LOG.exists()) { NO_TED_LOG.text = '' }
+
+        bambu_isoform_ch = BambuAssembly.out.bambu_gtf.map {
+            test_name, dataset_name, align_mode, partition_mode, bambu_mode, isoforms_gtf, isoform_read_map ->
+            [test_name, dataset_name, align_mode, partition_mode, "bambu_${bambu_mode}",
+             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG]
+        }
+
+        isoquant_isoform_ch = IsoQuantAssembly.out.isoquant_gtf.map {
+            test_name, dataset_name, align_mode, partition_mode, isoquant_mode, isoforms_gtf, isoform_read_map ->
+            [test_name, dataset_name, align_mode, partition_mode, "isoquant_${isoquant_mode}",
+             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG]
+        }
+
+        isoseq_isoform_ch = IsoSeqAssembly.out.isoseq_gff.map {
+            test_name, dataset_name, align_mode, partition_mode, isoseq_mode, isoforms_gff, isoform_read_map ->
+            [test_name, dataset_name, align_mode, partition_mode, "isoseq_${isoseq_mode}",
+             placeholders.NO_ISOFORMS_BED, isoforms_gff, isoform_read_map, NO_TED_LOG]
+        }
+
+        flames_isoform_ch = FlamesAssembly.out.flames_gtf.map {
+            test_name, dataset_name, align_mode, partition_mode, flames_mode, isoforms_gtf, isoform_read_map ->
+            [test_name, dataset_name, align_mode, partition_mode, "flames_${flames_mode}",
+             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG]
+        }
+
+        stringtie2_isoform_ch = StringTie2Assembly.out.stringtie2_gtf.map {
+            test_name, dataset_name, align_mode, partition_mode, stringtie2_mode, isoforms_gtf, isoform_read_map ->
+            [test_name, dataset_name, align_mode, partition_mode, "stringtie2_${stringtie2_mode}",
+             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG]
+        }
+
+        // Single combine: normalize → mix → join context
+        // Using .mix() instead of .concat() so evaluations can start as
+        // soon as any assembler finishes, rather than waiting in order.
+        all_eval_inputs = flair_isoform_ch
+            .mix(bambu_isoform_ch, isoquant_isoform_ch,
+                 isoseq_isoform_ch, flames_isoform_ch, stringtie2_isoform_ch)
+            .combine(eval_context_ch, by: [0, 1, 2, 3])
+
+        Evaluation(all_eval_inputs)
+
+        // --- TED End Precision (all FLAIR modes with orthogonal peaks) ---
+        // Runs for any FLAIR transcriptome mode where at least one peak file exists.
+        // Includes default (non-TED) as a baseline for comparison.
+        ted_precision_inputs = FlairTranscriptome.out.transcriptome
+            .combine(eval_context_ch, by: [0, 1, 2, 3])
+            .filter { items ->
+                // After combine: [0-3]=keys, 4=partition_args, 5=transcriptome_mode,
+                // 6=isoforms_bed, 7=gtf_out, 8=fa, 9=counts, 10=read_map, 11=ted_log,
+                // 12=bam, 13=bai, 14=bed, 15=genome, 16=gtf, 17=cage_peaks, 18=quantseq_peaks, ...
+                def cage = items[17]
+                def quantseq = items[18]
+                def has_cage = cage.name != 'NO_CAGE' && cage.size() > 0
+                def has_quantseq = quantseq.name != 'NO_QUANTSEQ' && quantseq.size() > 0
+                has_cage || has_quantseq
+            }
+            .map { test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode,
+                   isoforms_bed, _isoforms_gtf, _isoforms_fa, _isoform_counts, _read_map, _ted_log,
+                   bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
+                   ref_tss, ref_tts, library_type,
+                   _cage_plus, _cage_minus, _qs_plus, _qs_minus ->
+                [test_name, dataset_name, transcriptome_mode,
+                 isoforms_bed, gtf, cage_peaks, quantseq_peaks, partition_args]
+            }
+        TedEndPrecision(ted_precision_inputs)
+
+        // --- Firstpass vs Final comparison ---
+        // Joins firstpass BED with final isoforms BED + eval context to compare
+        // pre-TED and post-TED end precision/recall.
+        firstpass_comparison_inputs = FlairTranscriptome.out.firstpass
+            .combine(FlairTranscriptome.out.transcriptome, by: [0, 1, 2, 3, 4, 5])
+            .combine(eval_context_ch, by: [0, 1, 2, 3])
+            .filter { items ->
+                // firstpass BED must exist (non-empty)
+                def firstpass = items[4 + 2]  // firstpass_bed after 4 keys + partition_args + mode
+                firstpass != null && firstpass.size() > 0
+            }
+            .filter { items ->
+                // Need at least one orthogonal peak file
+                // After combine: keys(4) + partition_args(1) + mode(1) + firstpass(1) + transcriptome_tuple(6) + eval_context(...)
+                // Layout: 0-3=keys, 4=partition_args, 5=mode, 6=firstpass_bed,
+                //         7=isoforms_bed, 8=gtf_out, 9=fa, 10=counts, 11=read_map, 12=ted_log,
+                //         13=bam, 14=bai, 15=bed, 16=genome, 17=gtf, 18=cage, 19=quantseq, ...
+                def cage = items[18]
+                def quantseq = items[19]
+                def has_cage = cage.name != 'NO_CAGE' && cage.size() > 0
+                def has_quantseq = quantseq.name != 'NO_QUANTSEQ' && quantseq.size() > 0
+                has_cage || has_quantseq
+            }
+            .map { test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode,
+                   firstpass_bed,
+                   isoforms_bed, _isoforms_gtf, _isoforms_fa, _isoform_counts, _read_map, _ted_log,
+                   bam, bai, bed, genome, gtf, cage_peaks, quantseq_peaks,
+                   ref_tss, ref_tts, library_type,
+                   _cage_plus, _cage_minus, _qs_plus, _qs_minus ->
+                [test_name, dataset_name, transcriptome_mode,
+                 firstpass_bed, isoforms_bed, gtf, cage_peaks, quantseq_peaks, partition_args]
+            }
+        FirstpassComparison(firstpass_comparison_inputs)
+
+    emit:
+        evaluation_results      = Evaluation.out.evaluation_results
+        cage_peak_reason_tsvs   = Evaluation.out.cage_peak_reason_tsvs
+        quantseq_peak_reason_tsvs = Evaluation.out.quantseq_peak_reason_tsvs
+        ted_precision_metrics   = TedEndPrecision.out.metrics
+        firstpass_comparison    = FirstpassComparison.out.comparison
+        all_eval_inputs         = all_eval_inputs
+        flair_transcriptome     = FlairTranscriptome.out.transcriptome
+}

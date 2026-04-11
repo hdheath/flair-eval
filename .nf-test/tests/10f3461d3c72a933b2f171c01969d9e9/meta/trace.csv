@@ -1,0 +1,2 @@
+task_id	hash	native_id	process	tag	name	status	exit	submit	start	complete	duration	realtime	workdir
+1	7b/6efc74	2375614	PeakReasonHeatmap	test_set	PeakReasonHeatmap (test_set)	COMPLETED	0	2026-02-20 14:20:43.005	2026-02-20 14:20:43.062	2026-02-20 14:20:50.969	8s	1.6s	/private/groups/brookslab/hdheath/projects/flair-eval/.nf-test/tests/10f3461d3c72a933b2f171c01969d9e9/work/7b/6efc74993c71d6192e2b76cebedf7c

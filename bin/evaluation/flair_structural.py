@@ -106,7 +106,7 @@ def parse_gtf_transcripts(gtf_file):
             if line[2] == 'exon':
                 chrom, strand = line[0], line[6]
                 start, end = int(line[3]), int(line[4])
-                tname = line[-1].split('transcript_id "')[1].split('"')[0]
+                tname = line[8].split('transcript_id "')[1].split('"')[0]
                 if (chrom, strand) not in transcripttoexons:
                     transcripttoexons[(chrom, strand)] = {}
                 if tname not in transcripttoexons[(chrom, strand)]:
@@ -187,3 +187,70 @@ def classify_transcripts(isoforms_file, refjuncs, refjuncchains, refseends):
                 sen += 1
 
     return fsm, ism, nic, nnc, sem, sen, tot
+
+
+def classify_transcripts_per_isoform(isoforms_file, refjuncs, refjuncchains, refseends):
+    """Classify each transcript and return per-isoform labels with coordinates.
+
+    Returns list of dicts:
+        [{name, chrom, start, end, strand, category, n_exons}, ...]
+    Categories: FSM, ISM, NIC, NNC, SEM, SEN
+    """
+    results = []
+    for line in open(isoforms_file):
+        parts = line.rstrip().split('\t')
+        if len(parts) < 12:
+            continue
+        chrom, strand = parts[0], parts[5]
+        iso_name = parts[3]
+        start, end = int(parts[1]), int(parts[2])
+        esizes = [int(x) for x in parts[10].rstrip(',').split(',')]
+        estarts = [int(x) for x in parts[11].rstrip(',').split(',')]
+        exons = [(start + estarts[i], start + estarts[i] + esizes[i])
+                 for i in range(len(esizes))]
+        introns = tuple([(exons[x][1], exons[x + 1][0])
+                         for x in range(len(exons) - 1)])
+        n_exons = len(exons)
+
+        if len(introns) > 0:
+            if (chrom, strand) not in refjuncchains:
+                cat = "NNC"
+            elif introns in refjuncchains[(chrom, strand)]:
+                cat = "FSM"
+            else:
+                cat = None
+                myjuncstring = str(introns)[1:-1]
+                for juncchain in refjuncchains[(chrom, strand)]:
+                    if myjuncstring in str(juncchain):
+                        cat = "ISM"
+                        break
+                if cat is None:
+                    allFound = True
+                    if (chrom, strand) in refjuncs:
+                        for j in introns:
+                            if j not in refjuncs[(chrom, strand)]:
+                                allFound = False
+                                break
+                    else:
+                        allFound = False
+                    cat = "NIC" if allFound else "NNC"
+        else:
+            cat = "SEN"
+            if (chrom, strand) in refseends:
+                for refstart, refend in refseends[(chrom, strand)]:
+                    if (abs(start - refstart) < SINGLE_EXON_END_WINDOW and
+                            abs(end - refend) < SINGLE_EXON_END_WINDOW):
+                        cat = "SEM"
+                        break
+
+        results.append({
+            "name": iso_name,
+            "chrom": chrom,
+            "start": start,
+            "end": end,
+            "strand": strand,
+            "category": cat,
+            "n_exons": n_exons,
+        })
+
+    return results

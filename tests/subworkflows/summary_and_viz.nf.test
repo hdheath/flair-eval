@@ -1,0 +1,80 @@
+nextflow_workflow {
+    name "SUMMARY_AND_VIZ"
+    script "../../subworkflows/summary_and_viz.nf"
+    workflow "SUMMARY_AND_VIZ"
+
+    test("Runs all summary and visualization steps with two tool modes") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+                test_name     = 'nf_test'
+            }
+            workflow {
+                """
+                // -- evaluation_results: tuple [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, eval_tsv]
+                input[0] = Channel.of(
+                    tuple('nf_test', 'sample1', 'pre-aligned', 'chr-test', 'default',
+                          file("${params.test_data_dir}/tiny_evaluation.tsv")),
+                    tuple('nf_test', 'sample1', 'pre-aligned', 'chr-test', 'bambu_default',
+                          file("${params.test_data_dir}/tiny_evaluation_dup.tsv"))
+                )
+
+                // -- cage_peak_reason_tsvs: tuple [test_name, path]
+                input[1] = Channel.of(
+                    tuple('nf_test', file("${params.test_data_dir}/tiny_cage_peak_reasons.tsv"))
+                )
+
+                // -- quantseq_peak_reason_tsvs: tuple [test_name, path]
+                input[2] = Channel.of(
+                    tuple('nf_test', file("${params.test_data_dir}/tiny_quantseq_peak_reasons.tsv"))
+                )
+
+                // -- all_eval_inputs: 21-field channel
+                def no_bed   = file("NO_ISOFORMS_BED")
+                no_bed.text  = ''
+                def no_gtf   = file("NO_ISOFORMS_GTF")
+                no_gtf.text  = ''
+
+                input[3] = Channel.of(
+                    tuple('nf_test', 'sample1', 'pre-aligned', 'chr-test', 'default',
+                          file("${params.test_data_dir}/tiny_isoforms.bed"),
+                          no_gtf,
+                          file("${params.test_data_dir}/tiny_read_map.txt"),
+                          file("${params.test_data_dir}/tiny_reads.bam"),
+                          file("${params.test_data_dir}/tiny_reads.bam.bai"),
+                          file("${params.test_data_dir}/tiny_reads.bed"),
+                          file("${params.test_data_dir}/tiny_genome.fa"),
+                          file("${params.test_data_dir}/tiny_annotation.gtf"),
+                          file("${params.test_data_dir}/tiny_cage_peaks.bed"),
+                          file("${params.test_data_dir}/tiny_quantseq_peaks.bed"),
+                          file("${params.test_data_dir}/tiny_ref_tss.bed"),
+                          file("${params.test_data_dir}/tiny_ref_tts.bed"),
+                          '', '', '', ''),
+                    tuple('nf_test', 'sample1', 'pre-aligned', 'chr-test', 'bambu_default',
+                          no_bed,
+                          file("${params.test_data_dir}/tiny_isoforms.gtf"),
+                          file("${params.test_data_dir}/tiny_read_map_tool2.txt"),
+                          file("${params.test_data_dir}/tiny_reads.bam"),
+                          file("${params.test_data_dir}/tiny_reads.bam.bai"),
+                          file("${params.test_data_dir}/tiny_reads.bed"),
+                          file("${params.test_data_dir}/tiny_genome.fa"),
+                          file("${params.test_data_dir}/tiny_annotation.gtf"),
+                          file("${params.test_data_dir}/tiny_cage_peaks.bed"),
+                          file("${params.test_data_dir}/tiny_quantseq_peaks.bed"),
+                          file("${params.test_data_dir}/tiny_ref_tss.bed"),
+                          file("${params.test_data_dir}/tiny_ref_tts.bed"),
+                          '', '', '', '')
+                )
+                """
+            }
+        }
+
+        then {
+            assert workflow.success
+
+            // SummaryPlots should produce precision/recall plot
+            assert workflow.out.precision_recall_plot.size() == 1
+        }
+    }
+}

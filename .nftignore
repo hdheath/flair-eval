@@ -1,0 +1,11 @@
+# nf-test ignore patterns
+# Exclude large result directories from test discovery
+results/
+work/
+.nextflow/
+.nextflow.log*
+*.bam
+*.bai
+
+# Exclude fixture generator (not a test)
+tests/create_fixtures.py

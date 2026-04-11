@@ -132,10 +132,10 @@ def gtf_to_bed12(gtf_path: Path, output_path: Path, source_filter: str = None, v
             block_sizes = ','.join(str(end - start) for start, end in exons)
             block_starts = ','.join(str(start - tx_start) for start, end in exons)
             
-            # Build transcript name (include gene_id if different from tx_id)
+            # Build transcript name — use bare transcript_id to match read map IDs
+            # (convert_read_map.py outputs bare transcript IDs; prepending gene_id
+            # would cause mismatches in downstream analysis like concordance metrics)
             name = tx_id
-            if gene_id and gene_id != tx_id:
-                name = f"{gene_id}_{tx_id}"
             
             # Write BED12 line
             bed_fields = [

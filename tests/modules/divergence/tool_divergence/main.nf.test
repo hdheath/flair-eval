@@ -1,0 +1,64 @@
+nextflow_process {
+    name "ToolDivergence"
+    script "../../../../modules/divergence/tool_divergence/main.nf"
+    process "ToolDivergence"
+
+    test("Runs with two tool BED files") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        [file("${params.test_data_dir}/tiny_isoforms.bed"),
+                         file("${params.test_data_dir}/tiny_isoforms_tool2.bed")],
+                        'flair:tiny_isoforms.bed bambu:tiny_isoforms_tool2.bed',
+                        [file("${params.test_data_dir}/tiny_read_map.txt"),
+                         file("${params.test_data_dir}/tiny_read_map_tool2.txt")],
+                        'flair:tiny_read_map.txt bambu:tiny_read_map_tool2.txt',
+                        file("${params.test_data_dir}/tiny_reads.bed"),
+                        file("${params.test_data_dir}/tiny_genome.fa")
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+
+    test("Handles GTF inputs (auto-converts to BED)") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        [file("${params.test_data_dir}/tiny_isoforms.bed"),
+                         file("${params.test_data_dir}/tiny_isoforms.gtf")],
+                        'flair:tiny_isoforms.bed isoquant:tiny_isoforms.gtf',
+                        [file("${params.test_data_dir}/tiny_read_map.txt")],
+                        'flair:tiny_read_map.txt',
+                        file("${params.test_data_dir}/tiny_reads.bed"),
+                        file("${params.test_data_dir}/tiny_genome.fa")
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+}

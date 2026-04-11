@@ -1,0 +1,163 @@
+nextflow_process {
+    name "Evaluation"
+    script "../../../modules/evaluation/main.nf"
+    process "Evaluation"
+
+    test("FLAIR mode with BED isoforms") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        'sample1',
+                        'pre-aligned',
+                        'chr-test',
+                        'default',
+                        file("${params.test_data_dir}/tiny_isoforms.bed"),
+                        file("${params.test_data_dir}/tiny_isoforms.gtf"),
+                        file("${params.test_data_dir}/tiny_read_map.txt"),
+                        file("${params.test_data_dir}/tiny_reads.bam"),
+                        file("${params.test_data_dir}/tiny_reads.bam.bai"),
+                        file("${params.test_data_dir}/tiny_reads.bed"),
+                        file("${params.test_data_dir}/tiny_genome.fa"),
+                        file("${params.test_data_dir}/tiny_annotation.gtf"),
+                        file("${params.test_data_dir}/tiny_cage_peaks.bed"),
+                        file("${params.test_data_dir}/tiny_quantseq_peaks.bed"),
+                        file("${params.test_data_dir}/tiny_ref_tss.bed"),
+                        file("${params.test_data_dir}/tiny_ref_tts.bed"),
+                        '',
+                        '',
+                        '',
+                        ''
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+
+            assert process.out.evaluation_results.size() == 1
+            def result = process.out.evaluation_results[0]
+            assert result[0] == 'test_set'
+            assert result[1] == 'sample1'
+            assert result[4] == 'default'
+
+            def eval_file = path(result[5])
+            assert eval_file.exists()
+            def lines = eval_file.readLines()
+            assert lines.size() >= 2
+        }
+    }
+
+    test("Bambu mode with GTF input") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                def no_bed = file("NO_ISOFORMS_BED")
+                no_bed.text = ''
+
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        'sample1',
+                        'pre-aligned',
+                        'chr-test',
+                        'bambu_default',
+                        no_bed,
+                        file("${params.test_data_dir}/tiny_isoforms.gtf"),
+                        file("${params.test_data_dir}/tiny_read_map.txt"),
+                        file("${params.test_data_dir}/tiny_reads.bam"),
+                        file("${params.test_data_dir}/tiny_reads.bam.bai"),
+                        file("${params.test_data_dir}/tiny_reads.bed"),
+                        file("${params.test_data_dir}/tiny_genome.fa"),
+                        file("${params.test_data_dir}/tiny_annotation.gtf"),
+                        file("${params.test_data_dir}/tiny_cage_peaks.bed"),
+                        file("${params.test_data_dir}/tiny_quantseq_peaks.bed"),
+                        file("${params.test_data_dir}/tiny_ref_tss.bed"),
+                        file("${params.test_data_dir}/tiny_ref_tts.bed"),
+                        '',
+                        '',
+                        '',
+                        ''
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            def result = process.out.evaluation_results[0]
+            assert result[4] == 'bambu_default'
+
+            def eval_file = path(result[5])
+            assert eval_file.exists()
+            assert eval_file.readLines().size() >= 2
+        }
+    }
+
+    test("Handles missing CAGE peaks gracefully") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                def no_cage = file("NO_CAGE")
+                no_cage.text = ''
+                def no_quantseq = file("NO_QUANTSEQ")
+                no_quantseq.text = ''
+                def no_ref_tss = file("NO_REF_TSS")
+                no_ref_tss.text = ''
+                def no_ref_tts = file("NO_REF_TTS")
+                no_ref_tts.text = ''
+
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        'sample1',
+                        'pre-aligned',
+                        'chr-test',
+                        'default',
+                        file("${params.test_data_dir}/tiny_isoforms.bed"),
+                        file("${params.test_data_dir}/tiny_isoforms.gtf"),
+                        file("${params.test_data_dir}/tiny_read_map.txt"),
+                        file("${params.test_data_dir}/tiny_reads.bam"),
+                        file("${params.test_data_dir}/tiny_reads.bam.bai"),
+                        file("${params.test_data_dir}/tiny_reads.bed"),
+                        file("${params.test_data_dir}/tiny_genome.fa"),
+                        file("${params.test_data_dir}/tiny_annotation.gtf"),
+                        no_cage,
+                        no_quantseq,
+                        no_ref_tss,
+                        no_ref_tts,
+                        '',
+                        '',
+                        '',
+                        ''
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+            assert process.out.evaluation_results.size() == 1
+            assert process.out.cage_peak_reason_tsvs.size() == 0
+            assert process.out.quantseq_peak_reason_tsvs.size() == 0
+        }
+    }
+}

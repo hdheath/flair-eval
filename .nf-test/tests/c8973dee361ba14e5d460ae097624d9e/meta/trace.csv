@@ -1,0 +1,2 @@
+task_id	hash	native_id	process	tag	name	status	exit	submit	start	complete	duration	realtime	workdir
+1	5b/380a77	2373431	FlairPartition	sample1_pre-aligned_chr-test	FlairPartition (sample1_pre-aligned_chr-test)	COMPLETED	0	2026-02-20 14:19:57.450	2026-02-20 14:19:57.538	2026-02-20 14:20:05.298	7.8s	510ms	/private/groups/brookslab/hdheath/projects/flair-eval/.nf-test/tests/c8973dee361ba14e5d460ae097624d9e/work/5b/380a77f2d363a4aa1084d94bd87551

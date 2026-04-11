@@ -1,0 +1,2 @@
+task_id	hash	native_id	process	tag	name	status	exit	submit	start	complete	duration	realtime	workdir
+1	e3/c6f1ef	2352163	ToolDivergence	test_set	ToolDivergence (test_set)	COMPLETED	0	2026-02-20 14:10:18.098	2026-02-20 14:10:18.185	2026-02-20 14:10:30.554	12.5s	7.4s	/private/groups/brookslab/hdheath/projects/flair-eval/.nf-test/tests/b5d1acbc849084930ef8715ccb9af91c/work/e3/c6f1eff8e6e1a616c5714e5c41be3d

@@ -1,0 +1,57 @@
+nextflow_process {
+    name "UTRFeatures"
+    script "../../../../modules/divergence/utr_features/main.nf"
+    process "UTRFeatures"
+
+    test("Runs with isoform BED files") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        [file("${params.test_data_dir}/tiny_isoforms.bed")],
+                        'flair:tiny_isoforms.bed',
+                        file("${params.test_data_dir}/tiny_genome.fa"),
+                        file("${params.test_data_dir}/tiny_annotation.gtf")
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+
+    test("Handles GTF isoform input") {
+
+        when {
+            params {
+                test_data_dir = "${projectDir}/tests/data"
+            }
+            process {
+                """
+                input[0] = Channel.of(
+                    tuple(
+                        'test_set',
+                        [file("${params.test_data_dir}/tiny_isoforms.gtf")],
+                        'bambu:tiny_isoforms.gtf',
+                        file("${params.test_data_dir}/tiny_genome.fa"),
+                        file("${params.test_data_dir}/tiny_annotation.gtf")
+                    )
+                )
+                """
+            }
+        }
+
+        then {
+            assert process.success
+        }
+    }
+}

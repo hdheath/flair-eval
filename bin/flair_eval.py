@@ -27,8 +27,6 @@ from evaluation import (
     parse_gtf_transcripts,
     build_reference_structures,
     classify_transcripts,
-    plot_transcript_classification,
-    plot_splice_junction_support,
 )
 
 
@@ -47,6 +45,7 @@ def main():
     # Metadata arguments
     parser.add_argument('--test-name', help='Test set name')
     parser.add_argument('--dataset-name', help='Dataset name')
+    parser.add_argument('--library-type', help='Library type (e.g., pacbio_cDNA, ont_cDNA, ont_dRNA)')
     parser.add_argument('--align-mode', help='Alignment mode')
     parser.add_argument('--partition-mode', help='Partition mode')
     parser.add_argument('--pipeline-mode', help='Pipeline mode (e.g., collapse_with-gtf_default)')
@@ -137,6 +136,8 @@ def main():
             header.append('test_name')
         if args.dataset_name:
             header.append('dataset')
+        if args.library_type:
+            header.append('library_type')
         if args.align_mode:
             header.append('align_mode')
         if args.partition_mode:
@@ -166,6 +167,8 @@ def main():
             values.append(args.test_name)
         if args.dataset_name:
             values.append(args.dataset_name)
+        if args.library_type:
+            values.append(args.library_type)
         if args.align_mode:
             values.append(args.align_mode)
         if args.partition_mode:
@@ -179,38 +182,8 @@ def main():
                       fsm, ism, nic, nnc, sem, sen])
         outfile.write('\t'.join(str(v) for v in values) + '\n')
 
-    # Generate structural evaluation plots if output directory specified
-    if args.plot_output_dir:
-        plot_dir = Path(args.plot_output_dir)
-        plot_dir.mkdir(parents=True, exist_ok=True)
-        prefix = args.plot_prefix
-
-        # Transcript classification bar chart
-        classification_counts = {
-            'FSM': fsm, 'ISM': ism, 'NIC': nic,
-            'NNC': nnc, 'SEM': sem, 'SEN': sen,
-        }
-        plot_transcript_classification(
-            classification_counts=classification_counts,
-            output_path=plot_dir / f"{prefix}_transcript_classification.png",
-            title="Transcript Structural Classification",
-        )
-
-        # Splice junction support chart
-        unsupported_sjc = tot_sjc - sup_sjc - subset_sjc
-        unsupported_se = tot_se - sup_se
-        plot_splice_junction_support(
-            supported_sjc=sup_sjc,
-            subset_sjc=subset_sjc,
-            unsupported_sjc=unsupported_sjc,
-            supported_se=sup_se,
-            unsupported_se=unsupported_se,
-            output_path=plot_dir / f"{prefix}_splice_junction_support.png",
-            title="Splice Junction Support",
-        )
-
-        if args.verbose:
-            print(f"Saved structural evaluation plots to {plot_dir}")
+    # Note: transcript_classification and splice_junction_support plots removed.
+    # These metrics are still computed and written to the evaluation TSV above.
 
     # Clean up temp file if we created one
     if temp_bed and Path(temp_bed).exists():

@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pysam
+
 
 def run_command(cmd):
     """Run a shell command and check for errors."""
@@ -21,20 +23,34 @@ def run_command(cmd):
 
 
 def partition_bam(input_bam, output_bam, region):
-    """Extract reads from BAM file for specified region."""
+    """Extract reads from BAM file for specified region(s).
+
+    Args:
+        input_bam: path to input BAM
+        output_bam: path to output BAM
+        region: a single region string OR a list of region strings
+    """
     # Index input BAM if needed
     bai_file = Path(str(input_bam) + ".bai")
     if not bai_file.exists():
         print(f"Indexing input BAM file: {input_bam}")
         run_command(["samtools", "index", str(input_bam)])
 
-    # Extract region - samtools accepts both 'chr1' and 'chr1:1000-2000' formats
-    print(f"Extracting region {region} from {input_bam}")
-    run_command([
-        "samtools", "view", "-b",
-        "-o", str(output_bam),
-        str(input_bam), region
-    ])
+    regions = region if isinstance(region, list) else [region]
+
+    if len(regions) == 1:
+        # Single region: direct extraction
+        print(f"Extracting region {regions[0]} from {input_bam}")
+        run_command([
+            "samtools", "view", "-b",
+            "-o", str(output_bam),
+            str(input_bam), regions[0]
+        ])
+    else:
+        # Multiple regions: samtools view accepts multiple region args
+        print(f"Extracting {len(regions)} regions from {input_bam}: {regions}")
+        cmd = ["samtools", "view", "-b", "-o", str(output_bam), str(input_bam)] + regions
+        run_command(cmd)
 
     # Index the output BAM file (required for FLAIR transcriptome)
     print(f"Indexing output BAM file: {output_bam}")
@@ -42,20 +58,29 @@ def partition_bam(input_bam, output_bam, region):
 
 
 def bam_to_bed12(input_bam, output_bed):
-    """Convert BAM file to BED12 format using bedtools.
-
-    This is used when generating BED from a partitioned BAM file,
-    avoiding the need to convert the entire BAM before partitioning.
-    """
+    """Convert BAM file to BED12 format using pysam."""
     print(f"Converting BAM to BED12: {input_bam} -> {output_bed}")
 
-    # Use shell redirection for output
-    cmd = f"bedtools bamtobed -bed12 -i {input_bam} > {output_bed}"
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    with pysam.AlignmentFile(str(input_bam), "rb") as bam, open(str(output_bed), "w") as out:
+        for read in bam.fetch():
+            if read.is_unmapped:
+                continue
+            chrom = read.reference_name
+            start = read.reference_start
+            end = read.reference_end
+            name = read.query_name
+            score = read.mapping_quality
+            strand = "-" if read.is_reverse else "+"
 
-    if result.returncode != 0:
-        print(f"Error converting BAM to BED: {result.stderr}", file=sys.stderr)
-        sys.exit(1)
+            blocks = read.get_blocks()
+            if not blocks:
+                continue
+            block_count = len(blocks)
+            block_sizes = ",".join(str(b[1] - b[0]) for b in blocks)
+            block_starts = ",".join(str(b[0] - start) for b in blocks)
+
+            out.write(f"{chrom}\t{start}\t{end}\t{name}\t{score}\t{strand}\t"
+                       f"{start}\t{end}\t0\t{block_count}\t{block_sizes}\t{block_starts}\n")
 
     print(f"Created BED12: {output_bed}")
 
@@ -155,104 +180,155 @@ def partition_bed_file(input_file, output_file, chrom, start, end, create_empty_
 
 def partition_gtf_file(input_file, output_file, chrom, start, end):
     """Filter GTF file to only include transcripts fully contained in the region."""
+    return _partition_gtf_multi(input_file, output_file, [(chrom, start, end)])
+
+
+def _partition_bed_multi(input_file, output_file, parsed_regions):
+    """Filter BED file to include entries in ANY of the specified regions.
+
+    Args:
+        input_file: Path to input BED file
+        output_file: Path to output BED file
+        parsed_regions: list of (chrom, start, end) tuples
+    """
+    input_file = Path(input_file)
+    output_file = Path(output_file)
     if not input_file.exists():
-        print(f"Warning: GTF file not found, skipping: {input_file}")
+        print(f"Warning: File not found, skipping: {input_file}")
         return False
-    
-    # Format region string for logging
-    if start is None or end is None:
-        region_str = chrom  # Whole chromosome
-    else:
-        region_str = f"{chrom}:{start}-{end}"
-        
-    print(f"Filtering GTF {input_file} for {region_str}")
-    
-    # First pass: identify which transcripts are fully contained in the region
-    valid_transcripts = set()
-    transcript_bounds = {}  # transcript_id -> (start, end)
-    
-    with open(input_file, 'r') as infile:
-        for line in infile:
-            if line.startswith('#'):
-                continue
-            
-            fields = line.strip().split('\t')
-            if len(fields) < 9:
-                continue
-            
-            gtf_chrom = fields[0]
-            feature_type = fields[2]
-            gtf_start = int(fields[3])  # GTF is 1-based
-            gtf_end = int(fields[4])    # GTF end is inclusive
-            attributes = fields[8]
-            
-            # Only look at chromosome of interest
-            if gtf_chrom != chrom:
-                continue
-            
-            # Extract transcript_id from attributes
-            transcript_id = None
-            for attr in attributes.split(';'):
-                attr = attr.strip()
-                if attr.startswith('transcript_id'):
-                    transcript_id = attr.split('"')[1]
-                    break
-            
-            if not transcript_id:
-                continue
-            
-            # Track transcript boundaries (using actual coordinates, not 0-based)
-            if transcript_id not in transcript_bounds:
-                transcript_bounds[transcript_id] = [gtf_start, gtf_end]
-            else:
-                transcript_bounds[transcript_id][0] = min(transcript_bounds[transcript_id][0], gtf_start)
-                transcript_bounds[transcript_id][1] = max(transcript_bounds[transcript_id][1], gtf_end)
-    
-    # Determine which transcripts are fully contained
-    if start is None or end is None:
-        # No region filter - keep all transcripts on this chromosome
-        valid_transcripts = set(transcript_bounds.keys())
-    else:
-        # GTF uses 1-based inclusive coordinates
-        # Our region uses 0-based half-open (start is 0-based, end is exclusive in BED convention)
-        # So we need: transcript_start >= start+1 AND transcript_end <= end
-        for transcript_id, (trans_start, trans_end) in transcript_bounds.items():
-            if trans_start >= start + 1 and trans_end <= end:
-                valid_transcripts.add(transcript_id)
-    
-    print(f"Found {len(valid_transcripts)} transcripts fully contained in {region_str}")
-    
-    # Second pass: write only lines belonging to valid transcripts
+
+    region_strs = []
+    for chrom, start, end in parsed_regions:
+        if start is None:
+            region_strs.append(chrom)
+        else:
+            region_strs.append(f"{chrom}:{start}-{end}")
+    print(f"Filtering {input_file} for regions: {region_strs}")
+
     with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
         for line in infile:
             if line.startswith('#'):
                 outfile.write(line)
                 continue
-            
+            fields = line.strip().split('\t')
+            if len(fields) < 3:
+                outfile.write(line)
+                continue
+            bed_chrom = fields[0]
+            try:
+                bed_start = int(fields[1])
+                bed_end = int(fields[2])
+            except ValueError:
+                outfile.write(line)
+                continue
+
+            for r_chrom, r_start, r_end in parsed_regions:
+                if bed_chrom != r_chrom:
+                    continue
+                if r_start is None or r_end is None:
+                    outfile.write(line)
+                    break
+                elif bed_start >= r_start and bed_end <= r_end:
+                    outfile.write(line)
+                    break
+
+    print(f"Created: {output_file}")
+    return True
+
+
+def _partition_gtf_multi(input_file, output_file, parsed_regions):
+    """Filter GTF to include transcripts fully contained in ANY of the specified regions.
+
+    Args:
+        input_file: Path to input GTF file
+        output_file: Path to output GTF file
+        parsed_regions: list of (chrom, start, end) tuples
+    """
+    input_file = Path(input_file)
+    output_file = Path(output_file)
+    if not input_file.exists():
+        print(f"Warning: GTF file not found, skipping: {input_file}")
+        return False
+
+    region_strs = []
+    for chrom, start, end in parsed_regions:
+        if start is None:
+            region_strs.append(chrom)
+        else:
+            region_strs.append(f"{chrom}:{start}-{end}")
+    print(f"Filtering GTF {input_file} for regions: {region_strs}")
+
+    # Build set of target chromosomes for quick filtering
+    target_chroms = set(chrom for chrom, _, _ in parsed_regions)
+
+    # First pass: identify which transcripts are fully contained in any region
+    transcript_bounds = {}  # transcript_id -> (chrom, start, end)
+
+    with open(input_file, 'r') as infile:
+        for line in infile:
+            if line.startswith('#'):
+                continue
             fields = line.strip().split('\t')
             if len(fields) < 9:
-                outfile.write(line)  # Keep non-standard lines
                 continue
-            
             gtf_chrom = fields[0]
-            attributes = fields[8]
-            
-            # Only process lines from target chromosome
-            if gtf_chrom != chrom:
+            if gtf_chrom not in target_chroms:
                 continue
-            
-            # Extract transcript_id
+            gtf_start = int(fields[3])  # 1-based
+            gtf_end = int(fields[4])    # inclusive
+            attributes = fields[8]
             transcript_id = None
             for attr in attributes.split(';'):
                 attr = attr.strip()
                 if attr.startswith('transcript_id'):
                     transcript_id = attr.split('"')[1]
                     break
-            
-            # Write line if transcript is valid
+            if not transcript_id:
+                continue
+            if transcript_id not in transcript_bounds:
+                transcript_bounds[transcript_id] = [gtf_chrom, gtf_start, gtf_end]
+            else:
+                transcript_bounds[transcript_id][1] = min(transcript_bounds[transcript_id][1], gtf_start)
+                transcript_bounds[transcript_id][2] = max(transcript_bounds[transcript_id][2], gtf_end)
+
+    # Determine which transcripts are fully contained in at least one region
+    valid_transcripts = set()
+    for tid, (t_chrom, t_start, t_end) in transcript_bounds.items():
+        for r_chrom, r_start, r_end in parsed_regions:
+            if t_chrom != r_chrom:
+                continue
+            if r_start is None or r_end is None:
+                valid_transcripts.add(tid)
+                break
+            elif t_start >= r_start + 1 and t_end <= r_end:
+                valid_transcripts.add(tid)
+                break
+
+    print(f"Found {len(valid_transcripts)} transcripts fully contained in target regions")
+
+    # Second pass: write valid transcript lines
+    with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
+        for line in infile:
+            if line.startswith('#'):
+                outfile.write(line)
+                continue
+            fields = line.strip().split('\t')
+            if len(fields) < 9:
+                outfile.write(line)
+                continue
+            gtf_chrom = fields[0]
+            if gtf_chrom not in target_chroms:
+                continue
+            attributes = fields[8]
+            transcript_id = None
+            for attr in attributes.split(';'):
+                attr = attr.strip()
+                if attr.startswith('transcript_id'):
+                    transcript_id = attr.split('"')[1]
+                    break
             if transcript_id and transcript_id in valid_transcripts:
                 outfile.write(line)
-    
+
     print(f"Created: {output_file}")
     return True
 
@@ -263,7 +339,9 @@ def main():
     parser.add_argument("--bed", help="Input BED file from FLAIR align (optional if --generate-bed is used)")
     parser.add_argument("--generate-bed", action="store_true",
                         help="Generate BED12 from BAM after partitioning (saves time/storage for region partitions)")
-    parser.add_argument("--region", help="Region to extract (e.g., chr1:1000-2000)")
+    parser.add_argument("--region", nargs='+',
+                        help="Region(s) to extract (e.g., chr1:1000-2000 chr3:48000000-53000000). "
+                             "Multiple regions are merged into one output.")
     parser.add_argument("--all", action="store_true", help="Pass through all data (no filtering)")
     parser.add_argument("--output-prefix", required=True, help="Prefix for output files")
     
@@ -295,10 +373,18 @@ def main():
     input_bam = Path(args.bam)
     input_bed = Path(args.bed) if args.bed else None
 
+    # Parse regions — may be a list of 1+ regions
+    parsed_regions = []  # list of (chrom, start, end) tuples
     if args.region:
-        chrom, start, end = parse_region(args.region)
+        for r in args.region:
+            parsed_regions.append(parse_region(r))
+    # chrom/start/end shortcuts for single-region backward compat
+    if len(parsed_regions) == 1:
+        chrom, start, end = parsed_regions[0]
+    elif len(parsed_regions) > 1:
+        chrom, start, end = None, None, None  # multi-region mode
     else:
-        chrom, start, end = None, None, None  # For --all mode
+        chrom, start, end = None, None, None  # --all mode
 
     # Check inputs exist
     if not input_bam.exists():
@@ -341,18 +427,12 @@ def main():
             print("Error: No BED source available in --all mode", file=sys.stderr)
             sys.exit(1)
     else:
-        # Format region string for logging
-        if start is None or end is None:
-            region_display = chrom
-        else:
-            region_display = f"{chrom}:{start}-{end}"
-
-        print(f"Partitioning to region: {region_display}")
+        print(f"Partitioning to region(s): {[r for r in args.region]}")
         print(f"Input BAM: {input_bam}")
         print(f"Output BAM: {output_bam}")
         print(f"Output BED: {output_bed}")
 
-        # Partition BAM first (fast with samtools)
+        # Partition BAM first (fast with samtools — supports multiple regions natively)
         partition_bam(input_bam, output_bam, args.region)
 
         # Handle BED: either partition existing or generate from partitioned BAM
@@ -362,7 +442,7 @@ def main():
             bam_to_bed12(output_bam, output_bed)
         elif input_bed:
             print(f"Input BED: {input_bed}")
-            partition_bed_file(input_bed, output_bed, chrom, start, end)
+            _partition_bed_multi(input_bed, output_bed, parsed_regions)
         else:
             print("Error: No BED source available", file=sys.stderr)
             sys.exit(1)
@@ -413,9 +493,9 @@ def main():
                 created_files.append(str(output_genome))
                     
             elif file_type == 'gtf' and input_path.exists():
-                # For GTF, filter annotations to only include transcripts fully in this region
+                # For GTF, filter annotations to only include transcripts fully in target region(s)
                 output_gtf = Path(f"{args.output_prefix}_annotation.gtf") 
-                if partition_gtf_file(input_path, output_gtf, chrom, start, end):
+                if _partition_gtf_multi(input_path, output_gtf, parsed_regions):
                     created_files.append(str(output_gtf))
                     
             elif input_path.exists():
@@ -424,7 +504,10 @@ def main():
                 # For CAGE and QuantSeq, always create output file (even if empty) to satisfy Nextflow
                 # The evaluation script handles empty/missing files gracefully
                 create_empty = (file_type in ['cage', 'quantseq'])
-                if partition_bed_file(input_path, output_file, chrom, start, end, create_empty_if_missing=create_empty):
+                if _partition_bed_multi(input_path, output_file, parsed_regions):
+                    created_files.append(str(output_file))
+                elif create_empty:
+                    output_file.touch()
                     created_files.append(str(output_file))
             elif file_type in ['cage', 'quantseq']:
                 # Input file doesn't exist but we need to create empty output for Nextflow

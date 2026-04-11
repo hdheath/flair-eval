@@ -1,0 +1,11 @@
+name: nextflow_env
+channels:
+  - conda-forge
+dependencies:
+  - nextflow
+  - pandas
+  - pysam
+  - matplotlib
+  - numpy
+  - intervaltree
+prefix: /private/home/hdheath/miniforge3/envs/nextflow_env

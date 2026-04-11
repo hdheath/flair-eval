@@ -1,0 +1,406 @@
+// =============================================================================
+// Subworkflow: SUMMARY_AND_VIZ
+// =============================================================================
+// Runs all downstream summary and comparison analyses after evaluation:
+//   - SummaryPlots: precision/recall, concordance, signal support comparisons
+//   - PeakReasonHeatmap: cross-mode CAGE/QuantSeq peak reason breakdowns
+//   - TpOverlapPlot: pairwise TP set comparisons vs baseline
+//   - IsoformsPerGeneHist: isoforms-per-gene frequency histogram + box plot
+//   - JaccardHeatmapPlot: splice-junction + transcript-end Jaccard heatmaps
+//   - TotalIsoformsPlot: total isoform count per method
+//   - EndSignalScatterPlot: per-isoform KDE-coloured TSS vs TTS scatter
+//   - CumulativeSignalPlot: cumulative orthogonal signal curves
+//   - ToolDivergence: Jaccard agreement + motif collapse across assemblers
+//   - UTRFeatures: 5'UTR length, GC content, uORF comparison
+//
+// Inputs:
+//   evaluation_results      — Evaluation.out.evaluation_results
+//   cage_peak_reason_tsvs   — Evaluation.out.cage_peak_reason_tsvs
+//   quantseq_peak_reason_tsvs — Evaluation.out.quantseq_peak_reason_tsvs
+//   all_eval_inputs         — full joined eval channel (for isoform file extraction)
+//   dataset_signal_ch       — per-dataset signal bedGraph paths
+// =============================================================================
+
+include { CombineEvaluationTSVs     } from '../modules/visualization/summary/main'
+include { SummaryPlots              } from '../modules/visualization/summary/main'
+include { PeakReasonHeatmap         } from '../modules/visualization/summary/main'
+include { SignalSupportDashboard    } from '../modules/visualization/summary/main'
+include { IsoformDiversity          } from '../modules/visualization/summary/main'
+include { TpOverlapPlot             } from '../modules/visualization/summary/main'
+include { IsoformsPerGeneHist       } from '../modules/visualization/summary/main'
+include { JaccardHeatmapPlot       } from '../modules/visualization/summary/main'
+include { GeneVariationPlot        } from '../modules/visualization/summary/main'
+include { SjcEndDistancePlot       } from '../modules/visualization/summary/main'
+include { TotalIsoformsPlot        } from '../modules/visualization/summary/main'
+include { EndSignalScatterPlot     } from '../modules/visualization/summary/main'
+include { CumulativeSignalPlot     } from '../modules/visualization/summary/main'
+include { TedScoreVsSignal         } from '../modules/visualization/summary/main'
+include { SjcAltEndAnalysis        } from '../modules/visualization/summary/main'
+include { TedComponentDiagnostic   } from '../modules/visualization/summary/main'
+include { ReadEndSignalScatter     } from '../modules/visualization/summary/main'
+include { PeakRocCurves            } from '../modules/visualization/summary/main'
+
+include { CrossSamplePrecisionRecall} from '../modules/visualization/cross_sample/main'
+include { CrossSamplePeakRoc        } from '../modules/visualization/cross_sample/main'
+include { CrossSampleConcordance    } from '../modules/visualization/cross_sample/main'
+include { CrossSampleSignalSupport  } from '../modules/visualization/cross_sample/main'
+include { CrossSampleLandscape      } from '../modules/visualization/cross_sample/main'
+
+include { CrossSampleToolEndAccuracy} from '../modules/visualization/cross_sample/main'
+include { ReadAudit                 } from '../modules/visualization/read_audit/main'
+include { ReadAuditSummary          } from '../modules/visualization/read_audit/main'
+
+workflow SUMMARY_AND_VIZ {
+
+    take:
+        evaluation_results         // tuple [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, eval_tsv]
+        cage_peak_reason_tsvs      // tuple [test_name, path]
+        quantseq_peak_reason_tsvs  // tuple [test_name, path]
+        all_eval_inputs            // full 23-field eval channel (for divergence + UTR)
+        dataset_signal_ch          // tuple [test_name, library_type, cage_signal_plus, cage_signal_minus, qs_signal_plus, qs_signal_minus]
+
+    main:
+
+
+        // --- Summary plots: group evaluation TSVs by test_name ---
+        all_evaluations = evaluation_results
+            .map { test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, eval_tsv ->
+                [test_name, eval_tsv]
+            }
+            .groupTuple()
+
+        SummaryPlots(all_evaluations)
+        CombineEvaluationTSVs(all_evaluations)
+
+        // --- Peak-reason heatmap: mix CAGE + QuantSeq, group by test_name ---
+        all_reason_tsvs = cage_peak_reason_tsvs
+            .mix(quantseq_peak_reason_tsvs)
+            .groupTuple()
+            .map { test_name, tsvs -> [test_name, tsvs.flatten()] }
+
+        PeakReasonHeatmap(all_reason_tsvs)
+
+        // --- Signal-stratified peak recovery curves (per dataset) ---
+        PeakRocCurves(all_reason_tsvs)
+
+        // --- Signal-vs-support scatter dashboard: tiled per-mode scatters ---
+        SignalSupportDashboard(all_reason_tsvs)
+
+        // --- TP overlap analysis: pairwise TP set comparisons vs baseline ---
+        TpOverlapPlot(all_reason_tsvs)
+
+        // --- Isoforms-per-gene histogram: from BED12 or GTF isoform files ---
+        // Pick whichever isoform file is available for each tool:
+        //   FLAIR → BED12 (items[5]), Bambu/IsoQuant → GTF (items[6])
+        isoforms_per_gene_ch = all_eval_inputs
+            .map { items ->
+                // items[0]=test_name, [4]=transcriptome_mode, [5]=isoforms_bed, [6]=isoforms_gtf
+                def isoform_file = items[5].name.contains('NO_ISOFORMS_BED') ? items[6] : items[5]
+                [items[0], items[4], isoform_file]
+            }
+            .filter { !it[2].name.contains('NO_ISOFORMS') }
+            .groupTuple(by: [0])
+            .map { test_name, labels, files ->
+                [test_name, labels, files.flatten()]
+            }
+
+        IsoformsPerGeneHist(isoforms_per_gene_ch)
+
+        // --- Jaccard heatmaps: splice-junction + transcript-end Jaccard ---
+        // Reuses the same BED12 channel as isoforms_per_gene_ch
+        JaccardHeatmapPlot(isoforms_per_gene_ch)
+
+        // --- Gene variation proportions: alt ends vs alt splicing ---
+        GeneVariationPlot(isoforms_per_gene_ch)
+
+        // --- SJC end distance plots: pairwise distances within SJC groups ---
+        // Labels include dataset_name for per-sample faceting.
+        sjc_ch = all_eval_inputs
+            .map { items ->
+                def isoform_file = items[5].name.contains('NO_ISOFORMS_BED') ? items[6] : items[5]
+                [items[0], "${items[1]}::${items[4]}", isoform_file]
+            }
+            .filter { !it[2].name.contains('NO_ISOFORMS') }
+            .groupTuple(by: [0])
+            .map { test_name, labels, files ->
+                [test_name, labels, files.flatten()]
+            }
+
+        SjcEndDistancePlot(sjc_ch)
+
+        // --- Total isoforms bar chart: from eval TSVs ---
+        total_iso_ch = evaluation_results
+            .map { test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, eval_tsv ->
+                [test_name, eval_tsv]
+            }
+            .groupTuple()
+
+        TotalIsoformsPlot(total_iso_ch)
+
+        // --- Signal-dependent plots: end-signal scatter + cumulative signal ---
+        // Only run when signal bedGraph tracks are available.
+        // Pick BED12 or GTF isoform file for each tool.
+        signal_bed_ch = all_eval_inputs
+            .map { items ->
+                def isoform_file = items[5].name.contains('NO_ISOFORMS_BED') ? items[6] : items[5]
+                [items[0], items[4], isoform_file]
+            }
+            .filter { !it[2].name.contains('NO_ISOFORMS') }
+            .groupTuple(by: [0])
+            .map { test_name, labels, files ->
+                [test_name, labels, files.flatten()]
+            }
+
+        signal_plot_inputs = signal_bed_ch
+            .join(
+                dataset_signal_ch
+                    .filter { it[2] && it[3] && it[4] && it[5] }  // all 4 signal tracks present
+                    .map { test_name, library_type,
+                           cage_signal_plus, cage_signal_minus,
+                           quantseq_signal_plus, quantseq_signal_minus ->
+                        [test_name,
+                         cage_signal_plus, cage_signal_minus,
+                         quantseq_signal_plus, quantseq_signal_minus]
+                    }
+            )
+            .map { test_name, bed_labels, bed_files,
+                   cage_signal_plus, cage_signal_minus,
+                   quantseq_signal_plus, quantseq_signal_minus ->
+                [test_name, bed_labels, bed_files,
+                 cage_signal_plus, cage_signal_minus,
+                 quantseq_signal_plus, quantseq_signal_minus]
+            }
+
+        EndSignalScatterPlot(signal_plot_inputs)
+
+        // --- TED score vs signal: compare internal scoring to orthogonal signal ---
+        TedScoreVsSignal(signal_plot_inputs)
+
+        // --- Cumulative signal plot: uses read-map files for read counts ---
+        // Build channel carrying isoform files + read-map files per method.
+        cumulative_bed_ch = all_eval_inputs
+            .map { items ->
+                def isoform_file = items[5].name.contains('NO_ISOFORMS_BED') ? items[6] : items[5]
+                [items[0], items[4], isoform_file, items[7]]
+            }
+            .filter { !it[2].name.contains('NO_ISOFORMS') }
+            .groupTuple(by: [0])
+            .map { test_name, labels, files, read_maps ->
+                [test_name, labels, files.flatten(), read_maps.flatten()]
+            }
+
+        cumulative_signal_inputs = cumulative_bed_ch
+            .join(
+                dataset_signal_ch
+                    .filter { it[2] && it[3] && it[4] && it[5] }
+                    .map { test_name, library_type,
+                           cage_signal_plus, cage_signal_minus,
+                           quantseq_signal_plus, quantseq_signal_minus ->
+                        [test_name,
+                         cage_signal_plus, cage_signal_minus,
+                         quantseq_signal_plus, quantseq_signal_minus]
+                    }
+            )
+            .map { test_name, bed_labels, bed_files, read_maps,
+                   cage_signal_plus, cage_signal_minus,
+                   quantseq_signal_plus, quantseq_signal_minus ->
+                [test_name, bed_labels, bed_files, read_maps,
+                 cage_signal_plus, cage_signal_minus,
+                 quantseq_signal_plus, quantseq_signal_minus]
+            }
+
+        CumulativeSignalPlot(cumulative_signal_inputs)
+
+        // --- SJC alt-end analysis: TP/FP breakdown + boundary signal ---
+        // Reuses cumulative_bed_ch (has read_maps) and adds peak files.
+        // Peaks are per-dataset but identical within a test_name; take first.
+        dataset_peaks_ch = all_eval_inputs
+            .map { items -> [items[0], items[14], items[15]] }  // test_name, cage_peaks, qs_peaks
+            .unique { it[0] }  // one per test_name
+
+        sjc_alt_end_inputs = cumulative_bed_ch
+            .join(dataset_peaks_ch)
+            .join(
+                dataset_signal_ch
+                    .filter { it[2] && it[3] && it[4] && it[5] }
+                    .map { test_name, library_type,
+                           cage_signal_plus, cage_signal_minus,
+                           quantseq_signal_plus, quantseq_signal_minus ->
+                        [test_name,
+                         cage_signal_plus, cage_signal_minus,
+                         quantseq_signal_plus, quantseq_signal_minus]
+                    }
+            )
+            .map { test_name, bed_labels, bed_files, read_maps,
+                   cage_peaks, quantseq_peaks,
+                   cage_signal_plus, cage_signal_minus,
+                   quantseq_signal_plus, quantseq_signal_minus ->
+                [test_name, bed_labels, bed_files, read_maps,
+                 cage_peaks, quantseq_peaks,
+                 cage_signal_plus, cage_signal_minus,
+                 quantseq_signal_plus, quantseq_signal_minus]
+            }
+
+        SjcAltEndAnalysis(sjc_alt_end_inputs)
+
+        // --- TED component diagnostic: ROC, violins, heatmaps, weight sweep ---
+        // Uses signal_bed_ch (no read maps) + peaks + signal tracks.
+        ted_diag_inputs = signal_bed_ch
+            .join(dataset_peaks_ch)
+            .join(
+                dataset_signal_ch
+                    .filter { it[2] && it[3] && it[4] && it[5] }
+                    .map { test_name, library_type,
+                           cage_signal_plus, cage_signal_minus,
+                           quantseq_signal_plus, quantseq_signal_minus ->
+                        [test_name,
+                         cage_signal_plus, cage_signal_minus,
+                         quantseq_signal_plus, quantseq_signal_minus]
+                    }
+            )
+            .map { test_name, bed_labels, bed_files,
+                   cage_peaks, quantseq_peaks,
+                   cage_signal_plus, cage_signal_minus,
+                   quantseq_signal_plus, quantseq_signal_minus ->
+                [test_name, bed_labels, bed_files,
+                 cage_peaks, quantseq_peaks,
+                 cage_signal_plus, cage_signal_minus,
+                 quantseq_signal_plus, quantseq_signal_minus]
+            }
+
+        TedComponentDiagnostic(ted_diag_inputs)
+
+        // --- Read end-signal scatter: raw read ends vs orthogonal signal ---
+        // Deduplicate reads BED by (test_name, dataset_name) since all modes
+        // share the same reads, then group by test_name.
+        read_signal_ch = all_eval_inputs
+            .map { items ->
+                // items[1]=dataset_name, items[11]=reads_bed
+                [items[0], items[1], items[11]]
+            }
+            .unique { it[0] + '::' + it[1] }
+            .groupTuple(by: [0])
+            .map { test_name, labels, files ->
+                [test_name, labels, files.flatten()]
+            }
+            .join(
+                dataset_signal_ch
+                    .filter { it[2] && it[3] && it[4] && it[5] }
+                    .map { test_name, library_type,
+                           cage_signal_plus, cage_signal_minus,
+                           quantseq_signal_plus, quantseq_signal_minus ->
+                        [test_name,
+                         cage_signal_plus, cage_signal_minus,
+                         quantseq_signal_plus, quantseq_signal_minus]
+                    }
+            )
+            .map { test_name, read_labels, read_files,
+                   cage_signal_plus, cage_signal_minus,
+                   quantseq_signal_plus, quantseq_signal_minus ->
+                [test_name, read_labels, read_files,
+                 cage_signal_plus, cage_signal_minus,
+                 quantseq_signal_plus, quantseq_signal_minus]
+            }
+
+        ReadEndSignalScatter(read_signal_ch)
+
+        // --- Isoform diversity: parallel-coordinates across multi-region partitions ---
+        // Extract regions from partition_mode args.  Only runs when ≥2 regions detected.
+        diversity_ch = all_eval_inputs
+            .map { test_name, dataset_name, align_mode, partition_mode, transcriptome_mode,
+                   isoforms_bed, isoforms_gtf, isoform_read_map, ted_log,
+                   bam, bai, reads_bed, genome, gtf,
+                   cage_peaks, quantseq_peaks, ref_tss, ref_tts,
+                   library_type,
+                   cage_signal_plus, cage_signal_minus, quantseq_signal_plus, quantseq_signal_minus ->
+                def iso_gtf = isoforms_gtf.name.contains('NO_ISOFORMS_GTF') ? null : isoforms_gtf
+                [test_name, gtf, partition_mode, iso_gtf, transcriptome_mode]
+            }
+            .filter { it[3] != null }  // skip entries with no output GTF
+            .groupTuple(by: [0])
+            .map { test_name, gtfs, partition_modes, flair_gtfs, tx_modes ->
+                // Parse regions from partition_mode name (stored in params JSON)
+                // Regions are extracted by reading the pipeline config
+                def ref_gtf = gtfs[0]  // reference GTF is the same for all entries
+                [test_name, ref_gtf, flair_gtfs.flatten(), tx_modes]
+            }
+
+        // Read regions from params JSON config and inject into the channel
+        def jsonSlurperDiv = new groovy.json.JsonSlurper()
+        def divConfig = jsonSlurperDiv.parse(new File(file(params.params_file).toString()))
+        def partitionConfig = divConfig.partition ?: [:]
+        def allRegions = []
+        partitionConfig.each { mode_name, mode_args ->
+            def m = (mode_args =~ /--region\s+(.+?)(?:\s+--|$)/)
+            if (m.find()) {
+                m.group(1).trim().split(/\s+/).each { r -> allRegions << r }
+            }
+        }
+        allRegions = allRegions.unique()
+
+        if (allRegions.size() >= 2) {
+            diversity_input = diversity_ch.map { test_name, ref_gtf, flair_gtfs, tx_modes ->
+                [test_name, ref_gtf, allRegions, flair_gtfs, tx_modes]
+            }
+            IsoformDiversity(diversity_input)
+        }
+
+
+
+        // -----------------------------------------------------------------
+        // Read Audit: per-read classification (FLAIR modes only)
+        // Produces coloured BED12 for IGV + classification TSV per mode.
+        // -----------------------------------------------------------------
+        read_audit_ch = all_eval_inputs
+            .filter { !it[5].name.contains('NO_ISOFORMS_BED') }  // FLAIR only
+            .map { items ->
+                // items: [0] test_name, [1] dataset_name, [2] align_mode, [3] partition_mode,
+                //        [4] transcriptome_mode, [5] isoforms_bed, [6] isoforms_gtf,
+                //        [7] isoform_read_map, [8] ted_log,
+                //        [9] bam, [10] bai, ...
+                [items[0], items[1], items[2], items[3],
+                 items[4], items[5], items[7], items[9], items[10]]
+            }
+
+        ReadAudit(read_audit_ch)
+
+        // Collect all audit TSVs by test_name for the summary plot
+        read_audit_summary_ch = ReadAudit.out.audit_results
+            .groupTuple(by: [0])
+            .map { test_name, modes, beds, tsvs ->
+                [test_name, modes, tsvs]
+            }
+
+        ReadAuditSummary(read_audit_summary_ch)
+
+        // -----------------------------------------------------------------
+        // Cross-sample summary: combined precision/recall across ALL samples
+        // -----------------------------------------------------------------
+        cross_sample_evals = evaluation_results
+            .map { test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, eval_tsv ->
+                [params.test_name, eval_tsv]
+            }
+            .groupTuple()
+
+        CrossSamplePrecisionRecall(cross_sample_evals)
+        CrossSampleConcordance(cross_sample_evals)
+        CrossSampleSignalSupport(cross_sample_evals)
+        CrossSampleLandscape(cross_sample_evals)
+        CrossSampleToolEndAccuracy(cross_sample_evals)
+
+        // --- Cross-sample signal-stratified peak recovery curves ---
+        cross_sample_reasons = cage_peak_reason_tsvs
+            .mix(quantseq_peak_reason_tsvs)
+            .map { test_name, tsv -> [params.test_name, tsv] }
+            .groupTuple()
+            .map { test_name, tsvs -> [test_name, tsvs.flatten()] }
+
+        CrossSamplePeakRoc(cross_sample_reasons)
+
+
+
+    emit:
+        precision_recall_plot = SummaryPlots.out.precision_recall_plot
+        cross_sample_pr_plot  = CrossSamplePrecisionRecall.out.cross_sample_pr_plot
+        combined_evaluation   = CombineEvaluationTSVs.out.combined_tsv
+}
