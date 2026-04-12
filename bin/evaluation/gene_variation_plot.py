@@ -19,10 +19,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 try:
-    from signal_utils import parse_bed12
+    from signal_utils import parse_isoforms
     from end_variation import classify_genes_by_variation
 except ImportError:
-    from evaluation.signal_utils import parse_bed12
+    from evaluation.signal_utils import parse_isoforms
     from evaluation.end_variation import classify_genes_by_variation
 
 GOLDEN_RATIO = 1.618
@@ -105,7 +105,7 @@ def main():
         if not p.exists():
             print(f"[WARN] BED file not found: {p}", file=sys.stderr)
             continue
-        isos = parse_bed12(p)
+        isos = parse_isoforms(p)
         counts = classify_genes_by_variation(isos)
         gene_counts[label] = counts
         if args.verbose:

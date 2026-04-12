@@ -30,20 +30,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from pub_style import style_ax, savefig, W1, MODE_COLORS, PALETTE
+from pub_style import ModeStyler, style_ax, legend_outside, savefig, W1, apply_rc
 from signal_utils import parse_isoforms, load_signal_tracks, isoform_signal
-
-
-# ── Helpers ─────────────────────────────────────────────────────────────────
-
-# Line-style cycling for overlaid curves
-_LINE_STYLES = ["-", "-", "-", "--", "--", "-.", "-.", ":"]
-
-
-def _mode_color(mode: str) -> str:
-    if mode in MODE_COLORS:
-        return MODE_COLORS[mode]
-    return PALETTE[hash(mode) % len(PALETTE)]
 
 
 # ── Read-map helpers ────────────────────────────────────────────────────────
@@ -137,21 +125,38 @@ def plot_cumulative_signal(
     if not methods:
         return
 
-    fig, ax = plt.subplots(figsize=(W1, W1 * 0.82))
+    apply_rc()
+    styler = ModeStyler(methods)
 
-    for i, m in enumerate(methods):
+    # Wide figure: plot on left, legend on right
+    fig, ax = plt.subplots(figsize=(W1 * 1.8, W1 * 0.82))
+    handles = []
+
+    for m in methods:
         rows = sorted(iso_data_by_method[m], key=lambda x: -x[0])
         sigs = np.array([r[3] for r in rows])
         cum = np.cumsum(sigs)
         frac = np.arange(1, len(cum) + 1) / len(cum)
         cum_n = cum / cum[-1] if cum[-1] > 0 else cum
-        ax.plot(
+
+        line, = ax.plot(
             frac, cum_n,
-            label=m,
-            color=_mode_color(m),
-            linewidth=0.5,
-            linestyle=_LINE_STYLES[i % len(_LINE_STYLES)],
+            color=styler.color(m),
+            linewidth=1.0,
+            alpha=0.85,
         )
+        line.set_dashes(styler.dash(m))
+        # Marker at ~8 evenly-spaced positions so lines stay distinguishable
+        step = max(1, len(frac) // 8)
+        ax.plot(
+            frac[::step], cum_n[::step],
+            color=styler.color(m),
+            marker=styler.marker(m),
+            markersize=3.5,
+            linestyle="",
+            alpha=0.9,
+        )
+        handles.append(styler.legend_handle(m, label=m, markersize=5))
 
     style_ax(ax,
              xlabel="Fraction of isoforms (by read support)",
@@ -159,10 +164,10 @@ def plot_cumulative_signal(
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1.02)
     ax.set_axisbelow(True)
-    ax.legend(
-        frameon=False, fontsize=6, loc="lower right", ncol=2,
-        handlelength=2.0, handletextpad=0.3, columnspacing=0.8,
-    )
+
+    ncol = max(1, len(methods) // 20)
+    legend_outside(fig, handles=handles, loc="upper left",
+                   bbox_to_anchor=(1.02, 1.0), ncol=ncol, fontsize=6)
     fig.tight_layout(pad=0.3)
     savefig(fig, output_dir / "cumulative_signal.png")
 
@@ -192,7 +197,7 @@ def plot_gini_barplot(
 
     labels = list(gini_vals.keys())
     vals = [gini_vals[l] for l in labels]
-    colors = [_mode_color(l) for l in labels]
+    colors = [ModeStyler(labels).color(l) for l in labels]
 
     fig, ax = plt.subplots(figsize=(W1, W1 * 0.6))
     ax.barh(range(len(labels)), vals, color=colors, height=0.6, edgecolor="none")
@@ -249,47 +254,114 @@ def plot_zero_signal_fraction(
     savefig(fig, output_dir / "zero_signal_fraction.png")
 
 
-def plot_signal_efficiency(
+def plot_zero_signal_counts(
     iso_data_by_method: dict[str, list],
     output_dir: Path,
 ):
-    """Scatter: X = total isoforms, Y = total captured signal (normalised).
+    """Bar plot of raw isoform counts with zero signal at TSS, TTS, or both."""
+    methods = list(iso_data_by_method.keys())
+    if not methods:
+        return
 
-    CAGE and dRNA signals are independently normalised by their global
-    max across all methods so each contributes equally on a 0–1 scale before
-    summing.  One point per method.  Upper-left = efficient.
+    counts_tss = []
+    counts_tts = []
+    counts_both = []
+    labels = []
+    for m in methods:
+        rows = iso_data_by_method[m]
+        if not rows:
+            continue
+        counts_tss.append(sum(1 for r in rows if r[1] == 0))
+        counts_tts.append(sum(1 for r in rows if r[2] == 0))
+        counts_both.append(sum(1 for r in rows if r[1] == 0 and r[2] == 0))
+        labels.append(m)
+
+    if not labels:
+        return
+
+    x = np.arange(len(labels))
+    w = 0.25
+    fig, ax = plt.subplots(figsize=(W1, W1 * 0.65))
+    ax.bar(x - w, counts_tss, w, label="Zero TSS (CAGE)", color="#4C72B0", edgecolor="none")
+    ax.bar(x, counts_tts, w, label="Zero TTS (dRNA)", color="#DD8452", edgecolor="none")
+    ax.bar(x + w, counts_both, w, label="Zero both", color="#C44E52", edgecolor="none")
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=5, rotation=45, ha="right")
+    style_ax(ax, ylabel="Number of isoforms")
+    ax.legend(frameon=False, fontsize=5, loc="upper right")
+    fig.tight_layout(pad=0.3)
+    savefig(fig, output_dir / "zero_signal_counts.png")
+
+
+def _signal_efficiency_scatter(
+    iso_data_by_method: dict[str, list],
+    signal_extractor,
+    ylabel: str,
+    output_path: Path,
+):
+    """Scatter: X = total isoforms, Y = normalised captured signal (one point per method).
+
+    signal_extractor(rows) → float  — compute the raw signal total for one method.
+    Signal is normalised by the global max across all methods before plotting.
+    Upper-left = efficient (few isoforms, high signal capture).
     """
     methods = list(iso_data_by_method.keys())
     if not methods:
         return
 
-    # Compute raw per-method totals for each signal type
-    tss_totals = {m: sum(r[1] for r in iso_data_by_method[m]) for m in methods}
-    tts_totals = {m: sum(r[2] for r in iso_data_by_method[m]) for m in methods}
+    raw = {m: signal_extractor(iso_data_by_method[m]) for m in methods}
+    global_max = max(raw.values()) or 1.0
 
-    # Global max for normalisation (avoid div-by-zero)
-    tss_max = max(tss_totals.values()) or 1.0
-    tts_max = max(tts_totals.values()) or 1.0
-
-    xs, ys, labels, colors = [], [], [], []
-    for m in methods:
-        rows = iso_data_by_method[m]
-        norm_sig = tss_totals[m] / tss_max + tts_totals[m] / tts_max
-        xs.append(len(rows))
-        ys.append(norm_sig)
-        labels.append(m)
-        colors.append(_mode_color(m))
+    styler = ModeStyler(methods)
+    xs = [len(iso_data_by_method[m]) for m in methods]
+    ys = [raw[m] / global_max for m in methods]
+    colors = [styler.color(m) for m in methods]
+    markers = [styler.marker(m) for m in methods]
 
     fig, ax = plt.subplots(figsize=(W1, W1 * 0.82))
-    ax.scatter(xs, ys, c=colors, s=30, zorder=3, edgecolors="white", linewidths=0.3)
-    for i, m in enumerate(labels):
+    for i, m in enumerate(methods):
+        ax.scatter(xs[i], ys[i], c=colors[i], marker=markers[i],
+                   s=35, zorder=3, edgecolors="white", linewidths=0.3)
         ax.annotate(m, (xs[i], ys[i]), fontsize=5, ha="left", va="bottom",
                     xytext=(3, 3), textcoords="offset points")
-    style_ax(ax, xlabel="Total isoforms",
-             ylabel="Normalised captured signal\n(CAGE + dRNA, each 0–1)")
+    style_ax(ax, xlabel="Total isoforms", ylabel=ylabel)
     ax.set_axisbelow(True)
     fig.tight_layout(pad=0.3)
-    savefig(fig, output_dir / "signal_efficiency.png")
+    savefig(fig, output_path)
+
+
+def plot_signal_efficiency(
+    iso_data_by_method: dict[str, list],
+    output_dir: Path,
+):
+    """Three scatter plots: combined, 5'-only (CAGE), 3'-only (dRNA)."""
+    # Combined: TSS + TTS each normalised independently, then summed → max 2.0.
+    # Pre-compute the per-end maxima so the extractor closure sees fixed values.
+    methods = list(iso_data_by_method.keys())
+    tss_max = max(sum(r[1] for r in iso_data_by_method[m]) for m in methods) or 1.0
+    tts_max = max(sum(r[2] for r in iso_data_by_method[m]) for m in methods) or 1.0
+
+    def _combined(rows):
+        return sum(r[1] for r in rows) / tss_max + sum(r[2] for r in rows) / tts_max
+
+    _signal_efficiency_scatter(
+        iso_data_by_method,
+        signal_extractor=_combined,
+        ylabel="Normalised captured signal\n(CAGE + dRNA, each 0–1)",
+        output_path=output_dir / "signal_efficiency.png",
+    )
+    _signal_efficiency_scatter(
+        iso_data_by_method,
+        signal_extractor=lambda rows: sum(r[1] for r in rows),
+        ylabel="Total 5′ signal captured (CAGE, raw)",
+        output_path=output_dir / "signal_efficiency_5prime.png",
+    )
+    _signal_efficiency_scatter(
+        iso_data_by_method,
+        signal_extractor=lambda rows: sum(r[2] for r in rows),
+        ylabel="Total 3′ signal captured (dRNA, raw)",
+        output_path=output_dir / "signal_efficiency_3prime.png",
+    )
 
 
 def plot_read_count_vs_signal(
@@ -306,6 +378,7 @@ def plot_read_count_vs_signal(
     if not methods:
         return
 
+    styler = ModeStyler(methods)
     n = len(methods)
     ncols = min(n, 3)
     nrows = (n + ncols - 1) // ncols
@@ -325,7 +398,7 @@ def plot_read_count_vs_signal(
             rho = float("nan")
         eps = 1e-3
         ax.scatter(counts_f + eps, sigs_f + eps, s=1.5, alpha=0.3,
-                   color=_mode_color(m), edgecolors="none", rasterized=True)
+                   color=styler.color(m), edgecolors="none", rasterized=True)
         ax.set_xscale("log")
         ax.set_yscale("log")
         style_ax(ax)
@@ -431,6 +504,7 @@ def main():
     plot_cumulative_signal(iso_data, output_dir)
     plot_gini_barplot(iso_data, output_dir)
     plot_zero_signal_fraction(iso_data, output_dir)
+    plot_zero_signal_counts(iso_data, output_dir)
     plot_signal_efficiency(iso_data, output_dir)
     plot_read_count_vs_signal(iso_data, output_dir)
     print(f"Saved cumulative signal plots to {args.output}")

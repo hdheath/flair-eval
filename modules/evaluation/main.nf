@@ -11,8 +11,6 @@
 
 process Evaluation {
     // --- Per-method plots: category folder, method name in filename ---
-    // boundary_signal: boundary_signal_colored_{5,3}prime.png
-    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/per_method/boundary_signal", mode: 'copy', pattern: 'ted_plots/*boundary_signal_*.png', saveAs: { it.toString().tokenize('/').last() }
     // motif_logos: tss/tts_motif_logo.png
     publishDir "${params.outdir}/evaluations/per_sample/${test_name}/per_method/motif_logos", mode: 'copy', pattern: 'ted_plots/*motif_logo*.png', saveAs: { it.toString().tokenize('/').last() }
     // peak_recovery: recovery_by_expression/width, peak_read_support
