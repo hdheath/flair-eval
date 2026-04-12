@@ -37,7 +37,7 @@ def main():
     parser.add_argument("--corrected-bed", type=Path, help="Corrected BED (for collapse stage)")
     parser.add_argument("--reads-bed", type=Path, help="Reads BED12 file (for read-end entropy analysis)")
     parser.add_argument("--prime5-peaks", type=Path, help="Experimental 5' peaks (e.g. CAGE)")
-    parser.add_argument("--prime3-peaks", type=Path, help="Experimental 3' peaks (e.g. QuantSeq, dRNA)")
+    parser.add_argument("--prime3-peaks", type=Path, help="Experimental 3' peaks (e.g. dRNA, dRNA)")
     parser.add_argument("--ref-prime5-peaks", type=Path, help="Reference 5' peaks")
     parser.add_argument("--ref-prime3-peaks", type=Path, help="Reference 3' peaks")
     parser.add_argument("--window", type=int, default=50, help="Distance window for TSS/TTS matching (default: 50)")
@@ -58,7 +58,7 @@ def main():
     parser.add_argument("--gtf", type=Path, help="Reference GTF file (for gene-name annotation in region TSVs)")
     parser.add_argument("--timing-output", type=Path, help="Output file for performance timing report")
     parser.add_argument("--max-count-cage", type=int, help="Fixed y-axis limit for 5' peak histograms across runs (optional)")
-    parser.add_argument("--max-count-quantseq", type=int, help="Fixed y-axis limit for 3' peak histograms across runs (optional)")
+    parser.add_argument("--max-count-drna", type=int, help="Fixed y-axis limit for 3' peak histograms across runs (optional)")
     parser.add_argument("--max-count-ref-tss", type=int, help="Fixed y-axis limit for Reference TSS histograms across runs (optional)")
     parser.add_argument("--max-count-ref-tts", type=int, help="Fixed y-axis limit for Reference TTS histograms across runs (optional)")
     # Simplified evaluation mode (for Bambu/IsoQuant - no read-level metrics)
@@ -67,8 +67,8 @@ def main():
     # Signal bedGraph files for Phase 4.1 signal-based evaluation metrics
     parser.add_argument("--cage-signal-plus", type=Path, help="5' signal plus-strand bedGraph")
     parser.add_argument("--cage-signal-minus", type=Path, help="5' signal minus-strand bedGraph")
-    parser.add_argument("--quantseq-signal-plus", type=Path, help="3' signal plus-strand bedGraph")
-    parser.add_argument("--quantseq-signal-minus", type=Path, help="3' signal minus-strand bedGraph")
+    parser.add_argument("--drna-signal-plus", type=Path, help="3' signal plus-strand bedGraph")
+    parser.add_argument("--drna-signal-minus", type=Path, help="3' signal minus-strand bedGraph")
     parser.add_argument("--ted-log", type=Path, help="Path to FLAIR's per-locus TED decision log (produced by --ted --ted_log). Aggregated into run-level ted_internal_* metrics.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     # Metadata arguments for result tracking
@@ -141,7 +141,7 @@ def main():
         genome_path=args.genome,
         gtf_path=args.gtf,
         max_count_cage=args.max_count_cage,
-        max_count_quantseq=args.max_count_quantseq,
+        max_count_drna=args.max_count_drna,
         max_count_ref_tss=args.max_count_ref_tss,
         max_count_ref_tts=args.max_count_ref_tts,
         plot_mode=args.plot_mode,
@@ -151,8 +151,8 @@ def main():
         window_3prime=args.window_3prime,
         cage_signal_plus=args.cage_signal_plus,
         cage_signal_minus=args.cage_signal_minus,
-        quantseq_signal_plus=args.quantseq_signal_plus,
-        quantseq_signal_minus=args.quantseq_signal_minus,
+        drna_signal_plus=args.drna_signal_plus,
+        drna_signal_minus=args.drna_signal_minus,
     )
 
     # Clean up temp file if we created one

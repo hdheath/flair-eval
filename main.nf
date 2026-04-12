@@ -137,13 +137,13 @@ workflow {
 
     // Create actual empty placeholder files on disk so Nextflow's HashBuilder
     // can resolve file attributes and staging doesn't fail with NoSuchFileException.
-    ["NO_BED", "NO_CAGE", "NO_QUANTSEQ", "NO_ISOFORMS_BED", "NO_ISOFORMS_GTF", "NO_JUNCTION_TAB"].each {
+    ["NO_BED", "NO_CAGE", "NO_DRNA", "NO_ISOFORMS_BED", "NO_ISOFORMS_GTF", "NO_JUNCTION_TAB"].each {
         def f = new File("${workflow.workDir}/${it}")
         if (!f.exists()) { f.parentFile?.mkdirs(); f.createNewFile() }
     }
     def NO_BED          = file("${workflow.workDir}/NO_BED")
     def NO_CAGE         = file("${workflow.workDir}/NO_CAGE")
-    def NO_QUANTSEQ     = file("${workflow.workDir}/NO_QUANTSEQ")
+    def NO_DRNA     = file("${workflow.workDir}/NO_DRNA")
     def NO_ISOFORMS_BED = file("${workflow.workDir}/NO_ISOFORMS_BED")
     def NO_ISOFORMS_GTF = file("${workflow.workDir}/NO_ISOFORMS_GTF")
     def NO_JUNCTION_TAB = file("${workflow.workDir}/NO_JUNCTION_TAB")
@@ -184,12 +184,12 @@ workflow {
     prealigned_partition_inputs = datasets_with_bam.flatMap {
         test_name, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
         def cage_file     = dataset.cage     ? file(dataset.cage)     : NO_CAGE
-        def quantseq_file = dataset.quantseq ? file(dataset.quantseq) : NO_QUANTSEQ
+        def drna_file = dataset.drna ? file(dataset.drna) : NO_DRNA
         ds_align_modes.collectMany { align_mode, align_args ->
             ds_partition_modes.collect { partition_mode, partition_args ->
                 [test_name, dataset.name, align_mode, file(dataset.bam), file(dataset.bai), NO_BED,
                  partition_mode, partition_args, file(dataset.genome), file(dataset.gtf),
-                 cage_file, quantseq_file]
+                 cage_file, drna_file]
             }
         }
     }
@@ -210,10 +210,10 @@ workflow {
             test_name, dataset_name, align_mode, bam, bai, bed,
             dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
             def cage_file     = dataset.cage     ? file(dataset.cage)     : NO_CAGE
-            def quantseq_file = dataset.quantseq ? file(dataset.quantseq) : NO_QUANTSEQ
+            def drna_file = dataset.drna ? file(dataset.drna) : NO_DRNA
             ds_partition_modes.collect { partition_mode, partition_args ->
                 [test_name, dataset_name, align_mode, bam, bai, bed, partition_mode, partition_args,
-                 file(dataset.genome), file(dataset.gtf), cage_file, quantseq_file]
+                 file(dataset.genome), file(dataset.gtf), cage_file, drna_file]
             }
         }
 
@@ -233,7 +233,7 @@ workflow {
         test_name, dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
         [test_name, dataset.library_type ?: 'unknown',
          dataset.cage_signal_plus ?: '', dataset.cage_signal_minus ?: '',
-         dataset.quantseq_signal_plus ?: '', dataset.quantseq_signal_minus ?: '']
+         dataset.drna_signal_plus ?: '', dataset.drna_signal_minus ?: '']
     }
 
     // Bundle placeholder files for subworkflows
@@ -242,7 +242,7 @@ workflow {
         NO_ISOFORMS_GTF: NO_ISOFORMS_GTF,
         NO_JUNCTION_TAB: NO_JUNCTION_TAB,
         NO_CAGE:         NO_CAGE,
-        NO_QUANTSEQ:     NO_QUANTSEQ,
+        NO_DRNA:     NO_DRNA,
     ]
 
     // --- Transcriptome assembly + evaluation ---
@@ -258,9 +258,10 @@ workflow {
     SUMMARY_AND_VIZ(
         ASSEMBLE_AND_EVAL.out.evaluation_results,
         ASSEMBLE_AND_EVAL.out.cage_peak_reason_tsvs,
-        ASSEMBLE_AND_EVAL.out.quantseq_peak_reason_tsvs,
+        ASSEMBLE_AND_EVAL.out.drna_peak_reason_tsvs,
         ASSEMBLE_AND_EVAL.out.all_eval_inputs,
-        dataset_signal_ch
+        dataset_signal_ch,
+        ASSEMBLE_AND_EVAL.out.ted_precision_metrics
     )
 
     // =========================================================================

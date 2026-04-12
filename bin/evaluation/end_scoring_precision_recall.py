@@ -19,7 +19,7 @@ Input:
   --isoforms-bed:   FLAIR isoforms BED12 (for per-transcript classification)
   --gtf:            Reference annotation GTF
   --peaks-5prime:   Experimental 5' peaks BED6 (e.g. CAGE; optional)
-  --peaks-3prime:   Experimental 3' peaks BED6 (e.g. QuantSeq, dRNA; optional)
+  --peaks-3prime:   Experimental 3' peaks BED6 (e.g. dRNA, dRNA; optional)
   --outdir:         Output directory
 
 

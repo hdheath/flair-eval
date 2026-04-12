@@ -3,7 +3,7 @@
 // assemblers vs reference annotation. Inspired by Weber et al. 2023 (Oncogene).
 
 process UTRFeatures {
-    publishDir "${params.outdir}/evaluations/${test_name}/utr", mode: 'copy'
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/utr", mode: 'copy'
     publishDir "${params.outdir}/summary/${params.test_name}/utr", mode: 'copy'
     tag "${test_name}"
     errorStrategy 'ignore'

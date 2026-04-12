@@ -238,7 +238,7 @@ def plot_zero_signal_fraction(
     w = 0.25
     fig, ax = plt.subplots(figsize=(W1, W1 * 0.65))
     ax.bar(x - w, fracs_tss, w, label="Zero TSS (CAGE)", color="#4C72B0", edgecolor="none")
-    ax.bar(x, fracs_tts, w, label="Zero TTS (QuantSeq)", color="#DD8452", edgecolor="none")
+    ax.bar(x, fracs_tts, w, label="Zero TTS (dRNA)", color="#DD8452", edgecolor="none")
     ax.bar(x + w, fracs_both, w, label="Zero both", color="#C44E52", edgecolor="none")
     ax.set_xticks(x)
     ax.set_xticklabels(labels, fontsize=5, rotation=45, ha="right")
@@ -255,7 +255,7 @@ def plot_signal_efficiency(
 ):
     """Scatter: X = total isoforms, Y = total captured signal (normalised).
 
-    CAGE and QuantSeq signals are independently normalised by their global
+    CAGE and dRNA signals are independently normalised by their global
     max across all methods so each contributes equally on a 0–1 scale before
     summing.  One point per method.  Upper-left = efficient.
     """
@@ -286,7 +286,7 @@ def plot_signal_efficiency(
         ax.annotate(m, (xs[i], ys[i]), fontsize=5, ha="left", va="bottom",
                     xytext=(3, 3), textcoords="offset points")
     style_ax(ax, xlabel="Total isoforms",
-             ylabel="Normalised captured signal\n(CAGE + QuantSeq, each 0–1)")
+             ylabel="Normalised captured signal\n(CAGE + dRNA, each 0–1)")
     ax.set_axisbelow(True)
     fig.tight_layout(pad=0.3)
     savefig(fig, output_dir / "signal_efficiency.png")
@@ -360,8 +360,8 @@ def main():
     )
     parser.add_argument("--cage-plus",  required=True, help="CAGE bedGraph (+ strand)")
     parser.add_argument("--cage-minus", required=True, help="CAGE bedGraph (- strand)")
-    parser.add_argument("--qs-plus",    required=True, help="QuantSeq bedGraph (+ strand)")
-    parser.add_argument("--qs-minus",   required=True, help="QuantSeq bedGraph (- strand)")
+    parser.add_argument("--qs-plus",    required=True, help="dRNA bedGraph (+ strand)")
+    parser.add_argument("--qs-minus",   required=True, help="dRNA bedGraph (- strand)")
     parser.add_argument("--output",     required=True, help="Output directory")
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()

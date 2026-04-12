@@ -97,7 +97,7 @@ def summarize_junction_chain_end_variation(
         isoforms: Output of parse_isoform_ends()
         min_group_size: Minimum isoforms required in a junction-chain group
         peaks_5prime_path: CAGE peaks BED6 (optional)
-        peaks_3prime_path: QuantSeq peaks BED6 (optional)
+        peaks_3prime_path: dRNA peaks BED6 (optional)
         window_5prime: Window for TSS → peak matching
         window_3prime: Window for TTS → peak matching
 

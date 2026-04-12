@@ -4,7 +4,7 @@
 // and quantifies regulatory motif collapse per tool.
 
 process ToolDivergence {
-    publishDir "${params.outdir}/evaluations/${test_name}/divergence", mode: 'copy'
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/divergence", mode: 'copy'
     publishDir "${params.outdir}/summary/${params.test_name}/divergence", mode: 'copy'
     tag "${test_name}"
     errorStrategy 'ignore'

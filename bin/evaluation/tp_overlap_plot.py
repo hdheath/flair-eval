@@ -32,7 +32,7 @@ Output (per end type):
 Usage:
     python tp_overlap_plot.py \\
         --cage baseline:peaks_bl.tsv trust-end:peaks_te.tsv ... \\
-        --quantseq baseline:peaks_bl.tsv trust-end:peaks_te.tsv ... \\
+        --drna baseline:peaks_bl.tsv trust-end:peaks_te.tsv ... \\
         --output output_dir/ \\
         [--baseline-label baseline] \\
         [--title-prefix "v3 — "] [--verbose]
@@ -431,8 +431,8 @@ def main():
         "--cage", nargs="+", default=[],
         help="CAGE peak-reason TSVs as label:path pairs.")
     parser.add_argument(
-        "--quantseq", nargs="+", default=[],
-        help="QuantSeq peak-reason TSVs as label:path pairs.")
+        "--drna", nargs="+", default=[],
+        help="dRNA peak-reason TSVs as label:path pairs.")
     parser.add_argument(
         "--output", "-o", required=True,
         help="Output directory for plots and tables.")
@@ -460,12 +460,12 @@ def main():
     else:
         logger.warning("No --cage inputs; skipping 5' analysis.")
 
-    if args.quantseq:
-        if not analyse_end(args.quantseq, args.baseline_label,
-                           "3\u2032 (QuantSeq)", "3prime", out, args.title_prefix):
+    if args.drna:
+        if not analyse_end(args.drna, args.baseline_label,
+                           "3\u2032 (dRNA)", "3prime", out, args.title_prefix):
             ok = False
     else:
-        logger.warning("No --quantseq inputs; skipping 3' analysis.")
+        logger.warning("No --drna inputs; skipping 3' analysis.")
 
     if ok:
         logger.info("TP overlap analysis complete → %s", out)

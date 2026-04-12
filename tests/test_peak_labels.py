@@ -51,7 +51,7 @@ ISOFORMS_BED = BASE / f"{PREFIX}_transcriptome.isoforms.bed"
 READ_MAP = BASE / f"{PREFIX}_transcriptome.isoform.read.map.txt"
 READS_BED = BASE / "A549_cDNA_pre-aligned_chr1.bed"
 CAGE_PEAKS = BASE / "A549_cDNA_pre-aligned_chr1_cage.bed"
-QUANTSEQ_PEAKS = BASE / "A549_cDNA_pre-aligned_chr1_quantseq.bed"
+DRNA_PEAKS = BASE / "A549_cDNA_pre-aligned_chr1_drna.bed"
 MISSED_TSV = BASE / "test_regions" / f"{PREFIX}_transcriptome_missed_cage_peaks.tsv"
 
 WINDOW = 50
@@ -634,23 +634,23 @@ def test_tsv_output_consistency():
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Analysis for 3' (QuantSeq) missed peaks too
+# Analysis for 3' (dRNA) missed peaks too
 # ──────────────────────────────────────────────────────────────────────
 
-def analyze_quantseq_labels():
-    """Analyze QuantSeq (3') missed peak labels for completeness."""
+def analyze_drna_labels():
+    """Analyze dRNA (3') missed peak labels for completeness."""
     print("\n" + "="*70)
-    print("ANALYSIS: QuantSeq (3') missed peak label distribution")
+    print("ANALYSIS: dRNA (3') missed peak label distribution")
     print("="*70)
 
     iso_to_reads = load_isoform_read_map(READ_MAP)
     isoforms = load_isoforms(ISOFORMS_BED)
     read_ends = load_read_ends(READS_BED)
 
-    peaks = read_bed6(QUANTSEQ_PEAKS)
+    peaks = read_bed6(DRNA_PEAKS)
     read_end_positions = extract_read_end_positions(READS_BED, 'tts')
 
-    recoverable = find_recoverable_peaks(QUANTSEQ_PEAKS, read_end_positions, WINDOW)
+    recoverable = find_recoverable_peaks(DRNA_PEAKS, read_end_positions, WINDOW)
     iso_positions = [{'Chrom': iso['chrom'], 'Start': iso['tts'],
                       'End': iso['tts'] + 1, 'Strand': iso['strand']}
                      for iso in isoforms.values()]
@@ -662,7 +662,7 @@ def analyze_quantseq_labels():
     print(f"  Missed recoverable: {len(missed)}")
 
     analysis = analyze_missed_peaks_comprehensive(
-        missed_peaks=missed, peaks_path=QUANTSEQ_PEAKS,
+        missed_peaks=missed, peaks_path=DRNA_PEAKS,
         read_end_positions=read_end_positions,
         iso_to_reads=iso_to_reads, isoforms=isoforms, read_ends=read_ends,
         window=WINDOW, end_type='tts', captured_peaks=captured_ids,
@@ -689,7 +689,7 @@ def analyze_quantseq_labels():
 
 if __name__ == '__main__':
     # Check that test data exists
-    required = [ISOFORMS_BED, READ_MAP, READS_BED, CAGE_PEAKS, QUANTSEQ_PEAKS]
+    required = [ISOFORMS_BED, READ_MAP, READS_BED, CAGE_PEAKS, DRNA_PEAKS]
     for f in required:
         if not f.exists():
             print(f"FATAL: Missing test data: {f}")
@@ -704,7 +704,7 @@ if __name__ == '__main__':
 
     # Deep analyses
     deep_analyze_unassigned()
-    analyze_quantseq_labels()
+    analyze_drna_labels()
 
     print("\n" + "="*70)
     print("SUMMARY")

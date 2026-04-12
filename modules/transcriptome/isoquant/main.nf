@@ -6,7 +6,7 @@
 //   --model_construction_strategy: sensitive, default, or fl_pacbio
 
 process IsoQuantAssembly {
-    publishDir "${params.outdir}/isoquant/${test_name}", mode: 'symlink'
+    publishDir "${params.outdir}/assemblers/isoquant/${test_name}", mode: 'symlink'
     publishDir "${params.outdir}/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}_${it}" }
     errorStrategy 'terminate'
     tag "${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}"

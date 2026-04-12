@@ -27,19 +27,19 @@ The input samplesheet must be a CSV file with the following columns:
 | bam         | Yes      | Path to aligned BAM file                       |
 | reads       | No       | Path to raw reads file (for FlairAlign)        |
 | cage        | No       | Path to CAGE peaks file                        |
-| quantseq    | No       | Path to QuantSeq peaks file                    |
+| drna    | No       | Path to dRNA peaks file                    |
 | junction_tab| No       | STAR SJ.out.tab (or use legacy `junctions`)   |
 | cage_signal_plus   | No | Optional CAGE plus-strand bedGraph signal      |
 | cage_signal_minus  | No | Optional CAGE minus-strand bedGraph signal     |
-| quantseq_signal_plus  | No | Optional QuantSeq plus-strand bedGraph signal |
-| quantseq_signal_minus | No | Optional QuantSeq minus-strand bedGraph signal |
+| drna_signal_plus  | No | Optional dRNA plus-strand bedGraph signal |
+| drna_signal_minus | No | Optional dRNA minus-strand bedGraph signal |
 
 **Example samplesheet (`samples.csv`):**
 
 ```csv
-sample_id,genome,gtf,bam,reads,cage,quantseq,junction_tab,cage_signal_plus,cage_signal_minus,quantseq_signal_plus,quantseq_signal_minus
-B1A_kd_induced_rep1,/path/to/genome.fa,/path/to/annotation.gtf,/path/to/sample1.bam,,/path/to/cage.bed,/path/to/quantseq.bed,/path/to/SJ.out.tab,/path/to/cage_plus.bg,/path/to/cage_minus.bg,/path/to/quant_plus.bg,/path/to/quant_minus.bg
-B1A_kd_induced_rep2,/path/to/genome.fa,/path/to/annotation.gtf,/path/to/sample2.bam,,/path/to/cage.bed,/path/to/quantseq.bed,,,,,
+sample_id,genome,gtf,bam,reads,cage,drna,junction_tab,cage_signal_plus,cage_signal_minus,drna_signal_plus,drna_signal_minus
+B1A_kd_induced_rep1,/path/to/genome.fa,/path/to/annotation.gtf,/path/to/sample1.bam,,/path/to/cage.bed,/path/to/drna.bed,/path/to/SJ.out.tab,/path/to/cage_plus.bg,/path/to/cage_minus.bg,/path/to/quant_plus.bg,/path/to/quant_minus.bg
+B1A_kd_induced_rep2,/path/to/genome.fa,/path/to/annotation.gtf,/path/to/sample2.bam,,/path/to/cage.bed,/path/to/drna.bed,,,,,
 ```
 
 Note: `junctions` is still accepted as a legacy alias of `junction_tab`.

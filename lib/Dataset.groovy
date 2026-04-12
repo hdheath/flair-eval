@@ -10,12 +10,12 @@ class Dataset {
     String genome
     String gtf
     String cage
-    String quantseq
+    String drna
     String library_type  // Library prep / sequencing type (e.g., pacbio_cDNA, ont_cDNA, ont_dRNA)
     String cage_signal_plus   // Optional: CAGE plus-strand bedGraph signal
     String cage_signal_minus  // Optional: CAGE minus-strand bedGraph signal
-    String quantseq_signal_plus   // Optional: QuantSeq plus-strand bedGraph signal
-    String quantseq_signal_minus  // Optional: QuantSeq minus-strand bedGraph signal
+    String drna_signal_plus   // Optional: dRNA plus-strand bedGraph signal
+    String drna_signal_minus  // Optional: dRNA minus-strand bedGraph signal
     String bam  // Optional: pre-aligned BAM file
     String bai  // Optional: BAM index file (auto-constructed from bam path)
     String junction_tab  // Optional: short-read junction file for flair transcriptome
@@ -28,11 +28,11 @@ class Dataset {
         this.gtf = config.gtf
         this.library_type = config.library_type ?: 'unknown'
         this.cage = config.cage
-        this.quantseq = config.quantseq
+        this.drna = config.drna
         this.cage_signal_plus = config.cage_signal_plus
         this.cage_signal_minus = config.cage_signal_minus
-        this.quantseq_signal_plus = config.quantseq_signal_plus
-        this.quantseq_signal_minus = config.quantseq_signal_minus
+        this.drna_signal_plus = config.drna_signal_plus
+        this.drna_signal_minus = config.drna_signal_minus
         this.bam = config.bam
         // Resolve index path from BAM path. Prefer .bai, fall back to .csi if needed.
         if (config.bam) {

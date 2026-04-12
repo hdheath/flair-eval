@@ -10,7 +10,7 @@
 //   3. Collect isoform_annotated.gff3 and build read map from realign BAM
 
 process FlamesAssembly {
-    publishDir "${params.outdir}/flames/${test_name}", mode: 'symlink'
+    publishDir "${params.outdir}/assemblers/flames/${test_name}", mode: 'symlink'
     publishDir "${params.outdir}/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_flames_${flames_mode}_${it}" }
     errorStrategy 'terminate'
     tag "${dataset_name}_${align_mode}_${partition_mode}_flames_${flames_mode}"

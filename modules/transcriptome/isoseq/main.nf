@@ -9,7 +9,7 @@
 //   --min-aln-identity <float>:     Minimum alignment identity (default 0.95)
 
 process IsoSeqAssembly {
-    publishDir "${params.outdir}/isoseq/${test_name}", mode: 'symlink'
+    publishDir "${params.outdir}/assemblers/isoseq/${test_name}", mode: 'symlink'
     publishDir "${params.outdir}/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_isoseq_${isoseq_mode}_${it}" }
     errorStrategy 'terminate'
     tag "${dataset_name}_${align_mode}_${partition_mode}_isoseq_${isoseq_mode}"

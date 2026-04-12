@@ -5,7 +5,7 @@ Cross-run summary plots for peak recovery reasons (signal vs support analysis).
 Reads merged evaluation TSVs containing per-peak reason counts and produces
 a 2-row figure:
   Row 1: 5' (TSS / CAGE)
-  Row 2: 3' (TTS / QuantSeq)
+  Row 2: 3' (TTS / dRNA)
 
 Each row has two panels:
   Left:  Stacked horizontal bar chart of reason proportions per mode

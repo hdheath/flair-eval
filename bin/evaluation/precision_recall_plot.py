@@ -171,11 +171,15 @@ def _plot_f1_bars(df, output_path, mode_order, styler, baseline_mode, title_pref
             ax.axhline(bl_f1_3, color='#555555', linestyle='--', linewidth=1.0, alpha=0.6, zorder=1,
                        label=f"3' baseline ({bl_f1_3:.1f})")
 
-    mode_handles = [styler.legend_handle(m, label=_short_mode(m), markersize=6)
-                    for m in mode_order]
+    # Legend: one patch per mode (matching scatter marker color) + hatch legend
+    mode_handles = [
+        mpatches.Patch(facecolor=styler.color(m), edgecolor='none',
+                       label=_short_mode(m), alpha=0.9)
+        for m in mode_order
+    ]
     hatch_handles = [
-        mpatches.Patch(facecolor='#888888', alpha=0.9, edgecolor='none', label="5\u2032 F1"),
-        mpatches.Patch(facecolor='#888888', alpha=0.55, edgecolor='none', hatch='///', label="3\u2032 F1"),
+        mpatches.Patch(facecolor='#666666', alpha=0.9, edgecolor='none', label="5\u2032 F1"),
+        mpatches.Patch(facecolor='#666666', alpha=0.55, edgecolor='none', hatch='///', label="3\u2032 F1"),
     ]
     ax.set_xticks(x)
     ax.set_xticklabels([_short_mode(m) for m in mode_order], rotation=45, ha='right', fontsize=7)

@@ -239,7 +239,7 @@ def analyze_tsv_reason_coverage():
 
     for label, tsvpath in [
         ("CAGE (5')", "A549_cDNA_pre-aligned_chr1_end-scoring-alpha05_transcriptome_missed_cage_peaks.tsv"),
-        ("QuantSeq (3')", "A549_cDNA_pre-aligned_chr1_end-scoring-alpha05_transcriptome_missed_quantseq_peaks.tsv"),
+        ("dRNA (3')", "A549_cDNA_pre-aligned_chr1_end-scoring-alpha05_transcriptome_missed_drna_peaks.tsv"),
     ]:
         path = Path(
             "/private/groups/brookslab/hdheath/projects/flair-eval/"

@@ -19,7 +19,7 @@ Output (written to tests/data/):
     tiny_reads.bam.bai      - BAM index
     tiny_reads.bed          - BED12 from reads
     tiny_cage_peaks.bed     - 8 CAGE peaks at TSS positions
-    tiny_quantseq_peaks.bed - 8 QuantSeq peaks at TTS positions
+    tiny_drna_peaks.bed - 8 dRNA peaks at TTS positions
     tiny_isoforms.bed       - 10 BED12 isoforms (FLAIR-format)
     tiny_isoforms.gtf       - Same 10 isoforms in GTF format
     tiny_read_map.txt       - Read-to-isoform assignments
@@ -287,12 +287,12 @@ def make_reads_bed():
 
 
 def make_peaks():
-    """Create CAGE (TSS) and QuantSeq (TTS) peak BED files."""
+    """Create CAGE (TSS) and dRNA (TTS) peak BED files."""
     cage_path = OUT_DIR / "tiny_cage_peaks.bed"
-    quantseq_path = OUT_DIR / "tiny_quantseq_peaks.bed"
+    drna_path = OUT_DIR / "tiny_drna_peaks.bed"
 
     cage_lines = []
-    quantseq_lines = []
+    drna_lines = []
     peak_id = 0
 
     for gene_id, strand, transcripts in GENES:
@@ -318,14 +318,14 @@ def make_peaks():
             peak_id += 1
             start = max(0, tts - 50)
             end = min(CHROM_LEN, tts + 50)
-            quantseq_lines.append(f"{CHROM}\t{start}\t{end}\tquantseq_peak_{peak_id}\t100\t{strand}")
+            drna_lines.append(f"{CHROM}\t{start}\t{end}\tdrna_peak_{peak_id}\t100\t{strand}")
 
     with open(cage_path, 'w') as f:
         f.write('\n'.join(cage_lines) + '\n')
-    with open(quantseq_path, 'w') as f:
-        f.write('\n'.join(quantseq_lines) + '\n')
+    with open(drna_path, 'w') as f:
+        f.write('\n'.join(drna_lines) + '\n')
 
-    return cage_path, quantseq_path
+    return cage_path, drna_path
 
 
 def make_ref_peaks():
@@ -453,12 +453,12 @@ def make_samplesheet():
         "",  # reads (empty - using BAM)
         f"{data_dir}/tiny_reads.bam",
         f"{data_dir}/tiny_cage_peaks.bed",
-        f"{data_dir}/tiny_quantseq_peaks.bed",
+        f"{data_dir}/tiny_drna_peaks.bed",
         f"{data_dir}/tiny_junctions.tab",
         "pacbio_cDNA",  # library_type
         "", "", "", ""  # signal bedgraphs (empty)
     ])
-    header = "sample_id,genome,gtf,reads,bam,cage,quantseq,junction_tab,library_type,cage_signal_plus,cage_signal_minus,quantseq_signal_plus,quantseq_signal_minus"
+    header = "sample_id,genome,gtf,reads,bam,cage,drna,junction_tab,library_type,cage_signal_plus,cage_signal_minus,drna_signal_plus,drna_signal_minus"
     with open(csv_path, 'w') as f:
         f.write(header + '\n')
         f.write(row + '\n')
@@ -497,14 +497,14 @@ def make_cage_peak_reason_tsv():
     return tsv_path
 
 
-def make_quantseq_peak_reason_tsv():
-    """Create a sample QuantSeq peak reason TSV for PeakReasonHeatmap testing."""
-    tsv_path = OUT_DIR / "tiny_quantseq_peak_reasons.tsv"
+def make_drna_peak_reason_tsv():
+    """Create a sample dRNA peak reason TSV for PeakReasonHeatmap testing."""
+    tsv_path = OUT_DIR / "tiny_drna_peak_reasons.tsv"
     header = ["peak_id", "chrom", "start", "end", "strand", "reason", "distance", "isoform_id"]
     rows = [
-        ["quantseq_peak_1", CHROM, "3450", "3550", "+", "matched", "8", "TX1a_GENE1"],
-        ["quantseq_peak_2", CHROM, "7250", "7350", "-", "matched", "12", "TX2b_GENE2"],
-        ["quantseq_peak_3", CHROM, "12750", "12850", "+", "no_isoform_nearby", "999", ""],
+        ["drna_peak_1", CHROM, "3450", "3550", "+", "matched", "8", "TX1a_GENE1"],
+        ["drna_peak_2", CHROM, "7250", "7350", "-", "matched", "12", "TX2b_GENE2"],
+        ["drna_peak_3", CHROM, "12750", "12850", "+", "no_isoform_nearby", "999", ""],
     ]
     with open(tsv_path, 'w') as f:
         f.write('\t'.join(header) + '\n')
@@ -539,8 +539,8 @@ def main():
     reads_bed_path = make_reads_bed()
     print(f"  ✓ {reads_bed_path.name}")
 
-    cage_path, quantseq_path = make_peaks()
-    print(f"  ✓ {cage_path.name}, {quantseq_path.name}")
+    cage_path, drna_path = make_peaks()
+    print(f"  ✓ {cage_path.name}, {drna_path.name}")
 
     tss_path, tts_path = make_ref_peaks()
     print(f"  ✓ {tss_path.name}, {tts_path.name}")
@@ -552,8 +552,8 @@ def main():
     print(f"  ✓ {eval_path.name}")
 
     cage_reason_path = make_cage_peak_reason_tsv()
-    quantseq_reason_path = make_quantseq_peak_reason_tsv()
-    print(f"  ✓ {cage_reason_path.name}, {quantseq_reason_path.name}")
+    drna_reason_path = make_drna_peak_reason_tsv()
+    print(f"  ✓ {cage_reason_path.name}, {drna_reason_path.name}")
 
     csv_path = make_samplesheet()
     print(f"  ✓ {csv_path.name}")

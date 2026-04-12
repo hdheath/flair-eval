@@ -2,7 +2,7 @@
 """
 Read end-signal density scatter — per-sample KDE-coloured panels.
 
-For each sample, plots TSS signal (CAGE) vs TTS signal (QuantSeq) for every
+For each sample, plots TSS signal (CAGE) vs TTS signal (dRNA) for every
 aligned *read* (not assembled isoform), coloured by KDE density.  Shows what
 the raw data looks like against orthogonal signal before any assembly.
 
@@ -90,7 +90,7 @@ def plot_read_end_signal_scatter(
         ax.set_yscale("log")
 
         if idx >= n - ncols:
-            ax.set_xlabel("TTS signal (QuantSeq)", fontsize=7)
+            ax.set_xlabel("TTS signal (dRNA)", fontsize=7)
         else:
             ax.set_xticklabels([])
         if idx % ncols == 0:
@@ -132,8 +132,8 @@ def main():
     )
     parser.add_argument("--cage-plus",  required=True, help="CAGE bedGraph (+ strand)")
     parser.add_argument("--cage-minus", required=True, help="CAGE bedGraph (- strand)")
-    parser.add_argument("--qs-plus",    required=True, help="QuantSeq bedGraph (+ strand)")
-    parser.add_argument("--qs-minus",   required=True, help="QuantSeq bedGraph (- strand)")
+    parser.add_argument("--qs-plus",    required=True, help="dRNA bedGraph (+ strand)")
+    parser.add_argument("--qs-minus",   required=True, help="dRNA bedGraph (- strand)")
     parser.add_argument("--output",     required=True, help="Output directory")
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()
