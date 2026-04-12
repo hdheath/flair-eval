@@ -1,6 +1,6 @@
 # FLAIR-Eval Pipeline
 
-Nextflow pipeline for benchmarking long-read isoform assemblers (FLAIR, Bambu, IsoQuant, etc.) using orthogonal signal data (CAGE, QuantSeq).
+Nextflow pipeline for benchmarking long-read isoform assemblers (FLAIR, Bambu, IsoQuant, etc.) using orthogonal signal data (CAGE, dRNA).
 
 ## Architecture
 

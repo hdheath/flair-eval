@@ -377,18 +377,18 @@ def savefig(
     fig: plt.Figure,
     path: Union[str, Path],
     dpi: int = 300,
-    formats: Sequence[str] = ("png", "svg"),
+    formats: Sequence[str] = ("png",),
     close: bool = True,
     **kw,
 ) -> None:
-    """Save figure as PNG + SVG (Nature requires vector), then close.
+    """Save figure as PNG (only), then close.
 
     Parameters
     ----------
     fig : matplotlib Figure
     path : output path (extension is replaced per format)
-    dpi : raster resolution (default 300, Nature minimum)
-    formats : iterable of format strings; default ``("png", "svg")``
+    dpi : raster resolution (default 300)
+    formats : iterable of format strings; default ``("png",)``
     close : whether to close the figure after saving
     **kw : forwarded to ``fig.savefig``
     """

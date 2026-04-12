@@ -80,15 +80,15 @@ class Utils {
                     bam: row.bam && row.bam != '' ? row.bam : null,
                     reads: row.reads && row.reads != '' ? row.reads : null,
                     cage: row.cage && row.cage != '' ? row.cage : null,
-                    quantseq: row.quantseq && row.quantseq != '' ? row.quantseq : null,
+                    drna: row.drna && row.drna != '' ? row.drna : null,
                     junction_tab: (
                         row.junction_tab && row.junction_tab != '' ? row.junction_tab :
                         (row.junctions && row.junctions != '' ? row.junctions : null)
                     ),
                     cage_signal_plus: row.cage_signal_plus && row.cage_signal_plus != '' ? row.cage_signal_plus : null,
                     cage_signal_minus: row.cage_signal_minus && row.cage_signal_minus != '' ? row.cage_signal_minus : null,
-                    quantseq_signal_plus: row.quantseq_signal_plus && row.quantseq_signal_plus != '' ? row.quantseq_signal_plus : null,
-                    quantseq_signal_minus: row.quantseq_signal_minus && row.quantseq_signal_minus != '' ? row.quantseq_signal_minus : null
+                    drna_signal_plus: row.drna_signal_plus && row.drna_signal_plus != '' ? row.drna_signal_plus : null,
+                    drna_signal_minus: row.drna_signal_minus && row.drna_signal_minus != '' ? row.drna_signal_minus : null
                 ]))
 
                 test_sets_list.add(new TestSet("${testName}_${dataset.name}", dataset, ([

@@ -6,7 +6,7 @@ Panels:
 1) Called transcript models
 2) Main long-read alignments (isoform-color matched)
 3) Optional CAGE signal panel (if bedGraph provided)
-4) Optional QuantSeq signal panel (if bedGraph provided)
+4) Optional dRNA signal panel (if bedGraph provided)
 """
 
 from __future__ import annotations
@@ -735,14 +735,14 @@ def main():
 
     # Peaks (support legacy arg names and explicit *-peaks names)
     parser.add_argument("--cage", dest="cage_peaks", default=None, help="CAGE peak BED (legacy arg name)")
-    parser.add_argument("--quantseq", dest="quantseq_peaks", default=None, help="QuantSeq peak BED (legacy arg name)")
+    parser.add_argument("--drna", dest="drna_peaks", default=None, help="dRNA peak BED (legacy arg name)")
     parser.add_argument("--cage-peaks", dest="cage_peaks", default=None, help="CAGE peak BED")
-    parser.add_argument("--quantseq-peaks", dest="quantseq_peaks", default=None, help="QuantSeq peak BED")
+    parser.add_argument("--drna-peaks", dest="drna_peaks", default=None, help="dRNA peak BED")
 
     parser.add_argument("--cage-signal-plus", default=None, help="Optional CAGE plus-strand bedGraph signal")
     parser.add_argument("--cage-signal-minus", default=None, help="Optional CAGE minus-strand bedGraph signal")
-    parser.add_argument("--quantseq-signal-plus", default=None, help="Optional QuantSeq plus-strand bedGraph signal")
-    parser.add_argument("--quantseq-signal-minus", default=None, help="Optional QuantSeq minus-strand bedGraph signal")
+    parser.add_argument("--drna-signal-plus", default=None, help="Optional dRNA plus-strand bedGraph signal")
+    parser.add_argument("--drna-signal-minus", default=None, help="Optional dRNA minus-strand bedGraph signal")
     parser.add_argument(
         "--max-main-reads",
         type=int,
@@ -842,10 +842,10 @@ def main():
     iso_color_map = build_isoform_colors(iso_order)
 
     cage_signal_paths = [Path(p) for p in (args.cage_signal_plus, args.cage_signal_minus) if p]
-    quantseq_signal_paths = [Path(p) for p in (args.quantseq_signal_plus, args.quantseq_signal_minus) if p]
+    drna_signal_paths = [Path(p) for p in (args.drna_signal_plus, args.drna_signal_minus) if p]
 
     cage_peaks = load_peaks(Path(args.cage_peaks), chrom, region_start, region_end) if args.cage_peaks else []
-    quantseq_peaks = load_peaks(Path(args.quantseq_peaks), chrom, region_start, region_end) if args.quantseq_peaks else []
+    drna_peaks = load_peaks(Path(args.drna_peaks), chrom, region_start, region_end) if args.drna_peaks else []
 
     x_cage, y_cage, n_cage = compute_binned_signal_from_bedgraphs(
         bedgraph_paths=cage_signal_paths,
@@ -859,28 +859,28 @@ def main():
         print("[plot] CAGE bedGraph provided but no non-zero signal in region; skipping CAGE panel")
 
     x_quant, y_quant, n_quant = compute_binned_signal_from_bedgraphs(
-        bedgraph_paths=quantseq_signal_paths,
+        bedgraph_paths=drna_signal_paths,
         chrom=chrom,
         region_start=region_start,
         region_end=region_end,
         n_bins=args.orth_bins,
     )
-    has_quantseq_signal = bool(x_quant) and max(y_quant) > 0
-    if quantseq_signal_paths and not has_quantseq_signal:
-        print("[plot] QuantSeq bedGraph provided but no non-zero signal in region; skipping QuantSeq panel")
-    if not has_cage_signal and not has_quantseq_signal:
+    has_drna_signal = bool(x_quant) and max(y_quant) > 0
+    if drna_signal_paths and not has_drna_signal:
+        print("[plot] dRNA bedGraph provided but no non-zero signal in region; skipping dRNA panel")
+    if not has_cage_signal and not has_drna_signal:
         print("[plot] No orthogonal signal panels for this region; plotting models + long-read alignments only")
 
     n_models = max(1, len(iso_order))
     n_main_reads = max(1, len(main_alignments))
-    orth_panel_count = int(has_cage_signal) + int(has_quantseq_signal)
+    orth_panel_count = int(has_cage_signal) + int(has_drna_signal)
     fig_h = max(6.5, min(22.0, 2.6 + 0.20 * n_models + 0.05 * n_main_reads + 1.2 * orth_panel_count))
 
     panel_layout: List[Tuple[str, float]] = [("models", 1.2)]
     if has_cage_signal:
         panel_layout.append(("cage", 1.0))
     panel_layout.append(("reads", 2.9))
-    if has_quantseq_signal:
+    if has_drna_signal:
         panel_layout.append(("quant", 1.0))
 
     fig = plt.figure(figsize=(7.2, fig_h))
@@ -898,7 +898,7 @@ def main():
     ax_quant = axes_by_name.get("quant")
     all_axes = list(axes_by_name.values())
     add_vertical_peak_highlights(all_axes, cage_peaks, color="#d62728")
-    add_vertical_peak_highlights(all_axes, quantseq_peaks, color="#1f77b4")
+    add_vertical_peak_highlights(all_axes, drna_peaks, color="#1f77b4")
 
     # Panel 1: transcript models
     read_block_height = READ_BLOCK_HEIGHT
@@ -979,7 +979,7 @@ def main():
     ax_reads.set_yticks([])
     ax_reads.set_title("Long Read Alignments (Isoform-colored)", fontsize=8, fontweight="normal", loc="left")
 
-    # Optional QuantSeq signal panel
+    # Optional dRNA signal panel
     if ax_quant is not None:
         ax_quant.fill_between(x_quant, y_quant, color="#1f77b4", alpha=0.55, linewidth=0)
         ax_quant.plot(x_quant, y_quant, color="#1f77b4", linewidth=0.9)

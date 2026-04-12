@@ -8,12 +8,12 @@ categorical heatmap where:
   - Each column is a mode/version
   - Each cell is colored by the recovery reason
 
-One figure per end type (TSS/CAGE, TTS/QuantSeq).
+One figure per end type (TSS/CAGE, TTS/dRNA).
 
 Usage:
     python peak_reason_heatmap.py \\
         --cage-tsvs  mode1_cage_peak_reasons.tsv mode2_cage_peak_reasons.tsv ... \\
-        --quantseq-tsvs mode1_quantseq_peak_reasons.tsv mode2_quantseq_peak_reasons.tsv ... \\
+        --drna-tsvs mode1_drna_peak_reasons.tsv mode2_drna_peak_reasons.tsv ... \\
         --output-prefix my_test_heatmap \\
         [--max-peaks 300] [--title-prefix "test: "] [--verbose]
 """
@@ -290,7 +290,7 @@ _KNOWN_MODES = [
 def extract_mode_from_filename(filename: str) -> str:
     """Extract the transcriptome_mode from a per-peak reason TSV filename.
 
-    Expected pattern: ..._<mode>_transcriptome_{cage,quantseq}_peak_reasons.tsv
+    Expected pattern: ..._<mode>_transcriptome_{cage,drna}_peak_reasons.tsv
 
     We first try to match known mode names directly, then fall back to a regex.
     """
@@ -353,8 +353,8 @@ def main():
     )
     parser.add_argument('--cage-tsvs', nargs='*', default=[],
                         help='Per-peak reason TSVs for CAGE (5\') end')
-    parser.add_argument('--quantseq-tsvs', nargs='*', default=[],
-                        help='Per-peak reason TSVs for QuantSeq (3\') end')
+    parser.add_argument('--drna-tsvs', nargs='*', default=[],
+                        help='Per-peak reason TSVs for dRNA (3\') end')
     parser.add_argument('--output-prefix', required=True,
                         help='Output filename prefix (e.g. testname)')
     parser.add_argument('--max-peaks', type=int, default=300,
@@ -365,7 +365,7 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.cage_tsvs and not args.quantseq_tsvs:
+    if not args.cage_tsvs and not args.drna_tsvs:
         print("No per-peak reason TSVs provided, nothing to plot", file=sys.stderr)
         sys.exit(0)
 
@@ -392,12 +392,12 @@ def main():
         elif args.verbose:
             print("CAGE heatmap: skipped (no data or matplotlib unavailable)")
 
-    if args.quantseq_tsvs:
-        qs_reasons, qs_scores, qs_reads = load_peak_reason_tsvs(args.quantseq_tsvs)
+    if args.drna_tsvs:
+        qs_reasons, qs_scores, qs_reads = load_peak_reason_tsvs(args.drna_tsvs)
         if args.verbose:
             for mode, reasons in qs_reasons.items():
-                print(f"  QuantSeq mode '{mode}': {len(reasons)} peaks")
-        out_path = Path(f"{args.output_prefix}_quantseq_peak_reason_heatmap.png")
+                print(f"  dRNA mode '{mode}': {len(reasons)} peaks")
+        out_path = Path(f"{args.output_prefix}_drna_peak_reason_heatmap.png")
         ok = plot_peak_reason_heatmap(
             mode_peak_reasons=qs_reasons,
             mode_peak_scores=qs_scores,
@@ -408,10 +408,10 @@ def main():
             mode_peak_reads=qs_reads,
         )
         if ok:
-            print(f"Saved QuantSeq heatmap to {out_path}")
+            print(f"Saved dRNA heatmap to {out_path}")
             any_success = True
         elif args.verbose:
-            print("QuantSeq heatmap: skipped (no data or matplotlib unavailable)")
+            print("dRNA heatmap: skipped (no data or matplotlib unavailable)")
 
     sys.exit(0 if any_success else 1)
 

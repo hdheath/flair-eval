@@ -4,7 +4,7 @@ Cross-run summary plots for concordance and boundary selection metrics.
 
 Reads merged evaluation TSVs from the test suite and produces a 2x3 panel figure:
   Row 1: 5' (TSS / CAGE)
-  Row 2: 3' (TTS / QuantSeq)
+  Row 2: 3' (TTS / dRNA)
   Col 1: Spearman rho  -- read-support x expression concordance  (Metric 1)
   Col 2: Concordance index -- boundary selection quality          (Metric 2a)
   Col 3: Signal vs end count -- over-segmentation diagnostic      (Metric 2b)

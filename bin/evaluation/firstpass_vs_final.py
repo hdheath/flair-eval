@@ -157,7 +157,7 @@ def main():
     parser.add_argument("--peaks-5prime", default=None,
                         help="BED6 CAGE peaks for TSS evaluation")
     parser.add_argument("--peaks-3prime", default=None,
-                        help="BED6 dRNA/QuantSeq peaks for TTS evaluation")
+                        help="BED6 dRNA/dRNA peaks for TTS evaluation")
     parser.add_argument("--window", type=int, default=50,
                         help="Max distance (bp) for end matching (default: 50)")
     parser.add_argument("--region", default=None,

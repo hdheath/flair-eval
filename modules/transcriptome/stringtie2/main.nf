@@ -11,7 +11,7 @@
 //   -M <float>:  Fraction for multi-hit reads (default 1.0)
 
 process StringTie2Assembly {
-    publishDir "${params.outdir}/stringtie2/${test_name}", mode: 'symlink'
+    publishDir "${params.outdir}/assemblers/stringtie2/${test_name}", mode: 'symlink'
     publishDir "${params.outdir}/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_stringtie2_${stringtie2_mode}_${it}" }
     errorStrategy 'terminate'
     tag "${dataset_name}_${align_mode}_${partition_mode}_stringtie2_${stringtie2_mode}"

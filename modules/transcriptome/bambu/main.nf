@@ -6,7 +6,7 @@
 // Options: downgrade to r-xgboost=1.7.6, use discovery=FALSE, or update Bambu to 3.5.1+.
 
 process BambuAssembly {
-    publishDir "${params.outdir}/bambu/${test_name}", mode: 'symlink'
+    publishDir "${params.outdir}/assemblers/bambu/${test_name}", mode: 'symlink'
     publishDir "${params.outdir}/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_bambu_${bambu_mode}_${it}" }
     errorStrategy 'terminate'
     tag "${dataset_name}_${align_mode}_${partition_mode}_bambu_${bambu_mode}"

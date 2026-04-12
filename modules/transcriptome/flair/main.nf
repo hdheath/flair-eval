@@ -2,8 +2,8 @@
 // Runs FLAIR transcriptome assembly to generate isoform models.
 
 process FlairTranscriptome {
-    publishDir "${params.outdir}/transcriptome/${test_name}", mode: 'symlink'
-    publishDir "${params.outdir}/transcriptome/${test_name}/firstpass", mode: 'symlink', pattern: '*.firstpass*.bed'
+    publishDir "${params.outdir}/assemblers/flair/${test_name}", mode: 'symlink'
+    publishDir "${params.outdir}/assemblers/flair/${test_name}/firstpass", mode: 'symlink', pattern: '*.firstpass*.bed'
     publishDir "${params.outdir}/logs/${test_name}", mode: 'copy', pattern: '*.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_transcriptome.${it.tokenize('.')[-1]}" }
     errorStrategy 'terminate'
     tag "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome"

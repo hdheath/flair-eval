@@ -17,7 +17,7 @@ Inputs mirror the cumulative-signal-plot pattern:
   --bed       label:path  (BED12 isoform files, one per assembler)
   --read-map  label:path  (read-map files, optional per assembler)
   --cage-peaks   BED6 CAGE peaks
-  --qs-peaks     BED6 QuantSeq peaks
+  --qs-peaks     BED6 dRNA peaks
   --cage-plus/--cage-minus/--qs-plus/--qs-minus  bedGraph signal tracks
   --output       output directory
 """
@@ -322,11 +322,11 @@ def main():
     parser.add_argument("--read-map", nargs="+", default=[],
                         help="label:path pairs for isoform read-map files")
     parser.add_argument("--cage-peaks", required=True, help="CAGE peaks BED6")
-    parser.add_argument("--qs-peaks", required=True, help="QuantSeq peaks BED6")
+    parser.add_argument("--qs-peaks", required=True, help="dRNA peaks BED6")
     parser.add_argument("--cage-plus", required=True, help="CAGE bedGraph (+ strand)")
     parser.add_argument("--cage-minus", required=True, help="CAGE bedGraph (- strand)")
-    parser.add_argument("--qs-plus", required=True, help="QuantSeq bedGraph (+ strand)")
-    parser.add_argument("--qs-minus", required=True, help="QuantSeq bedGraph (- strand)")
+    parser.add_argument("--qs-plus", required=True, help="dRNA bedGraph (+ strand)")
+    parser.add_argument("--qs-minus", required=True, help="dRNA bedGraph (- strand)")
     parser.add_argument("--output", required=True, help="Output directory")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -354,7 +354,7 @@ def main():
 
     cage_peaks = _parse_peaks_bed(args.cage_peaks)
     qs_peaks = _parse_peaks_bed(args.qs_peaks)
-    log.info("Loaded %d / %d CAGE / QuantSeq peak groups",
+    log.info("Loaded %d / %d CAGE / dRNA peak groups",
              len(cage_peaks), len(qs_peaks))
 
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(

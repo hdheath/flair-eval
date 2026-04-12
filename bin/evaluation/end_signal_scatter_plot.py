@@ -2,9 +2,9 @@
 """
 Isoform end-signal density scatter — per-method KDE-coloured panels.
 
-For each method, plots TSS signal (CAGE) vs TTS signal (QuantSeq) for every
+For each method, plots TSS signal (CAGE) vs TTS signal (dRNA) for every
 isoform, coloured by KDE density.  Requires BED12 isoform files plus four
-bedGraph signal tracks (CAGE +/- strand, QuantSeq +/- strand).
+bedGraph signal tracks (CAGE +/- strand, dRNA +/- strand).
 
 Usage:
     python end_signal_scatter_plot.py \\
@@ -48,7 +48,7 @@ def plot_end_signal_scatter(
     beds_by_method : dict[str, list[dict]]
         Mapping from method label to list of BED12 isoform dicts.
     cage_p, cage_m, qs_p, qs_m : BedGraphTrack
-        Signal tracks for CAGE +/- and QuantSeq +/-.
+        Signal tracks for CAGE +/- and dRNA +/-.
     output_dir : str or Path
     """
     output_dir = Path(output_dir)
@@ -134,8 +134,8 @@ def main():
     )
     parser.add_argument("--cage-plus",  required=True, help="CAGE bedGraph (+ strand)")
     parser.add_argument("--cage-minus", required=True, help="CAGE bedGraph (- strand)")
-    parser.add_argument("--qs-plus",    required=True, help="QuantSeq bedGraph (+ strand)")
-    parser.add_argument("--qs-minus",   required=True, help="QuantSeq bedGraph (- strand)")
+    parser.add_argument("--qs-plus",    required=True, help="dRNA bedGraph (+ strand)")
+    parser.add_argument("--qs-minus",   required=True, help="dRNA bedGraph (- strand)")
     parser.add_argument("--output",     required=True, help="Output directory")
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()

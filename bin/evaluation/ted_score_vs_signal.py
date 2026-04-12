@@ -4,7 +4,7 @@ ted_score_vs_signal.py — Compare TED per-isoform scores to orthogonal boundary
 
 For each TED configuration, scatter-plots each score component (depth, model,
 annotation proximity, composite reality) against orthogonal boundary signal
-(CAGE for 5′ TSS, QuantSeq for 3′ TTS).  Non-TED tools (no extra BED columns)
+(CAGE for 5′ TSS, dRNA for 3′ TTS).  Non-TED tools (no extra BED columns)
 are silently skipped.
 
 Outputs per end type (5prime / 3prime):
@@ -161,7 +161,7 @@ def plot_scatter_grid(
         squeeze=False, sharex="col",
     )
 
-    sig_label = "CAGE signal" if end_label == "5prime" else "QuantSeq signal"
+    sig_label = "CAGE signal" if end_label == "5prime" else "dRNA signal"
 
     for row, label in enumerate(labels):
         d = data_by_label[label]
@@ -244,7 +244,7 @@ def plot_colored_scatter(
         squeeze=False,
     )
 
-    sig_label = "CAGE signal" if end_label == "5prime" else "QuantSeq signal"
+    sig_label = "CAGE signal" if end_label == "5prime" else "dRNA signal"
 
     # Compute global signal range for shared x-axis
     all_sig = np.concatenate([d["signal"] for d in data_by_label.values()])
@@ -358,7 +358,7 @@ def plot_correlation_summary(
     ax.set_xticklabels(SCORE_COMPONENTS)
     ax.axhline(0, color="grey", linewidth=0.5, linestyle="--")
     ax.legend(fontsize=5, loc="best", frameon=False, ncol=max(1, n_bars // 4))
-    sig_label = "CAGE signal" if end_label == "5prime" else "QuantSeq signal"
+    sig_label = "CAGE signal" if end_label == "5prime" else "dRNA signal"
     style_ax(ax, ylabel=f"Spearman ρ (vs {sig_label})",
              title=f"TED score–signal correlation ({end_label})")
     fig.tight_layout()

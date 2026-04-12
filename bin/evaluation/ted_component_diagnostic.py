@@ -13,12 +13,12 @@ Panel 5 — Weight sweep ternary surface: best F1 over (w_depth, w_model, w_anno
 Panel 6 — Marginal model value: delta-AUC bar chart per end × config.
 Summary — summary_stats.tsv with per-component AUCs, optimal weights, counts.
 
-TP/FP classification: peak within ±50 bp (CAGE for 5′, QuantSeq for 3′).
+TP/FP classification: peak within ±50 bp (CAGE for 5′, dRNA for 3′).
 
 Inputs match the SjcAltEndAnalysis pattern:
   --bed          label:path  (BED12+TED isoform files)
   --cage-peaks   BED6 CAGE peaks
-  --qs-peaks     BED6 QuantSeq peaks
+  --qs-peaks     BED6 dRNA peaks
   --cage-plus/--cage-minus/--qs-plus/--qs-minus  bedGraph signal tracks
   --output       output directory
 """
@@ -427,7 +427,7 @@ def plot_signal_vs_score(
     fig, axes = plt.subplots(n, n_comp, figsize=(W2, max(W1, n * 2.0)),
                              squeeze=False, sharex="col")
 
-    sig_label = "CAGE signal" if end_label == "5prime" else "QuantSeq signal"
+    sig_label = "CAGE signal" if end_label == "5prime" else "dRNA signal"
 
     for row, label in enumerate(labels):
         d = data_by_label[label]
@@ -687,11 +687,11 @@ def main():
     parser.add_argument("--bed", nargs="+", required=True,
                         help="label:path pairs for BED12+TED isoform files")
     parser.add_argument("--cage-peaks", required=True, help="CAGE peaks BED6")
-    parser.add_argument("--qs-peaks", required=True, help="QuantSeq peaks BED6")
+    parser.add_argument("--qs-peaks", required=True, help="dRNA peaks BED6")
     parser.add_argument("--cage-plus", required=True, help="CAGE bedGraph (+ strand)")
     parser.add_argument("--cage-minus", required=True, help="CAGE bedGraph (- strand)")
-    parser.add_argument("--qs-plus", required=True, help="QuantSeq bedGraph (+ strand)")
-    parser.add_argument("--qs-minus", required=True, help="QuantSeq bedGraph (- strand)")
+    parser.add_argument("--qs-plus", required=True, help="dRNA bedGraph (+ strand)")
+    parser.add_argument("--qs-minus", required=True, help="dRNA bedGraph (- strand)")
     parser.add_argument("--output", required=True, help="Output directory")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -719,7 +719,7 @@ def main():
 
     cage_peaks = _parse_peaks_bed(args.cage_peaks)
     qs_peaks = _parse_peaks_bed(args.qs_peaks)
-    log.info("Loaded %d / %d CAGE / QuantSeq peak groups",
+    log.info("Loaded %d / %d CAGE / dRNA peak groups",
              len(cage_peaks), len(qs_peaks))
 
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(

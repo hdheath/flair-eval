@@ -305,7 +305,7 @@ def isoform_signal(
 ) -> Tuple[float, float]:
     """Return (TSS_signal, TTS_signal) for one isoform.
 
-    TSS signal comes from CAGE; TTS signal from QuantSeq.
+    TSS signal comes from CAGE; TTS signal from dRNA.
     The correct strand track is chosen automatically.
     """
     ch = iso["chrom"]

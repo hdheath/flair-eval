@@ -349,7 +349,7 @@ def main():
     parser.add_argument("--gtf", help="GTF annotation file (optional)")
     parser.add_argument("--genome", help="Genome FASTA file (optional)")
     parser.add_argument("--cage-peaks", help="CAGE peaks BED file (optional)")
-    parser.add_argument("--quantseq-peaks", help="QuantSeq peaks BED file (optional)")
+    parser.add_argument("--drna-peaks", help="dRNA peaks BED file (optional)")
     parser.add_argument("--junctions", help="Junction file (STAR SJ.out.tab or BED format)")
     parser.add_argument("--target-regions", help="Target regions BED file (optional)")
     
@@ -454,15 +454,15 @@ def main():
         'gtf': args.gtf,
         'genome': args.genome,
         'cage': args.cage_peaks,
-        'quantseq': args.quantseq_peaks,
+        'drna': args.drna_peaks,
         'junctions': args.junctions,
         'targets': args.target_regions
     }
 
     for file_type, file_path in optional_files.items():
-        # Special handling for CAGE and QuantSeq: always create output files (even if empty)
+        # Special handling for CAGE and dRNA: always create output files (even if empty)
         # This satisfies Nextflow's output requirements while allowing evaluation to handle missing data
-        if file_type in ['cage', 'quantseq'] and not file_path:
+        if file_type in ['cage', 'drna'] and not file_path:
             output_file = Path(f"{args.output_prefix}_{file_type}.bed")
             print(f"Input {file_type} file not provided, creating empty output: {output_file}")
             output_file.touch()
@@ -499,17 +499,17 @@ def main():
                     created_files.append(str(output_gtf))
                     
             elif input_path.exists():
-                # For BED-like files (CAGE, QuantSeq, junctions, targets)
+                # For BED-like files (CAGE, dRNA, junctions, targets)
                 output_file = Path(f"{args.output_prefix}_{file_type}.bed")
-                # For CAGE and QuantSeq, always create output file (even if empty) to satisfy Nextflow
+                # For CAGE and dRNA, always create output file (even if empty) to satisfy Nextflow
                 # The evaluation script handles empty/missing files gracefully
-                create_empty = (file_type in ['cage', 'quantseq'])
+                create_empty = (file_type in ['cage', 'drna'])
                 if _partition_bed_multi(input_path, output_file, parsed_regions):
                     created_files.append(str(output_file))
                 elif create_empty:
                     output_file.touch()
                     created_files.append(str(output_file))
-            elif file_type in ['cage', 'quantseq']:
+            elif file_type in ['cage', 'drna']:
                 # Input file doesn't exist but we need to create empty output for Nextflow
                 output_file = Path(f"{args.output_prefix}_{file_type}.bed")
                 print(f"Input {file_type} file not provided, creating empty output: {output_file}")

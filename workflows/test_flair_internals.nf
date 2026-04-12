@@ -92,7 +92,7 @@ params.flair_extra_args   = ''
 params.sweep_profiles     = null          // list of profiles; null = all 5
 params.sweep_alphas       = null          // list of floats; null = [0.0, 0.25, 0.5, 0.75, 1.0]
 params.peaks_5prime       = null          // BED6 experimental 5' peaks (e.g. CAGE)
-params.peaks_3prime       = null          // BED6 experimental 3' peaks (e.g. QuantSeq, dRNA)
+params.peaks_3prime       = null          // BED6 experimental 3' peaks (e.g. dRNA, dRNA)
 params.peaks_3prime_alt   = null          // Optional second 3' peak set for comparison
 params.peaks_3prime_alt_label = null      // Label for alt 3' peaks (e.g. 'dRNA')
 params.tss_model          = null          // Path to XGBoost TSS boundary model (.pkl)

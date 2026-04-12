@@ -117,10 +117,15 @@ def parse_gtf_transcripts(gtf_path: str, region_chrom: str = None,
         exons_sorted = sorted(exons)
         introns = tuple((exons_sorted[i][1], exons_sorted[i + 1][0])
                         for i in range(len(exons_sorted) - 1))
+        n_exons = len(exons_sorted)
         tss, tts = tss_tts(tx_start, tx_end, strand)
         transcripts.append({
             "tx_id": tx_id, "chrom": chrom, "strand": strand,
             "junctions": introns, "tss": tss, "tts": tts,
+            # Fields expected by compute_jc_deduplicated_precision_recall:
+            "n_exons": n_exons,
+            "start": tx_start,
+            "end": tx_end,
         })
     return transcripts
 
@@ -128,6 +133,18 @@ def parse_gtf_transcripts(gtf_path: str, region_chrom: str = None,
 def parse_isoforms_bed(bed_path: str) -> List[dict]:
     """Parse BED12 isoforms into list of dicts with junction chains."""
     return parse_bed12(bed_path)
+
+
+def parse_isoforms_gtf(gtf_path: str, region_chrom: str = None,
+                       region_start: int = None, region_end: int = None
+                       ) -> List[dict]:
+    """Parse assembler GTF (Bambu/IsoQuant/StringTie2/etc.) into same format as parse_bed12.
+
+    Reuses parse_gtf_transcripts — already reads exon features and builds
+    junction chains.  Returns a list of transcript dicts compatible with
+    compute_jc_deduplicated_precision_recall.
+    """
+    return parse_gtf_transcripts(gtf_path, region_chrom, region_start, region_end)
 
 
 def parse_peaks_bed(path: str, region_chrom: str = None,
@@ -469,29 +486,42 @@ def compute_jc_deduplicated_precision_recall(
 # ── Output ──────────────────────────────────────────────────────────────────
 
 def write_summary_tsv(results: dict, outpath: Path, mode_label: str = ""):
+    # Column names use the shared vocabulary of precision_recall_plot.py:
+    #   transcriptome_mode, 5prime_precision, 3prime_precision, 5prime_recall, 3prime_recall
+    # The "dedup" prefix is dropped here since this IS the dedup metric; raw (non-dedup)
+    # values are kept under the *_naive_precision names for reference.
     fields = [
-        "mode", "n_isoforms_total", "n_jc_groups", "n_single_exon",
+        "transcriptome_mode", "n_isoforms_total", "n_jc_groups", "n_single_exon",
         "5prime_n_isoform_ends", "5prime_dedup_tp", "5prime_redundant_calls",
-        "5prime_dedup_precision", "5prime_naive_precision", "5prime_recall", "5prime_dedup_f1",
+        "5prime_precision", "5prime_naive_precision", "5prime_recall", "5prime_f1",
         "5prime_n_annot_matched", "5prime_n_annot_total",
         "3prime_n_isoform_ends", "3prime_dedup_tp", "3prime_redundant_calls",
-        "3prime_dedup_precision", "3prime_naive_precision", "3prime_recall", "3prime_dedup_f1",
+        "3prime_precision", "3prime_naive_precision", "3prime_recall", "3prime_f1",
         "3prime_n_annot_matched", "3prime_n_annot_total",
         "paired_n_isoforms", "paired_unique_pairs", "paired_both_hit",
         "paired_dedup_precision", "paired_naive_precision",
     ]
+    # Internal results dict still uses _dedup_ names; remap for output
+    _remap = {
+        "5prime_dedup_precision": "5prime_precision",
+        "5prime_dedup_f1":        "5prime_f1",
+        "3prime_dedup_precision": "3prime_precision",
+        "3prime_dedup_f1":        "3prime_f1",
+    }
     with open(outpath, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields, delimiter="\t")
         w.writeheader()
-        row = {"mode": mode_label}
-        for k in fields[1:]:
-            v = results.get(k)
+        row = {"transcriptome_mode": mode_label}
+        for col in fields[1:]:
+            # Look up via remapped key if needed
+            src_key = {v: k for k, v in _remap.items()}.get(col, col)
+            v = results.get(src_key)
             if isinstance(v, float):
-                row[k] = f"{v:.6f}"
+                row[col] = f"{v:.6f}"
             elif v is not None:
-                row[k] = v
+                row[col] = v
             else:
-                row[k] = ""
+                row[col] = ""
         w.writerow(row)
     log.info(f"  → {outpath.name}")
 
@@ -518,14 +548,17 @@ def main():
     parser = argparse.ArgumentParser(
         description="Junction-chain-deduplicated end precision/recall."
     )
-    parser.add_argument("--isoforms-bed", required=True,
-                        help="FLAIR isoforms BED12")
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--isoforms-bed",
+                        help="Isoforms BED12 (FLAIR output)")
+    input_group.add_argument("--isoforms-gtf",
+                        help="Isoforms GTF (Bambu/IsoQuant/StringTie2/etc.)")
     parser.add_argument("--gtf", required=True,
                         help="Reference annotation GTF (full or partitioned)")
     parser.add_argument("--peaks-5prime", default=None,
                         help="BED6 file of CAGE peaks for TSS evaluation")
     parser.add_argument("--peaks-3prime", default=None,
-                        help="BED6 file of dRNA/QuantSeq peaks for TTS evaluation")
+                        help="BED6 file of dRNA peaks for TTS evaluation")
     parser.add_argument("--window", type=int, default=50,
                         help="Max distance (bp) for end matching (default: 50)")
     parser.add_argument("--region", default=None,
@@ -572,8 +605,12 @@ def main():
         n3 = sum(len(v) for v in peaks_3prime.values())
         log.info(f"  {n3} peaks in region")
 
-    log.info("Parsing isoforms BED...")
-    isoforms = parse_isoforms_bed(args.isoforms_bed)
+    if args.isoforms_bed:
+        log.info("Parsing isoforms BED...")
+        isoforms = parse_isoforms_bed(args.isoforms_bed)
+    else:
+        log.info("Parsing isoforms GTF...")
+        isoforms = parse_isoforms_gtf(args.isoforms_gtf, region_chrom, region_start, region_end)
     log.info(f"  {len(isoforms)} isoforms")
 
     log.info("Computing JC-deduplicated precision/recall...")

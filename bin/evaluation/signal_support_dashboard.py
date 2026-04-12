@@ -4,7 +4,7 @@ Signal-vs-support scatter dashboard: tiled per-mode scatter plots.
 
 Reads per-mode peak-reason TSVs (each containing per-peak records with
 peak_id, score, read_count, reason) and tiles compact scatter plots into
-an N×2 grid (one column per end type: CAGE / QuantSeq).  Each sub-plot
+an N×2 grid (one column per end type: CAGE / dRNA).  Each sub-plot
 reproduces the per-run signal-vs-support diagnostic at thumbnail scale
 for rapid cross-mode visual comparison.
 
@@ -14,7 +14,7 @@ convention: ``{dataset}_{alignment}_{partition}_{mode}_transcriptome_{endtype}_p
 Usage:
     python signal_support_dashboard.py \\
         --cage-tsvs  mode1_cage_peak_reasons.tsv mode2_cage_peak_reasons.tsv ... \\
-        --quantseq-tsvs mode1_quantseq_peak_reasons.tsv mode2_quantseq_peak_reasons.tsv ... \\
+        --drna-tsvs mode1_drna_peak_reasons.tsv mode2_drna_peak_reasons.tsv ... \\
         --output signal_support_dashboard.png \\
         [--title-prefix "test_name: "] [--verbose]
 """
@@ -74,7 +74,7 @@ def _extract_mode_from_filename(filename: str) -> str:
     """
     stem = Path(filename).stem  # remove .tsv
     # Try to match the standard naming convention
-    m = re.search(r"_([^_]+)_transcriptome_(?:cage|quantseq)_peak_reasons$", stem)
+    m = re.search(r"_([^_]+)_transcriptome_(?:cage|drna)_peak_reasons$", stem)
     if m:
         return m.group(1)
     # Fallback: try broader pattern
@@ -185,24 +185,24 @@ def _plot_scatter_panel(ax, records, title, compact=True):
     style_ax(ax, title=title)
 
 
-def create_dashboard(cage_modes, quantseq_modes, output_path, title_prefix=""):
+def create_dashboard(cage_modes, drna_modes, output_path, title_prefix=""):
     """Create the tiled signal-vs-support scatter dashboard.
 
     Args:
         cage_modes: dict[mode] -> list of records (5' / CAGE)
-        quantseq_modes: dict[mode] -> list of records (3' / QuantSeq)
+        drna_modes: dict[mode] -> list of records (3' / dRNA)
         output_path: output PNG path
         title_prefix: optional prefix
     """
     # Determine all modes and sort
-    all_modes = sorted(set(list(cage_modes.keys()) + list(quantseq_modes.keys())))
+    all_modes = sorted(set(list(cage_modes.keys()) + list(drna_modes.keys())))
     if not all_modes:
         print("No peak-reason data to plot.", file=sys.stderr)
         return False
 
     has_cage = bool(cage_modes)
-    has_quantseq = bool(quantseq_modes)
-    n_cols = (1 if has_cage else 0) + (1 if has_quantseq else 0)
+    has_drna = bool(drna_modes)
+    n_cols = (1 if has_cage else 0) + (1 if has_drna else 0)
     if n_cols == 0:
         print("No data columns available.", file=sys.stderr)
         return False
@@ -232,14 +232,14 @@ def create_dashboard(cage_modes, quantseq_modes, output_path, title_prefix=""):
             ax.set_ylabel("Read Count", fontsize=8)
         col_idx += 1
 
-    if has_quantseq:
+    if has_drna:
         for row_idx, mode in enumerate(all_modes):
             ax = axes[row_idx, col_idx]
-            records = quantseq_modes.get(mode, [])
+            records = drna_modes.get(mode, [])
             title = f"{mode}" if row_idx == 0 else mode
             _plot_scatter_panel(ax, records, title)
             if row_idx == 0:
-                ax.set_title(f"QuantSeq (3\u2032) — {mode}", fontsize=7)
+                ax.set_title(f"dRNA (3\u2032) — {mode}", fontsize=7)
             else:
                 ax.set_title(mode, fontsize=7)
             if row_idx == n_rows - 1:
@@ -249,7 +249,7 @@ def create_dashboard(cage_modes, quantseq_modes, output_path, title_prefix=""):
 
     # Shared reason legend at bottom
     all_reasons_present = set()
-    for records_list in list(cage_modes.values()) + list(quantseq_modes.values()):
+    for records_list in list(cage_modes.values()) + list(drna_modes.values()):
         for r in records_list:
             all_reasons_present.add(r["reason"])
     legend_reasons = [r for r in REASON_ORDER if r in all_reasons_present]
@@ -283,35 +283,35 @@ def main():
     )
     parser.add_argument("--cage-tsvs", nargs="*", default=[],
                         help="Per-mode CAGE peak-reason TSVs")
-    parser.add_argument("--quantseq-tsvs", nargs="*", default=[],
-                        help="Per-mode QuantSeq peak-reason TSVs")
+    parser.add_argument("--drna-tsvs", nargs="*", default=[],
+                        help="Per-mode dRNA peak-reason TSVs")
     parser.add_argument("--output", required=True, help="Output PNG path")
     parser.add_argument("--title-prefix", default="", help="Title prefix")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    if not args.cage_tsvs and not args.quantseq_tsvs:
+    if not args.cage_tsvs and not args.drna_tsvs:
         print("No peak-reason TSVs provided — nothing to plot.", file=sys.stderr)
         sys.exit(0)
 
     cage_modes = {}
-    quantseq_modes = {}
+    drna_modes = {}
 
     if args.cage_tsvs:
         cage_modes = load_peak_reason_tsvs(args.cage_tsvs)
         if args.verbose:
             print(f"Loaded CAGE peak reasons for {len(cage_modes)} modes: {list(cage_modes.keys())}")
 
-    if args.quantseq_tsvs:
-        quantseq_modes = load_peak_reason_tsvs(args.quantseq_tsvs)
+    if args.drna_tsvs:
+        drna_modes = load_peak_reason_tsvs(args.drna_tsvs)
         if args.verbose:
-            print(f"Loaded QuantSeq peak reasons for {len(quantseq_modes)} modes: {list(quantseq_modes.keys())}")
+            print(f"Loaded dRNA peak reasons for {len(drna_modes)} modes: {list(drna_modes.keys())}")
 
-    if not cage_modes and not quantseq_modes:
+    if not cage_modes and not drna_modes:
         print("No valid peak-reason data found — skipping dashboard.", file=sys.stderr)
         sys.exit(0)
 
-    success = create_dashboard(cage_modes, quantseq_modes, args.output, args.title_prefix)
+    success = create_dashboard(cage_modes, drna_modes, args.output, args.title_prefix)
     sys.exit(0 if success else 1)
 
 
