@@ -41,6 +41,12 @@ include { SjcAltEndAnalysis        } from '../modules/visualization/summary/main
 include { TedComponentDiagnostic   } from '../modules/visualization/summary/main'
 include { ReadEndSignalScatter     } from '../modules/visualization/summary/main'
 include { PeakRocCurves            } from '../modules/visualization/summary/main'
+include { InternalPrimingAnalysis  } from '../modules/visualization/summary/main'
+include { SignalReadSupport        } from '../modules/visualization/summary/main'
+include { SqantiPrecision          } from '../modules/visualization/summary/main'
+include { DepthCalibration         } from '../modules/visualization/summary/main'
+include { ClusterSpreadPlots       } from '../modules/visualization/summary/main'
+include { TedLogAnalysis           } from '../modules/visualization/summary/main'
 
 include { CrossSamplePrecisionRecall} from '../modules/visualization/cross_sample/main'
 include { CrossSamplePeakRoc        } from '../modules/visualization/cross_sample/main'
@@ -313,6 +319,92 @@ workflow SUMMARY_AND_VIZ {
             }
 
         ReadEndSignalScatter(read_signal_ch)
+
+        // --- Internal priming analysis: A-content at TTS + cross-tool + APA scatter ---
+        // Reuses cumulative_bed_ch (has read maps) + genome and GTF from eval inputs.
+        // Genome and GTF are the same for all modes in a test_name; take first.
+        genome_gtf_ch = all_eval_inputs
+            .map { items ->
+                // items[12]=genome, items[13]=gtf
+                [items[0], items[12], items[13]]
+            }
+            .unique { it[0] }
+
+        internal_priming_inputs = cumulative_bed_ch
+            .join(genome_gtf_ch)
+            .map { test_name, bed_labels, bed_files, read_maps, genome, gtf ->
+                [test_name, bed_labels, bed_files, read_maps, genome, gtf]
+            }
+
+        InternalPrimingAnalysis(internal_priming_inputs)
+
+        // --- Signal × read support: scatter + zero-signal fraction by bin ---
+        // Reuses cumulative_signal_inputs (bed + read maps + signal tracks).
+        SignalReadSupport(cumulative_signal_inputs)
+
+        // --- SQANTI precision: composition + NNC vs precision trade-off ---
+        // Requires the combined evaluation TSV, grouped by test_name.
+        sqanti_ch = CombineEvaluationTSVs.out.combined_tsv
+            .map { combined_tsv ->
+                // CombineEvaluationTSVs emits only the TSV (no test_name in the output).
+                // Recover test_name from the filename: {test_name}_combined_evaluation.tsv
+                def fname = combined_tsv.name
+                def test_name = fname.replace('_combined_evaluation.tsv', '')
+                [test_name, combined_tsv]
+            }
+
+        SqantiPrecision(sqanti_ch)
+
+        // --- Depth calibration: TED log n_reads, acceptance rate, depth-score violin ---
+        // Only include modes that produced a real TED log (non-placeholder, non-empty).
+        depth_cal_ch = all_eval_inputs
+            .map { items ->
+                // items[4]=transcriptome_mode, items[8]=ted_log
+                def ted_log = items[8]
+                def has_log = ted_log.name != 'NO_TED_LOG' && !ted_log.name.startsWith('NO_') && ted_log.size() > 0
+                has_log ? [items[0], items[4], ted_log] : null
+            }
+            .filter { it != null }
+            .groupTuple(by: [0])
+            .map { test_name, labels, logs ->
+                [test_name, labels, logs.flatten()]
+            }
+
+        DepthCalibration(depth_cal_ch)
+
+        // --- Cluster spread plots (D2): IQR violin, ECDF, spread vs signal ---
+        // Reuses depth_cal_ch (same TED log grouping) + signal tracks.
+        cluster_spread_inputs = depth_cal_ch
+            .join(
+                dataset_signal_ch
+                    .filter { it[2] && it[3] && it[4] && it[5] }
+                    .map { test_name, library_type,
+                           cage_signal_plus, cage_signal_minus,
+                           drna_signal_plus, drna_signal_minus ->
+                        [test_name,
+                         cage_signal_plus, cage_signal_minus,
+                         drna_signal_plus, drna_signal_minus]
+                    }
+            )
+            .map { test_name, ted_log_labels, ted_log_files,
+                   cage_signal_plus, cage_signal_minus,
+                   drna_signal_plus, drna_signal_minus ->
+                [test_name, ted_log_labels, ted_log_files,
+                 cage_signal_plus, cage_signal_minus,
+                 drna_signal_plus, drna_signal_minus]
+            }
+
+        ClusterSpreadPlots(cluster_spread_inputs)
+
+        // --- TED log analysis (E1+E2): end spread + CAGE peak width vs cluster IQR ---
+        // Reuses depth_cal_ch + CAGE peaks BED (from dataset_peaks_ch).
+        ted_log_analysis_inputs = depth_cal_ch
+            .join(dataset_peaks_ch)
+            .map { test_name, ted_log_labels, ted_log_files, cage_peaks, _drna_peaks ->
+                [test_name, ted_log_labels, ted_log_files, cage_peaks]
+            }
+
+        TedLogAnalysis(ted_log_analysis_inputs)
 
         // --- Isoform diversity: parallel-coordinates across multi-region partitions ---
         // Extract regions from partition_mode args.  Only runs when ≥2 regions detected.

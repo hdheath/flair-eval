@@ -1,6 +1,7 @@
 // Module: SummaryPlots + PeakReasonHeatmap + TpOverlap + IsoformsPerGeneHist
 //         + JaccardHeatmap + TotalIsoforms + EndSignalScatter + CumulativeSignal
-//         + CombineEvaluationTSVs
+//         + CombineEvaluationTSVs + InternalPrimingAnalysis + SignalReadSupport
+//         + SqantiPrecision + DepthCalibration
 // Cross-assembler comparison plots generated after all evaluations complete.
 
 /*
@@ -653,6 +654,195 @@ process ReadEndSignalScatter {
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
         --output read_end_signal \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// Internal priming analysis: A-content at TTS, cross-tool comparison,
+// and proximal APA distance scatter.
+// Requires BED12 isoform files + read maps + genome FASTA + GTF.
+// -----------------------------------------------------------------
+process InternalPrimingAnalysis {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/isoform_structure/internal_priming", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
+          path(genome), path(gtf)
+
+    output:
+    path "*.png", optional: true
+
+    script:
+    def bed_args = []
+    def map_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        bed_args << "${bed_labels[i]}:${bed_files[i]}"
+        map_args << "${bed_labels[i]}:${read_map_files[i]}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/internal_priming.py \\
+        --bed ${bed_args.join(' ')} \\
+        --read-map ${map_args.join(' ')} \\
+        --genome ${genome} \\
+        --gtf ${gtf} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// Signal × read support: scatter and zero-signal fraction by bin.
+// Requires BED12 files + read maps + CAGE/dRNA signal bedGraph tracks.
+// -----------------------------------------------------------------
+process SignalReadSupport {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/signal/signal_read_support", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
+          val(cage_signal_plus), val(cage_signal_minus),
+          val(drna_signal_plus), val(drna_signal_minus)
+
+    output:
+    path "*.png", optional: true
+
+    script:
+    def bed_args = []
+    def map_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        bed_args << "${bed_labels[i]}:${bed_files[i]}"
+        map_args << "${bed_labels[i]}:${read_map_files[i]}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/signal_read_support.py \\
+        --bed ${bed_args.join(' ')} \\
+        --read-map ${map_args.join(' ')} \\
+        --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
+        --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// SQANTI-stratified precision: structural composition + NNC vs
+// precision trade-off scatter.
+// Requires combined evaluation TSV (one row per mode, per sample).
+// -----------------------------------------------------------------
+process SqantiPrecision {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/end_accuracy/sqanti_precision", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), path(combined_eval_tsv)
+
+    output:
+    path "*.png", optional: true
+
+    script:
+    """
+    python ${projectDir}/bin/evaluation/sqanti_precision.py \\
+        --input ${combined_eval_tsv} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// Depth calibration: TED acceptance rate, depth-score violin, and
+// ECDF of n_reads for accepted vs rejected clusters.
+// Requires TED log TSV files (produced when --ted_log is passed).
+// Non-TED modes produce empty/absent logs and are skipped automatically.
+// -----------------------------------------------------------------
+process DepthCalibration {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/ted_diagnostics/depth_calibration", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(ted_log_labels), path(ted_log_files)
+
+    output:
+    path "*.png", optional: true
+
+    script:
+    def log_args = []
+    for (int i = 0; i < ted_log_labels.size(); i++) {
+        log_args << "${ted_log_labels[i]}:${ted_log_files[i]}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/depth_calibration.py \\
+        --ted-log ${log_args.join(' ')} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// Cluster spread plots (D2): TSS/TTS IQR by pass/reject, spread vs
+// signal, spread vs n_reads.  Requires TED log files + signal tracks.
+// -----------------------------------------------------------------
+process ClusterSpreadPlots {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/ted_diagnostics/cluster_spread", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(ted_log_labels), path(ted_log_files),
+          val(cage_signal_plus), val(cage_signal_minus),
+          val(drna_signal_plus), val(drna_signal_minus)
+
+    output:
+    path "*.png", optional: true
+
+    script:
+    def log_args = []
+    for (int i = 0; i < ted_log_labels.size(); i++) {
+        log_args << "${ted_log_labels[i]}:${ted_log_files[i]}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/cluster_spread_plots.py \\
+        --ted-log ${log_args.join(' ')} \\
+        --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
+        --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// TED log analysis (E1+E2): TSS vs TTS spread violin + summary
+// scatter, CAGE peak width vs cluster IQR, threshold margin violin.
+// Requires TED log files + CAGE peaks BED.
+// -----------------------------------------------------------------
+process TedLogAnalysis {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/ted_diagnostics/ted_log_analysis", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(ted_log_labels), path(ted_log_files),
+          val(cage_peaks)
+
+    output:
+    path "*.png", optional: true
+
+    script:
+    def log_args = []
+    for (int i = 0; i < ted_log_labels.size(); i++) {
+        log_args << "${ted_log_labels[i]}:${ted_log_files[i]}"
+    }
+    def cage_arg = (cage_peaks && cage_peaks != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
+    """
+    python ${projectDir}/bin/evaluation/ted_log_analysis.py \\
+        --ted-log ${log_args.join(' ')} \\
+        ${cage_arg} \\
+        --output . \\
         --verbose || true
     """
 }
