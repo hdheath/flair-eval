@@ -285,14 +285,15 @@ workflow ASSEMBLE_AND_EVAL {
                 [test_name, dataset_name, transcriptome_mode,
                  firstpass_bed, isoforms_bed, gtf, cage_peaks, drna_peaks, partition_args]
             }
-        FirstpassComparison(firstpass_comparison_inputs)
+        if (params.run_firstpass_comparison) {
+            FirstpassComparison(firstpass_comparison_inputs)
+        }
 
     emit:
         evaluation_results      = Evaluation.out.evaluation_results
         cage_peak_reason_tsvs   = Evaluation.out.cage_peak_reason_tsvs
         drna_peak_reason_tsvs = Evaluation.out.drna_peak_reason_tsvs
         ted_precision_metrics   = TedEndPrecision.out.metrics
-        firstpass_comparison    = FirstpassComparison.out.comparison
         all_eval_inputs         = all_eval_inputs
         flair_transcriptome     = FlairTranscriptome.out.transcriptome
 }

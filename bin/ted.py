@@ -125,6 +125,7 @@ def main():
     logger.info(f"Calculating TED metrics for {input_file}")
     metrics = calculate_ted_metrics(
         iso_bed=iso_bed,
+        source_gtf=args.gtf_input,
         map_file=args.map_file,
         bam_file=args.bam,
         corrected_bed=args.corrected_bed,

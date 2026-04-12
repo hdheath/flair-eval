@@ -658,6 +658,7 @@ def calculate_ted_metrics(
     test_regions_dir: Optional[Path] = None,
     genome_path: Optional[Path] = None,
     gtf_path: Optional[Path] = None,
+    source_gtf: Optional[Path] = None,
     max_count_cage: Optional[int] = None,
     max_count_drna: Optional[int] = None,
     max_count_ref_tss: Optional[int] = None,
@@ -707,14 +708,34 @@ def calculate_ted_metrics(
             if len(row) >= 4:
                 name = row[3]
                 isoform_names.append(name)
-                # Extract gene IDs in same loop
+                # Extract gene IDs from FLAIR-style BED names (e.g. ENST…_ENSG…)
                 parts = str(name).split("_")
                 for part in parts:
-                    # Only count gene IDs (ENSG*, ENSMUSG*), not transcript IDs (ENST*, ENSMUST*)
                     if part.startswith(("ENSG", "ENSMUSG")):
                         genes.add(part.split(".")[0])
 
     n_iso = len(isoform_names)
+
+    # For GTF-based assemblers (IsoQuant, Bambu, StringTie2, etc.) the BED names
+    # are bare transcript IDs with no embedded gene ID, so genes will be empty.
+    # Fall back to parsing gene_id attributes directly from the source GTF.
+    if not genes and source_gtf is not None:
+        import re as _re
+        _gene_id_re = _re.compile(r'gene_id\s+"([^"]+)"')
+        try:
+            with open(source_gtf) as _fh:
+                for _line in _fh:
+                    if _line.startswith('#') or '\t' not in _line:
+                        continue
+                    _cols = _line.split('\t')
+                    if len(_cols) < 9 or _cols[2] != 'transcript':
+                        continue
+                    _m = _gene_id_re.search(_cols[8])
+                    if _m:
+                        genes.add(_m.group(1).split('.')[0])
+        except OSError:
+            pass
+
     n_genes = len(genes)
 
     # Initialize read metrics - will be populated only if not skip_read_metrics
