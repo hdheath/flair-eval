@@ -31,59 +31,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from pub_style import ModeStyler, style_ax, legend_outside, savefig, W1, apply_rc
-from signal_utils import parse_isoforms, load_signal_tracks, isoform_signal
-
-
-# ── Read-map helpers ────────────────────────────────────────────────────────
-
-def load_read_map(path: str | Path) -> dict[str, int]:
-    """Load an isoform read-map file → {isoform_id: read_count}.
-
-    Self-referencing maps (e.g. StringTie2 where each 'read' is the
-    isoform name itself) are detected and return an empty dict.
-    """
-    counts: dict[str, int] = {}
-    n_self = 0
-    n_total = 0
-    with open(path) as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 2:
-                continue
-            iso_id = parts[0]
-            reads = parts[1].split(",")
-            n_reads = len(reads)
-            counts[iso_id] = n_reads
-            n_total += 1
-            if n_reads == 1 and reads[0] == iso_id:
-                n_self += 1
-    # Skip self-referencing read maps (e.g., StringTie2)
-    if n_total > 0 and n_self / n_total > 0.9:
-        return {}
-    return counts
-
-
-_ENSG_RE = re.compile(r"_ENSG\d")
-
-
-def _lookup_read_count(name: str, read_counts: dict[str, int]) -> int | None:
-    """Look up read count for an isoform name, handling tid_gid naming."""
-    if name in read_counts:
-        return read_counts[name]
-    # GTF-parsed names are "tid_gid" — try stripping the gene_id suffix.
-    # First try splitting at _ENSG (covers GENCODE gene IDs).
-    m = _ENSG_RE.search(name)
-    if m:
-        tid = name[: m.start()]
-        if tid in read_counts:
-            return read_counts[tid]
-    # Fallback: split on last underscore (covers BambuGene, MSTRG, etc.)
-    idx = name.rfind("_")
-    if idx > 0:
-        tid = name[:idx]
-        if tid in read_counts:
-            return read_counts[tid]
-    return None
+from signal_utils import (
+    parse_isoforms, load_signal_tracks, isoform_signal,
+    load_read_map, lookup_read_count,
+)
 
 
 # ── Data preparation ────────────────────────────────────────────────────────
@@ -105,7 +56,7 @@ def _build_iso_data(
         rc = read_maps_by_method[m]
         rows = []
         for iso in beds_by_method[m]:
-            count = _lookup_read_count(iso["name"], rc)
+            count = lookup_read_count(iso["name"], rc)
             if count is None:
                 count = 0
             tss_sig, tts_sig = isoform_signal(iso, cage_p, cage_m, qs_p, qs_m)

@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
 """
-signal_read_support.py — Signal × read support scatter plot.
+signal_read_support.py — Signal at isoform ends across assembly modes.
 
-For each isoform, plots orthogonal signal strength at the TSS (CAGE) and TTS
-(dRNA) against read support, revealing whether low-support isoforms are also
-low-signal (noise) or have genuine signal (real biology being dropped by
-frac_support or threshold tuning).
+Asks: do different modes place isoform ends on stronger signal peaks?
 
 Produces:
-  B1a. signal_x_read_support_5prime.png
-       x = read support (log), y = CAGE signal at TSS.
-       Points coloured by zero vs non-zero signal.
-       One overlaid panel per method (KDE-smoothed density contours optional).
+  signal_distribution_5prime.png
+      ECDF of CAGE signal at TSS per mode (non-zero isoforms only),
+      plus fraction with zero signal shown in legend.
 
-  B1b. signal_x_read_support_3prime.png
-       Same, but y = dRNA signal at TTS.
+  signal_distribution_3prime.png
+      Same for dRNA signal at TTS.
 
-  B1c. signal_x_read_support_zero_pct.png
-       Bar chart: fraction of isoforms with zero signal at TSS and TTS
-       per read-support bin, per method — shows whether zero-signal isoforms
-       are concentrated in low-support bins (noise) or spread across bins (real).
+  signal_zero_fraction.png
+      Grouped bar chart: fraction of isoforms with zero signal at TSS and TTS
+      per mode — direct cross-mode quality comparison.
+
+  signal_zero_count.png
+      Same as signal_zero_fraction.png but Y-axis is raw isoform count,
+      making absolute scale differences between methods visible.
+
+  signal_quantiles.png
+      Median + IQR (P25–P75) of non-zero signal per mode, dot-and-range plot,
+      for TSS and TTS side by side — which mode best concentrates ends on
+      real signal peaks?
 
 Usage:
     python signal_read_support.py \\
         --bed label1:bed1.bed label2:bed2.bed ... \\
-        --read-map label1:map1.txt label2:map2.txt ... \\
         --cage-plus cage_plus.bg --cage-minus cage_minus.bg \\
         --qs-plus qs_plus.bg   --qs-minus qs_minus.bg \\
         --output output_dir/
@@ -33,7 +36,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -43,7 +45,6 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
 try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler, legend_outside
@@ -54,211 +55,227 @@ except ImportError:
 
 apply_rc()
 
-# ── Constants ────────────────────────────────────────────────────────────────
-
-MAX_ISO    = 50_000   # cap for scatter (rasterized)
-RNG_SEED   = 42
-SUPPORT_BINS   = [1, 2, 5, 10, 20, float("inf")]
-SUPPORT_LABELS = ["1", "2–4", "5–9", "10–19", "20+"]
-
-# Colours for zero vs non-zero signal
-COL_ZERO    = "#CC79A7"   # reddish purple — zero signal
-COL_NONZERO = "#0072B2"   # blue — has signal
-
-
-# ── Read-map loading ─────────────────────────────────────────────────────────
-
-def load_read_map(path: str | Path) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
-    n_self = n_total = 0
-    with open(path) as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 2:
-                continue
-            iso_id  = parts[0]
-            reads   = parts[1].split(",")
-            n_reads = len(reads)
-            counts[iso_id] = n_reads
-            n_total += 1
-            if n_reads == 1 and reads[0] == iso_id:
-                n_self += 1
-    if n_total > 0 and n_self / n_total > 0.9:
-        return {}
-    return counts
-
-
-_ENSG_RE = re.compile(r"_ENSG\d")
-
-
-def _lookup_count(name: str, rc: Dict[str, int]) -> int:
-    if name in rc:
-        return rc[name]
-    m = _ENSG_RE.search(name)
-    if m:
-        tid = name[:m.start()]
-        if tid in rc:
-            return rc[tid]
-    idx = name.rfind("_")
-    if idx > 0 and name[:idx] in rc:
-        return rc[name[:idx]]
-    return 0
-
 
 # ── Data building ─────────────────────────────────────────────────────────────
 
 def build_data(
     beds_by_method: Dict[str, List[dict]],
-    read_maps:       Dict[str, Dict[str, int]],
     cage_p, cage_m, qs_p, qs_m,
-) -> Dict[str, List[dict]]:
-    """Return {method: [{reads, tss_sig, tts_sig}]}."""
-    data: Dict[str, List[dict]] = {}
-    rng = np.random.default_rng(RNG_SEED)
+) -> Dict[str, dict]:
+    """Return {method: {tss: np.ndarray, tts: np.ndarray}} of signal values."""
+    data: Dict[str, dict] = {}
     for method, isos in beds_by_method.items():
-        rc = read_maps.get(method, {})
-        rows = []
+        tss_vals, tts_vals = [], []
         for iso in isos:
-            reads = _lookup_count(iso["name"], rc) if rc else 0
-            if reads == 0:
-                continue
             tss_sig, tts_sig = isoform_signal(iso, cage_p, cage_m, qs_p, qs_m)
-            rows.append({"reads": reads, "tss_sig": tss_sig, "tts_sig": tts_sig})
-        # subsample if very large
-        if len(rows) > MAX_ISO:
-            idx = rng.choice(len(rows), MAX_ISO, replace=False)
-            rows = [rows[i] for i in idx]
-        data[method] = rows
+            tss_vals.append(tss_sig)
+            tts_vals.append(tts_sig)
+        data[method] = {
+            "tss": np.array(tss_vals, dtype=float),
+            "tts": np.array(tts_vals, dtype=float),
+        }
     return data
 
 
-def support_bin(n: int) -> int:
-    for i, upper in enumerate(SUPPORT_BINS[1:]):
-        if n < upper:
-            return i
-    return len(SUPPORT_BINS) - 2
+# ── Plot 1: ECDF of signal (non-zero isoforms) ───────────────────────────────
 
-
-# ── Plot B1a/b: scatter panels ────────────────────────────────────────────────
-
-def _scatter_panel(
-    data: Dict[str, List[dict]],
+def plot_signal_ecdf(
+    data: Dict[str, dict],
     sig_key: str,
     sig_label: str,
     output_path: Path,
+    styler: ModeStyler,
 ):
-    methods = [m for m in data if data[m]]
+    methods = [m for m in data if len(data[m][sig_key]) > 0]
     if not methods:
         return
 
-    n     = len(methods)
-    ncols = min(n, 4)
-    nrows = (n + ncols - 1) // ncols
+    fig, ax = plt.subplots(figsize=(W2 * 0.55, W1 * 0.75))
+    handles = []
 
-    fig, axes = plt.subplots(
-        nrows, ncols,
-        figsize=(W2, W1 * 0.82 * nrows / max(nrows, 1)),
-        squeeze=False,
-    )
+    for m in methods:
+        vals = data[m][sig_key]
+        n_total = len(vals)
+        nonzero = vals[vals > 0]
+        zero_pct = (vals == 0).sum() / n_total * 100 if n_total > 0 else 0
 
-    for idx, m in enumerate(methods):
-        ax   = axes[idx // ncols][idx % ncols]
-        rows = data[m]
-        xs   = np.array([r["reads"]   for r in rows], dtype=float)
-        ys   = np.array([r[sig_key]   for r in rows], dtype=float)
+        if len(nonzero) == 0:
+            continue
 
-        zero    = ys == 0
-        nonzero = ~zero
+        sorted_v = np.sort(nonzero)
+        ecdf_y   = np.arange(1, len(sorted_v) + 1) / len(sorted_v)
 
-        # Non-zero signal first (bottom layer), zero on top
-        if nonzero.any():
-            ax.scatter(xs[nonzero] + 0.5, ys[nonzero] + 1e-4,
-                       s=1.5, alpha=0.3, color=COL_NONZERO,
-                       edgecolors="none", rasterized=True)
-        if zero.any():
-            # jitter y slightly for visibility
-            jitter = np.random.default_rng(42).uniform(-0.3, 0.3, zero.sum())
-            ax.scatter(xs[zero] + 0.5, np.full(zero.sum(), 1e-4) + 10 ** jitter * 1e-5,
-                       s=1.0, alpha=0.2, color=COL_ZERO,
-                       edgecolors="none", rasterized=True)
+        line, = ax.plot(
+            sorted_v, ecdf_y,
+            color=styler.color(m),
+            linewidth=1.0,
+            alpha=0.85,
+        )
+        handles.append(styler.legend_handle(
+            m,
+            label=f"{m}  ({zero_pct:.0f}% zero)",
+            markersize=5,
+        ))
 
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        style_ax(ax)
-        pct_zero = zero.sum() / len(rows) * 100 if rows else 0
-        ax.text(0.04, 0.97, m, transform=ax.transAxes,
-                ha="left", va="top", fontsize=5, fontweight="bold")
-        ax.text(0.04, 0.88, f"{pct_zero:.0f}% zero-signal",
-                transform=ax.transAxes, ha="left", va="top",
-                fontsize=5, color=COL_ZERO)
+    ax.set_xscale("log")
+    style_ax(ax,
+             xlabel=f"{sig_label} signal at isoform end (non-zero)",
+             ylabel="Cumulative fraction of isoforms")
+    ax.set_ylim(0, 1)
 
-        if idx >= n - ncols:
-            ax.set_xlabel("Read support", fontsize=6)
-        if idx % ncols == 0:
-            ax.set_ylabel(sig_label, fontsize=6)
-
-    for idx in range(n, nrows * ncols):
-        axes[idx // ncols][idx % ncols].set_visible(False)
-
-    # Shared legend
-    from matplotlib.lines import Line2D
-    handles = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=COL_NONZERO,
-               markersize=5, label="Signal > 0"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=COL_ZERO,
-               markersize=5, label="Zero signal"),
-    ]
-    fig.legend(handles=handles, loc="lower right", fontsize=6,
-               frameon=False, bbox_to_anchor=(1.0, 0.0))
-    fig.tight_layout(pad=0.3)
+    legend_outside(fig, handles=handles, loc="lower right",
+                   bbox_to_anchor=(1.0, 0.0), ncol=1, fontsize=5,
+                   title="mode  (% zero-signal)")
+    fig.tight_layout(pad=0.4)
     savefig(fig, output_path)
 
 
-# ── Plot B1c: zero-signal fraction by read-support bin ───────────────────────
+# ── Plot 2: Zero-signal fraction per mode ────────────────────────────────────
 
-def plot_zero_by_support_bin(
-    data: Dict[str, List[dict]],
-    output_dir: Path,
+def plot_zero_fraction(
+    data: Dict[str, dict],
+    output_path: Path,
+    styler: ModeStyler,
 ):
     methods = list(data.keys())
     if not methods:
         return
-    styler = ModeStyler(methods)
-    n_bins = len(SUPPORT_LABELS)
 
-    for sig_key, sig_label, fname in [
-        ("tss_sig", "TSS (CAGE)",  "signal_x_read_support_zero_pct_5prime.png"),
-        ("tts_sig", "TTS (dRNA)",  "signal_x_read_support_zero_pct_3prime.png"),
+    tss_fracs = []
+    tts_fracs = []
+    for m in methods:
+        tss = data[m]["tss"]
+        tts = data[m]["tts"]
+        tss_fracs.append((tss == 0).sum() / len(tss) if len(tss) > 0 else 0)
+        tts_fracs.append((tts == 0).sum() / len(tts) if len(tts) > 0 else 0)
+
+    x     = np.arange(len(methods))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(W2, W1 * 0.65))
+
+    bars_tss = ax.bar(x - width / 2, tss_fracs, width,
+                      color=[styler.color(m) for m in methods],
+                      edgecolor="none", alpha=0.9, label="TSS (CAGE)")
+    bars_tts = ax.bar(x + width / 2, tts_fracs, width,
+                      color=[styler.color(m) for m in methods],
+                      edgecolor="none", alpha=0.45, label="TTS (dRNA)")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(methods, rotation=35, ha="right", fontsize=6)
+    ax.set_ylim(0, 1)
+    style_ax(ax, ylabel="Fraction of isoforms with zero signal")
+
+    # Hatch legend to distinguish TSS vs TTS bars
+    from matplotlib.patches import Patch
+    legend_handles = [
+        Patch(facecolor="grey", alpha=0.9,  label="TSS (CAGE)"),
+        Patch(facecolor="grey", alpha=0.45, label="TTS (dRNA)"),
+    ]
+    ax.legend(handles=legend_handles, fontsize=6, frameon=False,
+              loc="upper right")
+
+    fig.tight_layout(pad=0.4)
+    savefig(fig, output_path)
+
+
+# ── Plot 2b: Raw count of zero-signal isoforms per mode ──────────────────────
+
+def plot_zero_count(
+    data: Dict[str, dict],
+    output_path: Path,
+    styler: ModeStyler,
+):
+    methods = list(data.keys())
+    if not methods:
+        return
+
+    tss_counts = []
+    tts_counts = []
+    for m in methods:
+        tss = data[m]["tss"]
+        tts = data[m]["tts"]
+        tss_counts.append(int((tss == 0).sum()))
+        tts_counts.append(int((tts == 0).sum()))
+
+    x     = np.arange(len(methods))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(W2, W1 * 0.65))
+
+    ax.bar(x - width / 2, tss_counts, width,
+           color=[styler.color(m) for m in methods],
+           edgecolor="none", alpha=0.9, label="TSS (CAGE)")
+    ax.bar(x + width / 2, tts_counts, width,
+           color=[styler.color(m) for m in methods],
+           edgecolor="none", alpha=0.45, label="TTS (dRNA)")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(methods, rotation=35, ha="right", fontsize=6)
+    style_ax(ax, ylabel="Number of isoforms with zero signal")
+
+    from matplotlib.patches import Patch
+    legend_handles = [
+        Patch(facecolor="grey", alpha=0.9,  label="TSS (CAGE)"),
+        Patch(facecolor="grey", alpha=0.45, label="TTS (dRNA)"),
+    ]
+    ax.legend(handles=legend_handles, fontsize=6, frameon=False,
+              loc="upper right")
+
+    fig.tight_layout(pad=0.4)
+    savefig(fig, output_path)
+
+
+# ── Plot 3: Median + IQR of non-zero signal per mode ─────────────────────────
+
+def plot_signal_quantiles(
+    data: Dict[str, dict],
+    output_path: Path,
+    styler: ModeStyler,
+):
+    methods = list(data.keys())
+    if not methods:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(W2, W1 * 0.7), sharey=False)
+
+    for ax, sig_key, sig_label in [
+        (axes[0], "tss", "CAGE signal at TSS"),
+        (axes[1], "tts", "dRNA signal at TTS"),
     ]:
-        x     = np.arange(n_bins)
-        width = 0.8 / max(len(methods), 1)
+        medians, p25s, p75s = [], [], []
+        valid_methods = []
+        for m in methods:
+            nz = data[m][sig_key]
+            nz = nz[nz > 0]
+            if len(nz) < 5:
+                continue
+            medians.append(np.median(nz))
+            p25s.append(np.percentile(nz, 25))
+            p75s.append(np.percentile(nz, 75))
+            valid_methods.append(m)
 
-        fig, ax = plt.subplots(figsize=(W2, W1 * 0.65))
-        handles = []
-        for i, m in enumerate(methods):
-            rows  = data[m]
-            fracs = []
-            for b in range(n_bins):
-                bin_rows = [r for r in rows if support_bin(r["reads"]) == b]
-                if bin_rows:
-                    fracs.append(sum(r[sig_key] == 0 for r in bin_rows) / len(bin_rows))
-                else:
-                    fracs.append(0.0)
-            offset = (i - len(methods) / 2 + 0.5) * width
-            ax.bar(x + offset, fracs, width * 0.9,
-                   color=styler.color(m), edgecolor="none", alpha=0.85)
-            handles.append(styler.legend_handle(m, label=m, markersize=5))
+        if not valid_methods:
+            ax.set_visible(False)
+            continue
 
-        ax.set_xticks(x)
-        ax.set_xticklabels(SUPPORT_LABELS, fontsize=7)
-        ax.set_ylim(0, 1)
-        style_ax(ax,
-                 xlabel="Read support (reads per isoform)",
-                 ylabel=f"Fraction with zero {sig_label} signal")
-        legend_outside(fig, handles=handles, loc="upper right",
-                       bbox_to_anchor=(1.0, 1.0), ncol=1, fontsize=6)
-        fig.tight_layout(pad=0.3)
-        savefig(fig, output_dir / fname)
+        y = np.arange(len(valid_methods))
+        for i, m in enumerate(valid_methods):
+            ax.plot([p25s[i], p75s[i]], [i, i],
+                    color=styler.color(m), linewidth=2.0, alpha=0.6,
+                    solid_capstyle="round")
+            ax.scatter([medians[i]], [i],
+                       color=styler.color(m), s=20, zorder=3,
+                       edgecolors="white", linewidths=0.4)
+
+        ax.set_yticks(y)
+        ax.set_yticklabels(valid_methods, fontsize=6)
+        ax.set_xscale("log")
+        style_ax(ax, xlabel=sig_label + " (non-zero, median ± IQR)")
+        ax.invert_yaxis()
+
+    fig.tight_layout(pad=0.4)
+    savefig(fig, output_path)
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -270,8 +287,6 @@ def main():
     )
     parser.add_argument("--bed",        nargs="+", required=True,
                         help="label:path pairs for BED12 isoform files")
-    parser.add_argument("--read-map",   nargs="+", default=[],
-                        help="label:path pairs for isoform read-map files")
     parser.add_argument("--cage-plus",  required=True)
     parser.add_argument("--cage-minus", required=True)
     parser.add_argument("--qs-plus",    required=True)
@@ -298,17 +313,6 @@ def main():
         print("No isoform data — skipping", file=sys.stderr)
         sys.exit(1)
 
-    read_maps: Dict[str, Dict[str, int]] = {}
-    for entry in args.read_map:
-        if ":" not in entry:
-            continue
-        label, path = entry.split(":", 1)
-        if not Path(path).exists():
-            continue
-        rc = load_read_map(path)
-        if rc:
-            read_maps[label] = rc
-
     if args.verbose:
         print("  Loading signal tracks...", file=sys.stderr)
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(
@@ -317,18 +321,22 @@ def main():
 
     if args.verbose:
         print("  Computing per-isoform signal...", file=sys.stderr)
-    data = build_data(beds_by_method, read_maps, cage_p, cage_m, qs_p, qs_m)
+    data = build_data(beds_by_method, cage_p, cage_m, qs_p, qs_m)
+
+    styler = ModeStyler(list(beds_by_method.keys()))
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    _scatter_panel(data, "tss_sig", "CAGE signal at TSS",
-                   output_dir / "signal_x_read_support_5prime.png")
-    _scatter_panel(data, "tts_sig", "dRNA signal at TTS",
-                   output_dir / "signal_x_read_support_3prime.png")
-    plot_zero_by_support_bin(data, output_dir)
+    plot_signal_ecdf(data, "tss", "CAGE",
+                     output_dir / "signal_distribution_5prime.png", styler)
+    plot_signal_ecdf(data, "tts", "dRNA",
+                     output_dir / "signal_distribution_3prime.png", styler)
+    plot_zero_fraction(data, output_dir / "signal_zero_fraction.png", styler)
+    plot_zero_count(data, output_dir / "signal_zero_count.png", styler)
+    plot_signal_quantiles(data, output_dir / "signal_quantiles.png", styler)
 
-    print(f"Saved signal × read support plots to {args.output}")
+    print(f"Saved signal distribution plots to {args.output}")
 
 
 if __name__ == "__main__":

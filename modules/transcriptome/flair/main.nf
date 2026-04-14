@@ -31,6 +31,7 @@ process FlairTranscriptome {
     def junction_tab_arg = has_junction_flag ? "${junction_flag} ${junction_tab}" : ""
     def cleaned_args = transcriptome_args.replaceAll('--junction_tab\\s*', '')
     def is_ted = (transcriptome_args =~ /(?:^|\s)--ted(?:\s|$)/).find()
+    def ted_log_flag = is_ted ? '--ted_log' : ''
     def ted_log_file = "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.ted_log.tsv"
 
     """
@@ -41,6 +42,7 @@ process FlairTranscriptome {
         -t ${task.cpus} \\
         --keep_intermediate \\
         ${junction_tab_arg} \\
+        ${ted_log_flag} \\
         ${cleaned_args} \\
         -o ${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome
     touch ${ted_log_file}

@@ -22,8 +22,9 @@
 // =============================================================================
 
 include { CombineEvaluationTSVs     } from '../modules/visualization/summary/main'
-include { CombinePrecisionRecall    } from '../modules/visualization/summary/main'
-include { PrecisionRecallPlot       } from '../modules/visualization/summary/main'
+include { CombinePrecisionRecall                      } from '../modules/visualization/summary/main'
+include { CombinePrecisionRecall as CombineGtfPrecisionRecall } from '../modules/visualization/summary/main'
+include { PrecisionRecallPlot                         } from '../modules/visualization/summary/main'
 include { SummaryPlots              } from '../modules/visualization/summary/main'
 include { PeakReasonHeatmap         } from '../modules/visualization/summary/main'
 include { SignalSupportDashboard    } from '../modules/visualization/summary/main'
@@ -43,10 +44,15 @@ include { ReadEndSignalScatter     } from '../modules/visualization/summary/main
 include { PeakRocCurves            } from '../modules/visualization/summary/main'
 include { InternalPrimingAnalysis  } from '../modules/visualization/summary/main'
 include { SignalReadSupport        } from '../modules/visualization/summary/main'
+include { PrSignalBalance          } from '../modules/visualization/summary/main'
 include { SqantiPrecision          } from '../modules/visualization/summary/main'
 include { DepthCalibration         } from '../modules/visualization/summary/main'
 include { ClusterSpreadPlots       } from '../modules/visualization/summary/main'
 include { TedLogAnalysis           } from '../modules/visualization/summary/main'
+include { EndSignalMetaplot        } from '../modules/visualization/summary/main'
+include { EndSignalHeatmap         } from '../modules/visualization/summary/main'
+include { ReadEndHeatmap           } from '../modules/visualization/summary/main'
+include { IsoformEndRoc            } from '../modules/visualization/summary/main'
 
 include { CrossSamplePrecisionRecall} from '../modules/visualization/cross_sample/main'
 include { CrossSamplePeakRoc        } from '../modules/visualization/cross_sample/main'
@@ -59,11 +65,13 @@ workflow SUMMARY_AND_VIZ {
 
     take:
         evaluation_results         // tuple [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, eval_tsv]
+        isoform_categories         // tuple [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, isoform_categories.tsv]
         cage_peak_reason_tsvs      // tuple [test_name, path]
-        drna_peak_reason_tsvs  // tuple [test_name, path]
+        drna_peak_reason_tsvs      // tuple [test_name, path]
         all_eval_inputs            // full 23-field eval channel (for divergence + UTR)
         dataset_signal_ch          // tuple [test_name, library_type, cage_signal_plus, cage_signal_minus, qs_signal_plus, qs_signal_minus]
         ted_precision_metrics      // tuple [test_name, dataset_name, transcriptome_mode, precision_recall_summary.tsv, per_junction_chain.tsv]
+        ted_gtf_precision          // tuple [test_name, dataset_name, transcriptome_mode, gtf_precision_recall_summary.tsv]
 
     main:
 
@@ -85,8 +93,23 @@ workflow SUMMARY_AND_VIZ {
             }
             .groupTuple()
 
-        CombinePrecisionRecall(all_pr_tsvs)
-        PrecisionRecallPlot(CombinePrecisionRecall.out.combined_pr)
+        CombinePrecisionRecall(all_pr_tsvs, "ortho")
+
+        // Combine GTF-only precision TSVs in parallel (same CombinePrecisionRecall process)
+        all_gtf_pr_tsvs = ted_gtf_precision
+            .map { test_name, dataset_name, transcriptome_mode, gtf_tsv ->
+                [test_name, gtf_tsv]
+            }
+            .groupTuple()
+
+        CombineGtfPrecisionRecall(all_gtf_pr_tsvs, "gtf")
+
+        // Join orthogonal + GTF combined TSVs by test_name for the scatter plot
+        pr_plot_inputs = CombinePrecisionRecall.out.combined_pr
+            .join(CombineGtfPrecisionRecall.out.combined_pr)
+            .map { test_name, ortho_tsv, gtf_tsv -> [test_name, ortho_tsv, gtf_tsv] }
+
+        PrecisionRecallPlot(pr_plot_inputs)
 
         // --- Peak-reason heatmap: mix CAGE + dRNA, group by test_name ---
         all_reason_tsvs = cage_peak_reason_tsvs
@@ -227,6 +250,30 @@ workflow SUMMARY_AND_VIZ {
 
         CumulativeSignalPlot(cumulative_signal_inputs)
 
+        // --- End-signal meta-profile: average CAGE/dRNA centred on called ends ---
+        // Reuses signal_plot_inputs (bed files + signal tracks, no read maps needed).
+        EndSignalMetaplot(signal_plot_inputs)
+
+        // --- End-signal heatmap (smarca4-style): per-isoform rows, bp-offset columns ---
+        // Reuses cumulative_signal_inputs (bed + read maps + signal tracks).
+        EndSignalHeatmap(cumulative_signal_inputs)
+
+        // --- Read-end heatmap: where assigned reads land relative to called ends ---
+        // Same layout as EndSignalHeatmap but uses read-map + read_audit BED.
+        // reads_bed is per-dataset (all modes share the same reads file), so we
+        // pass a single deduplicated reads BED alongside the per-method isoform BEDs.
+        // The script receives --reads-bed as a single shared file (not per-label).
+        read_end_heatmap_inputs = cumulative_bed_ch
+            .join(
+                all_eval_inputs
+                    .map { items -> [items[0], items[11]] }  // test_name, reads_bed
+                    .unique { it[0] }                         // one reads_bed per test_name
+            )
+            .map { test_name, bed_labels, bed_files, read_maps, reads_bed ->
+                [test_name, bed_labels, bed_files, read_maps, reads_bed]
+            }
+        ReadEndHeatmap(read_end_heatmap_inputs)
+
         // --- SJC alt-end analysis: TP/FP breakdown + boundary signal ---
         // Reuses cumulative_bed_ch (has read_maps) and adds peak files.
         // Peaks are per-dataset but identical within a test_name; take first.
@@ -251,7 +298,8 @@ workflow SUMMARY_AND_VIZ {
                    cage_peaks, drna_peaks,
                    cage_signal_plus, cage_signal_minus,
                    drna_signal_plus, drna_signal_minus ->
-                [test_name, bed_labels, bed_files, read_maps,
+                // read_maps not needed — analysis is purely peak-based
+                [test_name, bed_labels, bed_files,
                  cage_peaks, drna_peaks,
                  cage_signal_plus, cage_signal_minus,
                  drna_signal_plus, drna_signal_minus]
@@ -285,6 +333,10 @@ workflow SUMMARY_AND_VIZ {
             }
 
         TedComponentDiagnostic(ted_diag_inputs)
+
+        // --- Isoform end AUC-ROC: signal-as-score, JC-dedup TP labels ---
+        // Reuses ted_diag_inputs: same bed files + peaks + signal tracks.
+        IsoformEndRoc(ted_diag_inputs)
 
         // --- Read end-signal scatter: raw read ends vs orthogonal signal ---
         // Deduplicate reads BED by (test_name, dataset_name) since all modes
@@ -342,8 +394,7 @@ workflow SUMMARY_AND_VIZ {
         // Reuses cumulative_signal_inputs (bed + read maps + signal tracks).
         SignalReadSupport(cumulative_signal_inputs)
 
-        // --- SQANTI precision: composition + NNC vs precision trade-off ---
-        // Requires the combined evaluation TSV, grouped by test_name.
+        // --- Combined evaluation TSV channel: used by PrSignalBalance for P/R data ---
         sqanti_ch = CombineEvaluationTSVs.out.combined_tsv
             .map { combined_tsv ->
                 // CombineEvaluationTSVs emits only the TSV (no test_name in the output).
@@ -353,7 +404,51 @@ workflow SUMMARY_AND_VIZ {
                 [test_name, combined_tsv]
             }
 
-        SqantiPrecision(sqanti_ch)
+        // --- SQANTI precision: per-category end precision (TSS/TTS within 50bp of annotated) ---
+        // Pre-classified isoform categories (from flair_eval.py) are joined in so
+        // sqanti_precision.py can skip the expensive re-parse + re-classification.
+        // Build: [test_name, transcriptome_mode, bed_file, categories_tsv] per method,
+        // then group by test_name into [test_name, labels, beds, cat_tsvs, gtf].
+        sqanti_prec_ch = all_eval_inputs
+            .map { items ->
+                def isoform_file = items[5].name.contains('NO_ISOFORMS_BED') ? items[6] : items[5]
+                // key = [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode]
+                [items[0], items[1], items[2], items[3], items[4], isoform_file, items[13]]
+            }
+            .filter { !it[5].name.contains('NO_ISOFORMS') }
+            .join(
+                isoform_categories.map { test_name, dataset_name, align_mode, partition_mode,
+                                         transcriptome_mode, cat_tsv ->
+                    [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, cat_tsv]
+                },
+                by: [0, 1, 2, 3, 4]
+            )
+            // Now: [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, bed, gtf, cat_tsv]
+            .map { test_name, dataset_name, align_mode, partition_mode,
+                   transcriptome_mode, bed, gtf, cat_tsv ->
+                [test_name, transcriptome_mode, bed, gtf, cat_tsv]
+            }
+            .groupTuple(by: [0])
+            .map { test_name, labels, beds, gtfs, cat_tsvs ->
+                [test_name, labels, beds.flatten(), gtfs[0], cat_tsvs.flatten()]
+            }
+
+        SqantiPrecision(sqanti_prec_ch)
+
+        // --- P/R × boundary-signal balance: 3-axis scatter, Pareto, dead-zone bar ---
+        // Joins cumulative_signal_inputs (bed + signal tracks) with the combined
+        // evaluation TSV (for P/R stats). read_map_files carried through but unused.
+        pr_signal_inputs = cumulative_signal_inputs
+            .join(sqanti_ch.map { test_name, tsv -> [test_name, tsv] })
+            .map { test_name, bed_labels, bed_files, read_maps,
+                   cage_plus, cage_minus, qs_plus, qs_minus,
+                   combined_tsv ->
+                [test_name, bed_labels, bed_files, read_maps,
+                 cage_plus, cage_minus, qs_plus, qs_minus,
+                 combined_tsv]
+            }
+
+        PrSignalBalance(pr_signal_inputs)
 
         // --- Depth calibration: TED log n_reads, acceptance rate, depth-score violin ---
         // Only include modes that produced a real TED log (non-placeholder, non-empty).

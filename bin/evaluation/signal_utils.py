@@ -10,6 +10,8 @@ Provides:
   - gene_from_name(name)            Extract ENSG gene ID from an isoform name
   - BedGraphTrack                   Numpy-backed bedGraph reader with query()
   - isoform_signal(...)             Strand-aware TSS/TTS signal
+  - load_read_map(path)             Read isoform→read-count map; detects self-ref maps
+  - lookup_read_count(name, counts) Resolve count with tid_gid name fallback
   - kde_density(x, y)               Log-space Gaussian KDE, normalised 0–1
 
 All evaluation scripts should import shared parsing from here:
@@ -31,7 +33,8 @@ from scipy.stats import gaussian_kde
 
 SIG_WINDOW = 50          # bp window around each end for signal lookup
 END_BIN    = 50          # bp bin size for binning TSS/TTS coordinates
-_ENSG_RE   = re.compile(r"(ENSG\d+(?:\.\d+)?)")
+_ENSG_RE   = re.compile(r"(ENSG\d+(?:\.\d+)?)")   # canonical; also matches _ENSG prefix
+_ENSG_PFX  = re.compile(r"_ENSG\d")               # prefix variant used in name stripping
 
 
 # ── TSS / TTS helpers ──────────────────────────────────────────────────────
@@ -255,6 +258,14 @@ class BedGraphTrack:
                 if chroms and ch not in chroms:
                     continue
                 buf[ch].append((int(p[1]), int(p[2]), float(p[3])))
+        if not buf:
+            import warnings
+            warnings.warn(
+                f"BedGraphTrack: no data loaded from '{path}' — "
+                "file may be empty or contain only headers. "
+                "All signal queries will return 0.",
+                RuntimeWarning, stacklevel=2,
+            )
         for ch, rows in buf.items():
             rows.sort()
             s, e, v = zip(*rows)
@@ -291,6 +302,31 @@ class BedGraphTrack:
             idx += 1
         span = end - start
         return total / span if span > 0 else 0.0
+
+    def window_values(self, chrom: str, start: int, end: int) -> np.ndarray:
+        """Return a per-base float32 signal array for *[start, end)*.
+
+        Positions with no bedGraph coverage get 0.0.  The returned array
+        always has length ``max(0, end - start)``.
+        """
+        length = max(0, end - start)
+        if length == 0 or chrom not in self.data:
+            return np.zeros(length, dtype=np.float32)
+        out = np.zeros(length, dtype=np.float32)
+        starts, ends, vals = self.data[chrom]
+        idx = int(np.searchsorted(starts, start, side="right")) - 1
+        if idx < 0:
+            idx = 0
+        n = len(starts)
+        while idx < n and ends[idx] <= start:
+            idx += 1
+        while idx < n and starts[idx] < end:
+            ov_s = max(start, int(starts[idx])) - start
+            ov_e = min(end,   int(ends[idx]))   - start
+            if ov_s < ov_e:
+                out[ov_s:ov_e] = vals[idx]
+            idx += 1
+        return out
 
 
 # ── Signal helpers ──────────────────────────────────────────────────────────
@@ -332,6 +368,57 @@ def load_signal_tracks(
         BedGraphTrack.from_file(qs_plus,    chroms),
         BedGraphTrack.from_file(qs_minus,   chroms),
     )
+
+
+# ── Read-map helpers ────────────────────────────────────────────────────────
+
+def load_read_map(path: str | Path) -> Dict[str, int]:
+    """Load an isoform read-map file → {isoform_id: read_count}.
+
+    Each line: isoform_id <TAB> read1,read2,...
+    Self-referencing maps (e.g. StringTie2 where each "read" is the isoform
+    name itself) are detected heuristically and return an empty dict.
+    """
+    counts: Dict[str, int] = {}
+    n_self = n_total = 0
+    with open(path) as f:
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 2:
+                continue
+            iso_id = parts[0]
+            reads = parts[1].split(",")
+            n_reads = len(reads)
+            counts[iso_id] = n_reads
+            n_total += 1
+            if n_reads == 1 and reads[0] == iso_id:
+                n_self += 1
+    if n_total > 0 and n_self / n_total > 0.9:
+        return {}
+    return counts
+
+
+def lookup_read_count(name: str, counts: Dict[str, int]) -> int:
+    """Look up read count for an isoform name with tid_gid fallback.
+
+    Handles GENCODE-style "tid_ENSGxxx" names produced by parse_gtf()
+    by stripping the gene-ID suffix before lookup.  Returns 0 when not found.
+    """
+    if name in counts:
+        return counts[name]
+    # Try stripping at _ENSG prefix (covers GENCODE gene IDs)
+    m = _ENSG_PFX.search(name)
+    if m:
+        tid = name[: m.start()]
+        if tid in counts:
+            return counts[tid]
+    # Fallback: split on last underscore (covers BambuGene, MSTRG, etc.)
+    idx = name.rfind("_")
+    if idx > 0:
+        tid = name[:idx]
+        if tid in counts:
+            return counts[tid]
+    return 0
 
 
 # ── KDE density estimation ─────────────────────────────────────────────────

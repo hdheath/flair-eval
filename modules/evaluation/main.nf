@@ -43,6 +43,10 @@ process Evaluation {
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           val(transcriptome_mode),
           path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_evaluation.tsv"), emit: evaluation_results
+    // Per-isoform SQANTI category labels (consumed by SqantiPrecision to avoid re-classifying)
+    tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
+          val(transcriptome_mode),
+          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_isoform_categories.tsv"), emit: isoform_categories
     // All per-run plots (published but not consumed downstream)
     path "ted_plots/*.png", optional: true, emit: all_plots
     // Per-peak reason TSVs (consumed downstream by PeakReasonHeatmap)
@@ -141,6 +145,7 @@ process Evaluation {
         --stage transcriptome \\
         --plot-output-dir ted_plots \\
         --plot-prefix ${output_prefix} \\
+        --categories-output ${output_prefix}_isoform_categories.tsv \\
         --output ${output_prefix}_flair_eval.tsv \\
         --verbose
 
@@ -206,6 +211,7 @@ process Evaluation {
         --stage transcriptome \\
         --plot-output-dir ted_plots \\
         --plot-prefix ${output_prefix} \\
+        --categories-output ${output_prefix}_isoform_categories.tsv \\
         --output ${output_prefix}_flair_eval.tsv \\
         --verbose
 
@@ -256,6 +262,9 @@ process TedEndPrecision {
     tuple val(test_name), val(dataset_name), val(transcriptome_mode),
           path("${transcriptome_mode}_precision_recall_summary.tsv"),
           path("${transcriptome_mode}_per_junction_chain.tsv"), emit: metrics
+    // GTF-only precision (no orthogonal peaks) — used for reference-vs-orthogonal scatter
+    tuple val(test_name), val(dataset_name), val(transcriptome_mode),
+          path("${transcriptome_mode}_gtf_precision_recall_summary.tsv"), emit: gtf_metrics
 
     script:
     def cage_arg = (cage_peaks.name != 'NO_CAGE' && cage_peaks.size() > 0) ? "--peaks-5prime ${cage_peaks}" : ""
@@ -265,6 +274,7 @@ process TedEndPrecision {
     def region_arg = region_match ? "--region ${region_match[0][1]}" : ""
     def isoforms_arg = (isoforms_bed.name != 'NO_ISOFORMS_BED') ? "--isoforms-bed ${isoforms_bed}" : "--isoforms-gtf ${isoforms_gtf}"
     """
+    # --- Orthogonal-signal precision (peaks, primary metric) ---
     python ${projectDir}/bin/evaluation/ted_end_precision.py \\
         ${isoforms_arg} \\
         --gtf ${annotation_gtf} \\
@@ -277,6 +287,17 @@ process TedEndPrecision {
 
     mv precision_recall_summary.tsv ${transcriptome_mode}_precision_recall_summary.tsv
     mv per_junction_chain.tsv ${transcriptome_mode}_per_junction_chain.tsv
+
+    # --- Reference-GTF precision (no peaks) — annotation concordance ---
+    python ${projectDir}/bin/evaluation/ted_end_precision.py \\
+        ${isoforms_arg} \\
+        --gtf ${annotation_gtf} \\
+        ${region_arg} \\
+        --mode ${transcriptome_mode} \\
+        --window 50 \\
+        --outdir gtf_only
+
+    mv gtf_only/precision_recall_summary.tsv ${transcriptome_mode}_gtf_precision_recall_summary.tsv
     """
 }
 

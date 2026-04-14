@@ -1,281 +1,421 @@
 #!/usr/bin/env python3
 """
-sqanti_precision.py — SQANTI-stratified precision/recall dashboard.
+sqanti_precision.py — End precision broken down by SQANTI structural category.
 
-Reads the combined evaluation TSV (one row per mode, containing both
-precision/recall metrics and SQANTI structural-category counts) and
-produces three complementary panels:
+For each mode and each SQANTI category (FSM, ISM, NIC, NNC), computes:
+  - 5′ end precision: JC-deduplicated TSS precision vs annotated GTF ends
+  - 3′ end precision: JC-deduplicated TTS precision vs annotated GTF ends
 
-  C1a. sqanti_composition.png
-       Stacked horizontal bar chart showing the fraction of isoforms in each
-       SQANTI category (FSM, ISM, NIC, NNC, SEM, SEN) per mode.
-       Modes sorted by NNC fraction (most noise on bottom) so the plot
-       immediately shows which method produces the cleanest assemblies.
+Uses the same compute_jc_deduplicated_precision_recall() as TedEndPrecision
+so metrics are consistent across the pipeline.  Multiple isoforms in the same
+junction chain that map to the same annotation end count as ONE true positive.
 
-  C1b. sqanti_precision_scatter.png
-       5' and 3' precision/recall scatter, one point per mode.
-       Point colour encodes NNC fraction (diverging palette: low=blue,
-       high=red) so you can see whether precision gains are real or just NNC
-       suppression.
+This answers: "do NIC isoforms from TED modes land on better TSS/TTS positions
+than NIC isoforms from FLAIR?" — separating end quality from splice-chain quality.
 
-  C1c. sqanti_nnc_vs_precision.png
-       NNC fraction (x) vs 5' and 3' precision (y) scatter — direct view of
-       the NNC-precision trade-off across parameter variants.
+Produces:
+  category_end_precision_bar.png
+      Grouped bar chart. X = SQANTI category, bars = modes, Y = end precision.
+      Two panels: TSS (top) and TTS (bottom). Count (n) shown in each bar.
+
+  category_end_precision_heatmap.png
+      Heatmap: modes (rows) × categories (cols), colour = end precision.
+      Two panels side by side for TSS and TTS. Missing = grey.
 
 Usage:
     python sqanti_precision.py \\
-        --input combined_eval.tsv [combined_eval2.tsv ...] \\
-        --output output_dir/ \\
-        [--dataset LABEL]  # filter to one dataset if TSV has multiple
+        --bed label1:bed1.bed label2:bed2.bed ... \\
+        --gtf annotation.gtf \\
+        --output outdir/ \\
+        [--window 50] [--verbose]
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from collections import defaultdict
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List
 
 import numpy as np
-import pandas as pd
-
 import matplotlib
+import matplotlib.ticker
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
-import matplotlib.cm as cm
-from matplotlib.lines import Line2D
-import matplotlib.patches as mpatches
 
 try:
-    from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler, legend_outside
+    from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
+    from flair_structural import (
+        classify_transcripts_per_isoform,
+        parse_reference,
+    )
+    from ted_end_precision import (
+        parse_gtf_ends,
+        parse_gtf_transcripts,
+        compute_jc_deduplicated_precision_recall,
+    )
 except ImportError:
-    from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler, legend_outside
+    from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
+    from evaluation.flair_structural import (
+        classify_transcripts_per_isoform,
+        parse_reference,
+    )
+    from evaluation.ted_end_precision import (
+        parse_gtf_ends,
+        parse_gtf_transcripts,
+        compute_jc_deduplicated_precision_recall,
+    )
 
 apply_rc()
 
-# ── SQANTI category colours (Okabe-Ito / publication-safe) ───────────────────
-SQANTI_CATS = ["FSM", "ISM", "NIC", "NNC", "SEM", "SEN"]
-SQANTI_COLORS = {
-    "FSM": "#0072B2",   # blue  — full splice match (best)
-    "ISM": "#56B4E9",   # sky   — incomplete splice match
-    "NIC": "#009E73",   # green — novel in catalog (splice variant)
-    "NNC": "#D55E00",   # vermillion — novel not in catalog (most suspect)
-    "SEM": "#CC79A7",   # pink  — single-exon match
-    "SEN": "#E69F00",   # amber — single-exon novel
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+CATEGORY_ORDER  = ["FSM", "ISM", "NIC", "NNC"]
+CATEGORY_COLORS = {
+    "FSM": "#009E73",
+    "ISM": "#56B4E9",
+    "NIC": "#E69F00",
+    "NNC": "#D55E00",
 }
+END_WINDOW = 50   # bp tolerance for end match
 
-NNC_CMAP = "RdBu_r"   # blue=low NNC, red=high NNC
+
+# ── Core computation ──────────────────────────────────────────────────────────
+
+def compute_category_precision(
+    isoforms: List[dict],
+    annotated_ends: Dict[str, Dict[str, List[int]]],
+    annot_transcripts: List[dict],
+    window: int = END_WINDOW,
+) -> Dict[str, Dict]:
+    """Per-category 5′ and 3′ JC-deduplicated end precision for one mode.
+
+    Uses compute_jc_deduplicated_precision_recall (GTF path, no orthogonal peaks)
+    on the subset of isoforms in each SQANTI category.  This matches the
+    authoritative metric used by TedEndPrecision in the Nextflow pipeline.
+
+    Returns:
+        {category: {"n": int, "tss_prec": float|None, "tts_prec": float|None}}
+    """
+    by_cat: Dict[str, List[dict]] = defaultdict(list)
+    for iso in isoforms:
+        cat = iso.get("category")
+        if cat in CATEGORY_ORDER:
+            by_cat[cat].append(iso)
+
+    result = {}
+    for cat in CATEGORY_ORDER:
+        isos = by_cat.get(cat, [])
+        n = len(isos)
+        if n == 0:
+            result[cat] = {"n": 0, "tss_prec": None, "tts_prec": None}
+            continue
+
+        metrics = compute_jc_deduplicated_precision_recall(
+            isos, annotated_ends, annot_transcripts,
+            window=window,
+            peaks_5prime=None,   # GTF-only path — matches ted_end_precision GTF mode
+            peaks_3prime=None,
+        )
+        result[cat] = {
+            "n":        n,
+            "tss_prec": metrics.get("5prime_dedup_precision"),
+            "tts_prec": metrics.get("3prime_dedup_precision"),
+        }
+    return result
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# ── Plot 1: Grouped bar chart ─────────────────────────────────────────────────
 
-def load_data(paths: List[str | Path], dataset: Optional[str] = None) -> pd.DataFrame:
-    dfs = []
-    for p in paths:
-        try:
-            df = pd.read_csv(p, sep="\t")
-            dfs.append(df)
-        except Exception as e:
-            print(f"WARNING: could not read {p}: {e}", file=sys.stderr)
-    if not dfs:
-        return pd.DataFrame()
-    out = pd.concat(dfs, ignore_index=True)
-    if dataset and "dataset" in out.columns:
-        out = out[out["dataset"] == dataset].copy()
-    # Ensure numeric columns
-    num_cols = ["5prime_precision", "5prime_recall", "5prime_f1",
-                 "3prime_precision", "3prime_recall", "3prime_f1",
-                 "FSM", "ISM", "NIC", "NNC", "SEM", "SEN"]
-    for c in num_cols:
-        if c in out.columns:
-            out[c] = pd.to_numeric(out[c], errors="coerce")
+def plot_bar(
+    data: Dict[str, Dict[str, Dict]],
+    styler: ModeStyler,
+    output_path: Path,
+) -> None:
+    """Two-panel grouped bar: X = category, grouped bars = modes, Y = end precision."""
+    modes = list(data.keys())
+    cats  = [c for c in CATEGORY_ORDER if any(
+        data[m].get(c, {}).get("n", 0) > 0 for m in modes
+    )]
+    if not cats or not modes:
+        return
+
+    n_cats  = len(cats)
+    n_modes = len(modes)
+    width   = 0.8 / n_modes
+    x       = np.arange(n_cats)
+
+    fig, axes = plt.subplots(2, 1, figsize=(W2 * 0.75, W1 * 1.5), sharex=True)
+
+    for ax_idx, (ax, end_key, end_label) in enumerate([
+        (axes[0], "tss_prec", "5′ TSS  end precision"),
+        (axes[1], "tts_prec", "3′ TTS  end precision"),
+    ]):
+        handles = []
+        for i, mode in enumerate(modes):
+            vals, ns = [], []
+            for cat in cats:
+                d = data[mode].get(cat, {"n": 0, "tss_prec": None, "tts_prec": None})
+                v = d.get(end_key)
+                vals.append(v if v is not None else 0.0)
+                ns.append(d.get("n", 0))
+
+            offset = (i - n_modes / 2 + 0.5) * width
+            bars = ax.bar(
+                x + offset, vals, width * 0.90,
+                color=styler.color(mode), edgecolor="none", alpha=0.88,
+            )
+            handles.append(styler.legend_handle(mode, label=_short(mode), markersize=4))
+
+            # n= count inside taller bars
+            for bar, n in zip(bars, ns):
+                if n > 0 and bar.get_height() > 0.12:
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        bar.get_height() / 2,
+                        f"n={n}", ha="center", va="center",
+                        fontsize=3.5, color="white", rotation=90,
+                    )
+
+        ax.set_ylim(0, 1.08)
+        ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
+        ax.yaxis.set_major_formatter(
+            matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:.0%}")
+        )
+        ax.axhline(1.0, color="#cccccc", lw=0.5, ls="--")
+        style_ax(ax, ylabel=end_label)
+
+        if ax_idx == 0:
+            ax.legend(handles=handles, fontsize=5, frameon=False,
+                      loc="lower right", ncol=max(1, n_modes // 3))
+
+    # Category colour band along x-axis on the bottom panel
+    for j, cat in enumerate(cats):
+        axes[1].add_patch(plt.Rectangle(
+            (j - 0.5, -0.13), 1, 0.06,
+            color=CATEGORY_COLORS[cat], clip_on=False, transform=axes[1].get_xaxis_transform(),
+        ))
+
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(cats, fontsize=7)
+    axes[1].set_xlabel("SQANTI structural category", fontsize=7, labelpad=10)
+
+    fig.tight_layout(pad=0.4, h_pad=0.8)
+    savefig(fig, output_path)
+
+
+# ── Plot 2: Heatmap ───────────────────────────────────────────────────────────
+
+def plot_heatmap(
+    data: Dict[str, Dict[str, Dict]],
+    output_path: Path,
+) -> None:
+    """Modes × categories heatmap, colour = end precision, two panels TSS/TTS."""
+    modes = list(data.keys())
+    cats  = [c for c in CATEGORY_ORDER if any(
+        data[m].get(c, {}).get("n", 0) > 0 for m in modes
+    )]
+    if not cats or not modes:
+        return
+
+    fig, axes = plt.subplots(1, 2, figsize=(W2, W1 * 1.15))
+
+    cmap = plt.get_cmap("RdYlGn").copy()
+    cmap.set_bad(color="#e0e0e0")
+
+    for ax, end_key, end_label in [
+        (axes[0], "tss_prec", "5′ TSS end precision"),
+        (axes[1], "tts_prec", "3′ TTS end precision"),
+    ]:
+        mat  = np.full((len(modes), len(cats)), np.nan)
+        nmat = np.zeros((len(modes), len(cats)), dtype=int)
+
+        for i, mode in enumerate(modes):
+            for j, cat in enumerate(cats):
+                d = data[mode].get(cat, {})
+                v = d.get(end_key)
+                if v is not None and d.get("n", 0) > 0:
+                    mat[i, j]  = v
+                    nmat[i, j] = d["n"]
+
+        im = ax.imshow(mat, aspect="auto", vmin=0, vmax=1,
+                       cmap=cmap, interpolation="nearest")
+
+        for i in range(len(modes)):
+            for j in range(len(cats)):
+                if not np.isnan(mat[i, j]):
+                    txt_col = "white" if (mat[i, j] < 0.35 or mat[i, j] > 0.82) else "#222222"
+                    ax.text(j, i, f"{mat[i,j]:.0%}\n(n={nmat[i,j]})",
+                            ha="center", va="center",
+                            fontsize=4.5, color=txt_col, linespacing=1.3)
+
+        # Category colour band across the top
+        for j, cat in enumerate(cats):
+            ax.add_patch(plt.Rectangle(
+                (j - 0.5, -1.0), 1, 0.6,
+                color=CATEGORY_COLORS[cat], clip_on=False,
+            ))
+
+        ax.set_xticks(range(len(cats)))
+        ax.set_xticklabels(cats, fontsize=7, labelpad=8)
+        ax.set_yticks(range(len(modes)))
+        ax.set_yticklabels([_short(m) for m in modes], fontsize=6)
+        ax.set_title(end_label, fontsize=7, pad=4)
+        ax.tick_params(length=0)
+
+        cb = plt.colorbar(im, ax=ax, fraction=0.035, pad=0.02)
+        cb.set_label("End precision", fontsize=6)
+        cb.ax.tick_params(labelsize=5)
+        cb.ax.yaxis.set_major_formatter(
+            matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:.0%}")
+        )
+
+    fig.tight_layout(pad=0.5)
+    savefig(fig, output_path)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _short(mode: str) -> str:
+    return (mode
+            .replace("TED-", "")
+            .replace("FLAIR-", "FL-")
+            .replace("isoquant_", "IQ-"))
+
+
+def _parse_label_path(entries: List[str]) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for e in entries:
+        if ":" not in e:
+            continue
+        label, path = e.split(":", 1)
+        out[label] = path
     return out
 
 
-def _sqanti_fractions(df: pd.DataFrame) -> pd.DataFrame:
-    """Add per-mode SQANTI fraction columns and NNC fraction."""
-    cats = [c for c in SQANTI_CATS if c in df.columns]
-    total = df[cats].sum(axis=1).replace(0, np.nan)
-    for c in cats:
-        df[f"{c}_frac"] = df[c] / total
-    if "NNC" in cats:
-        df["nnc_frac"] = df["NNC"] / total
-    else:
-        df["nnc_frac"] = 0.0
-    return df
+def _load_categories_tsv(path: str) -> List[dict]:
+    """Load a pre-classified isoform categories TSV written by flair_eval.py.
 
+    Expected format (tab-separated, header row):
+        isoform_name  category
 
-# ── Plot C1a: stacked composition bar ────────────────────────────────────────
-
-def plot_sqanti_composition(df: pd.DataFrame, output_path: Path):
-    cats = [c for c in SQANTI_CATS if c in df.columns]
-    if not cats:
-        return
-
-    # Sort modes by NNC fraction ascending (cleanest on top)
-    df_sorted = df.sort_values("nnc_frac", ascending=False).reset_index(drop=True)
-    modes = df_sorted["transcriptome_mode"].tolist()
-    n = len(modes)
-
-    fig, ax = plt.subplots(figsize=(W2 * 0.55, max(W1 * 0.4, n * 0.22 + 0.6)))
-
-    lefts = np.zeros(n)
-    handles = []
-    for cat in cats:
-        col = f"{cat}_frac"
-        if col not in df_sorted.columns:
-            continue
-        vals = df_sorted[col].fillna(0).values
-        bars = ax.barh(np.arange(n), vals, left=lefts,
-                       color=SQANTI_COLORS[cat], edgecolor="none", alpha=0.9)
-        lefts += vals
-        handles.append(mpatches.Patch(facecolor=SQANTI_COLORS[cat],
-                                       edgecolor="none", label=cat))
-
-    ax.set_yticks(np.arange(n))
-    ax.set_yticklabels(modes, fontsize=6)
-    ax.set_xlim(0, 1)
-    ax.set_xlabel("Fraction of isoforms", fontsize=7)
-    ax.invert_yaxis()
-    style_ax(ax)
-    ax.set_title("SQANTI structural-category composition", fontsize=7, pad=4)
-
-    fig.legend(handles=handles, loc="lower right", bbox_to_anchor=(1.0, 0.0),
-               ncol=1, fontsize=6, frameon=False)
-    fig.tight_layout(pad=0.4)
-    savefig(fig, output_path)
-
-
-# ── Plot C1b: precision/recall scatter coloured by NNC fraction ───────────────
-
-def plot_precision_scatter(df: pd.DataFrame, output_path: Path):
-    if df.empty:
-        return
-    methods = df["transcriptome_mode"].tolist()
-    styler = ModeStyler(methods)
-
-    nnc_vals = df["nnc_frac"].fillna(0).values
-    norm = mcolors.Normalize(vmin=0, vmax=max(nnc_vals.max(), 0.01))
-    cmap = cm.get_cmap(NNC_CMAP)
-
-    fig, axes = plt.subplots(1, 2, figsize=(W2, W1 * 0.75))
-
-    for ax, end, label in [
-        (axes[0], "5prime", "5\u2032 TSS"),
-        (axes[1], "3prime", "3\u2032 TTS"),
-    ]:
-        p_col = f"{end}_precision"
-        r_col = f"{end}_recall"
-        for _, row in df.iterrows():
-            p = row.get(p_col)
-            r = row.get(r_col)
-            nnc = row.get("nnc_frac", 0)
-            m = row["transcriptome_mode"]
-            if pd.isna(p) or pd.isna(r):
+    Returns list of dicts compatible with classify_transcripts_per_isoform output:
+        [{"name": str, "category": str}, ...]
+    """
+    isoforms = []
+    with open(path) as fh:
+        header = fh.readline()  # skip header
+        for line in fh:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 2:
                 continue
-            color = cmap(norm(nnc))
-            ax.scatter(r * 100, p * 100,
-                       s=40, color=color, marker=styler.marker(m),
-                       edgecolors="white", linewidth=0.5, alpha=0.9, zorder=2)
-            ax.text(r * 100 + 0.5, p * 100, m.replace("TED-", "").replace("FLAIR-", ""),
-                    fontsize=4, va="center", alpha=0.7)
-
-        ax.plot([0, 100], [0, 100], "--", color="#cccccc", lw=0.8, zorder=0)
-        ax.set_xlim(30, 105)
-        ax.set_ylim(30, 105)
-        style_ax(ax, xlabel=f"{label} Recall (%)", ylabel=f"{label} Precision (%)")
-        ax.set_title(label, fontsize=7)
-
-    # Colourbar for NNC fraction
-    sm = cm.ScalarMappable(cmap=NNC_CMAP, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=axes, shrink=0.6, pad=0.02)
-    cbar.set_label("NNC fraction", fontsize=6)
-    cbar.ax.tick_params(labelsize=5)
-
-    fig.suptitle("Precision vs Recall coloured by NNC fraction", fontsize=7, y=1.01)
-    fig.tight_layout(pad=0.4)
-    savefig(fig, output_path)
-
-
-# ── Plot C1c: NNC fraction vs precision direct scatter ───────────────────────
-
-def plot_nnc_vs_precision(df: pd.DataFrame, output_path: Path):
-    if df.empty:
-        return
-    methods = df["transcriptome_mode"].tolist()
-    styler = ModeStyler(methods)
-
-    fig, axes = plt.subplots(1, 2, figsize=(W2, W1 * 0.7))
-
-    for ax, end, label in [
-        (axes[0], "5prime", "5\u2032 Precision"),
-        (axes[1], "3prime", "3\u2032 Precision"),
-    ]:
-        p_col = f"{end}_precision"
-        for _, row in df.iterrows():
-            p   = row.get(p_col)
-            nnc = row.get("nnc_frac", 0)
-            m   = row["transcriptome_mode"]
-            if pd.isna(p) or pd.isna(nnc):
-                continue
-            ax.scatter(nnc * 100, p * 100,
-                       s=40, color=styler.color(m), marker=styler.marker(m),
-                       edgecolors="white", linewidth=0.5, alpha=0.9, zorder=2)
-            ax.text(nnc * 100 + 0.3, p * 100,
-                    m.replace("TED-", "").replace("FLAIR-", ""),
-                    fontsize=4, va="center", alpha=0.7)
-
-        style_ax(ax, xlabel="NNC fraction (%)", ylabel=label + " (%)")
-        ax.set_title(label, fontsize=7)
-
-    # Shared legend
-    handles = [styler.legend_handle(m, label=m, markersize=4) for m in methods]
-    legend_outside(fig, handles=handles, loc="upper right",
-                   bbox_to_anchor=(1.0, 1.0), ncol=1, fontsize=5)
-    fig.suptitle("NNC fraction vs Precision (noise-precision trade-off)", fontsize=7, y=1.01)
-    fig.tight_layout(pad=0.4)
-    savefig(fig, output_path)
+            isoforms.append({"name": parts[0], "category": parts[1]})
+    return isoforms
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--input", "-i", nargs="+", required=True,
-                        help="Combined evaluation TSV file(s)")
-    parser.add_argument("--output", "-o", required=True,
-                        help="Output directory")
-    parser.add_argument("--dataset", default=None,
-                        help="Filter to a single dataset label (dataset column)")
+    parser.add_argument("--bed", nargs="+", required=True,
+                        help="label:path pairs for BED12 isoform files")
+    parser.add_argument("--categories-tsv", nargs="+", default=[],
+                        help="label:path pairs for pre-classified isoform category TSVs "
+                             "(produced by flair_eval.py --categories-output). "
+                             "When provided, skips GTF re-parsing and re-classification.")
+    parser.add_argument("--gtf", required=True,
+                        help="Reference GTF for annotated end positions")
+    parser.add_argument("--window", type=int, default=END_WINDOW,
+                        help=f"bp tolerance for end match (default {END_WINDOW})")
+    parser.add_argument("--output", required=True)
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    df = load_data(args.input, dataset=args.dataset)
-    if df.empty:
-        print("No data loaded — skipping", file=sys.stderr)
+    out = Path(args.output)
+    out.mkdir(parents=True, exist_ok=True)
+
+    # Always need annotated ends + transcripts for compute_jc_deduplicated_precision_recall
+    if args.verbose:
+        print("  Parsing reference GTF for end positions...", file=sys.stderr)
+    annotated_ends = parse_gtf_ends(args.gtf)
+    annot_transcripts = parse_gtf_transcripts(args.gtf)
+    if args.verbose:
+        n_tss = sum(len(v["tss"]) for v in annotated_ends.values())
+        n_tts = sum(len(v["tts"]) for v in annotated_ends.values())
+        print(f"  Reference: {n_tss} annotated TSS, {n_tts} annotated TTS, "
+              f"{len(annot_transcripts)} transcripts", file=sys.stderr)
+
+    # Pre-classified categories TSVs (from flair_eval.py) — skip GTF parse + classification
+    cat_paths = _parse_label_path(args.categories_tsv) if args.categories_tsv else {}
+
+    # Only parse reference structures when at least one label lacks pre-classified categories
+    bed_paths = _parse_label_path(args.bed)
+    needs_classification = [lbl for lbl in bed_paths if lbl not in cat_paths]
+    if needs_classification:
+        if args.verbose:
+            print("  Parsing reference GTF for classification "
+                  f"(needed for: {', '.join(needs_classification)})...", file=sys.stderr)
+        refjuncs, refjuncchains, refseends = parse_reference(args.gtf)
+    else:
+        refjuncs = refjuncchains = refseends = None
+
+    data: Dict[str, Dict[str, Dict]] = {}
+
+    for label, path in bed_paths.items():
+        if not Path(path).exists():
+            print(f"WARNING: {path} not found — skipping {label}", file=sys.stderr)
+            continue
+
+        if label in cat_paths:
+            # Fast path: load pre-classified categories from TSV
+            if args.verbose:
+                print(f"  Loading pre-classified categories for {label}...", file=sys.stderr)
+            try:
+                isoforms = _load_categories_tsv(cat_paths[label])
+            except Exception as e:
+                print(f"WARNING: failed to load categories TSV for {label}: {e} — "
+                      "falling back to re-classification", file=sys.stderr)
+                isoforms = None
+        else:
+            isoforms = None
+
+        if isoforms is None:
+            # Slow path: classify from BED + GTF reference structures
+            if args.verbose:
+                print(f"  Classifying {label} from BED...", file=sys.stderr)
+            try:
+                isoforms = classify_transcripts_per_isoform(
+                    path, refjuncs, refjuncchains, refseends
+                )
+            except Exception as e:
+                print(f"WARNING: classification failed for {label}: {e}", file=sys.stderr)
+                continue
+
+        if not isoforms:
+            continue
+        data[label] = compute_category_precision(
+            isoforms, annotated_ends, annot_transcripts, args.window
+        )
+        if args.verbose:
+            for cat, d in data[label].items():
+                if d["n"] > 0:
+                    tss_str = f"{d['tss_prec']:.1%}" if d['tss_prec'] is not None else "N/A"
+                    tts_str = f"{d['tts_prec']:.1%}" if d['tts_prec'] is not None else "N/A"
+                    print(f"    {cat:4s}  n={d['n']:4d}  TSS={tss_str}  TTS={tts_str}",
+                          file=sys.stderr)
+
+    if not data:
+        print("No data — exiting", file=sys.stderr)
         sys.exit(1)
 
-    df = _sqanti_fractions(df)
-
-    if args.verbose:
-        modes = df["transcriptome_mode"].unique()
-        print(f"  {len(df)} rows, {len(modes)} modes", file=sys.stderr)
-        print(f"  NNC range: {df['nnc_frac'].min():.2f}–{df['nnc_frac'].max():.2f}",
-              file=sys.stderr)
-
-    output_dir = Path(args.output)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    plot_sqanti_composition(df, output_dir / "sqanti_composition.png")
-    plot_precision_scatter(df, output_dir / "sqanti_precision_scatter.png")
-    plot_nnc_vs_precision(df, output_dir / "sqanti_nnc_vs_precision.png")
-
-    print(f"Saved SQANTI precision plots to {args.output}")
+    styler = ModeStyler(list(data.keys()))
+    plot_bar(data, styler, out / "category_end_precision_bar.png")
+    plot_heatmap(data, out / "category_end_precision_heatmap.png")
+    print(f"Saved category end precision plots to {args.output}")
 
 
 if __name__ == "__main__":
