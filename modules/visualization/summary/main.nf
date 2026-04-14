@@ -1,6 +1,6 @@
 // Module: SummaryPlots + PeakReasonHeatmap + TpOverlap + IsoformsPerGeneHist
 //         + JaccardHeatmap + TotalIsoforms + EndSignalScatter + CumulativeSignal
-//         + CombineEvaluationTSVs + InternalPrimingAnalysis + SignalReadSupport
+//         + CombineEvaluationTSVs + InternalPrimingAnalysis + SignalReadSupport + PrSignalBalance
 //         + SqantiPrecision + DepthCalibration
 // Cross-assembler comparison plots generated after all evaluations complete.
 
@@ -59,9 +59,10 @@ process CombinePrecisionRecall {
 
     input:
     tuple val(test_name), path(pr_tsvs)
+    val(suffix)   // "ortho" or "gtf" — distinguishes the two combined TSV files
 
     output:
-    tuple val(test_name), path("${test_name}_precision_recall.tsv"), emit: combined_pr
+    tuple val(test_name), path("${test_name}_precision_recall_${suffix}.tsv"), emit: combined_pr
 
     script:
     """
@@ -78,7 +79,7 @@ for f in files:
         for row in reader:
             rows.append(row)
 rows.sort(key=lambda r: r.get('transcriptome_mode', ''))
-with open('${test_name}_precision_recall.tsv', 'w', newline='') as out:
+with open('${test_name}_precision_recall_${suffix}.tsv', 'w', newline='') as out:
     writer = csv.DictWriter(out, fieldnames=header, delimiter='\\t')
     writer.writeheader()
     writer.writerows(rows)
@@ -99,7 +100,7 @@ process PrecisionRecallPlot {
     errorStrategy 'ignore'
 
     input:
-    tuple val(test_name), path(precision_recall_tsvs)
+    tuple val(test_name), path(precision_recall_tsvs), path(gtf_precision_recall_tsvs)
 
     output:
     path "*.png", emit: precision_recall_plot, optional: true
@@ -108,6 +109,7 @@ process PrecisionRecallPlot {
     """
     python ${projectDir}/bin/evaluation/precision_recall_plot.py \\
         --input ${precision_recall_tsvs} \\
+        --gtf-input ${gtf_precision_recall_tsvs} \\
         --output . \\
         --verbose
     """
@@ -533,7 +535,7 @@ process SjcAltEndAnalysis {
     errorStrategy 'ignore'
 
     input:
-    tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
+    tuple val(test_name), val(bed_labels), path(bed_files),
           val(cage_peaks), val(drna_peaks),
           val(cage_signal_plus), val(cage_signal_minus),
           val(drna_signal_plus), val(drna_signal_minus)
@@ -543,15 +545,12 @@ process SjcAltEndAnalysis {
 
     script:
     def bed_args = []
-    def map_args = []
     for (int i = 0; i < bed_labels.size(); i++) {
         bed_args << "${bed_labels[i]}:${bed_files[i]}"
-        map_args << "${bed_labels[i]}:${read_map_files[i]}"
     }
     """
     python ${projectDir}/bin/evaluation/sjc_alt_end_analysis.py \\
         --bed ${bed_args.join(' ')} \\
-        --read-map ${map_args.join(' ')} \\
         --cage-peaks ${cage_peaks} --qs-peaks ${drna_peaks} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
@@ -694,11 +693,12 @@ process InternalPrimingAnalysis {
 }
 
 // -----------------------------------------------------------------
-// Signal × read support: scatter and zero-signal fraction by bin.
-// Requires BED12 files + read maps + CAGE/dRNA signal bedGraph tracks.
+// Signal distribution at isoform ends across assembly modes.
+// Asks: do different modes place isoform ends on stronger signal peaks?
+// Requires BED12 files + CAGE/dRNA signal bedGraph tracks (no read maps needed).
 // -----------------------------------------------------------------
 process SignalReadSupport {
-    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/signal/signal_read_support", mode: 'copy'
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/signal/signal_distribution", mode: 'copy'
     tag "${test_name}"
     errorStrategy 'ignore'
 
@@ -712,15 +712,12 @@ process SignalReadSupport {
 
     script:
     def bed_args = []
-    def map_args = []
     for (int i = 0; i < bed_labels.size(); i++) {
         bed_args << "${bed_labels[i]}:${bed_files[i]}"
-        map_args << "${bed_labels[i]}:${read_map_files[i]}"
     }
     """
     python ${projectDir}/bin/evaluation/signal_read_support.py \\
         --bed ${bed_args.join(' ')} \\
-        --read-map ${map_args.join(' ')} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
         --output . \\
@@ -729,9 +726,44 @@ process SignalReadSupport {
 }
 
 // -----------------------------------------------------------------
-// SQANTI-stratified precision: structural composition + NNC vs
-// precision trade-off scatter.
-// Requires combined evaluation TSV (one row per mode, per sample).
+// P/R × boundary-signal balance: three-axis scatter, Pareto frontier,
+// and dead-zone bar + F1 overlay.
+// Requires combined evaluation TSV(s) + BED12 files + signal tracks.
+// -----------------------------------------------------------------
+process PrSignalBalance {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/signal/pr_signal_balance", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
+          val(cage_signal_plus), val(cage_signal_minus),
+          val(drna_signal_plus), val(drna_signal_minus),
+          path(combined_tsv)
+
+    output:
+    path "*.png", optional: true
+
+    script:
+    def bed_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        bed_args << "${bed_labels[i]}:${bed_files[i]}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/pr_signal_balance.py \\
+        --tsv ${test_name}:${combined_tsv} \\
+        --bed ${bed_args.join(' ')} \\
+        --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
+        --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// SQANTI-stratified end precision: per-category (FSM/ISM/NIC/NNC) TSS
+// and TTS precision across modes. Classifies isoforms from BED12 files
+// against the reference GTF and computes end precision within each category.
 // -----------------------------------------------------------------
 process SqantiPrecision {
     publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/end_accuracy/sqanti_precision", mode: 'copy'
@@ -739,15 +771,25 @@ process SqantiPrecision {
     errorStrategy 'ignore'
 
     input:
-    tuple val(test_name), path(combined_eval_tsv)
+    tuple val(test_name), val(bed_labels), path(bed_files), path(gtf), path(category_tsvs)
 
     output:
     path "*.png", optional: true
 
     script:
+    def bed_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        bed_args << "${bed_labels[i]}:${bed_files[i]}"
+    }
+    def cat_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        cat_args << "${bed_labels[i]}:${category_tsvs[i]}"
+    }
     """
     python ${projectDir}/bin/evaluation/sqanti_precision.py \\
-        --input ${combined_eval_tsv} \\
+        --bed ${bed_args.join(' ')} \\
+        --categories-tsv ${cat_args.join(' ')} \\
+        --gtf ${gtf} \\
         --output . \\
         --verbose || true
     """
@@ -816,6 +858,110 @@ process ClusterSpreadPlots {
 }
 
 // -----------------------------------------------------------------
+// End-signal meta-profile: average CAGE/dRNA profile centred on
+// called TSS and TTS positions.  All methods overlaid on shared axes.
+// Requires BED12/GTF isoform files + CAGE/dRNA signal bedGraph tracks.
+// -----------------------------------------------------------------
+process EndSignalMetaplot {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/signal/end_signal_profiles", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(bed_labels), path(bed_files),
+          val(cage_signal_plus), val(cage_signal_minus),
+          val(drna_signal_plus), val(drna_signal_minus)
+
+    output:
+    path "metaplot_*.png",         optional: true
+    path "metaplot_metrics.tsv",   optional: true
+
+    script:
+    def bed_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        bed_args << "${bed_labels[i]}:${bed_files[i]}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/end_signal_metaplot.py \\
+        --bed ${bed_args.join(' ')} \\
+        --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
+        --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// End-signal heatmap (smarca4-style): per-isoform signal density
+// rows sorted by read support, columns = bp offset from called end.
+// Requires BED12/GTF isoform files + read maps + CAGE/dRNA bedGraphs.
+// -----------------------------------------------------------------
+process EndSignalHeatmap {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/signal/end_signal_profiles", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
+          val(cage_signal_plus), val(cage_signal_minus),
+          val(drna_signal_plus), val(drna_signal_minus)
+
+    output:
+    path "heatmap_*.png", optional: true
+
+    script:
+    def bed_args = []
+    def map_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        bed_args << "${bed_labels[i]}:${bed_files[i]}"
+        map_args << "${bed_labels[i]}:${read_map_files[i]}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/end_signal_heatmap.py \\
+        --bed ${bed_args.join(' ')} \\
+        --read-map ${map_args.join(' ')} \\
+        --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
+        --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// Read-end heatmap: where assigned reads' ends land relative to the
+// called isoform end.  Long-read analogue of EndSignalHeatmap with
+// no orthogonal signal — pure read distribution.
+// -----------------------------------------------------------------
+process ReadEndHeatmap {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/signal/end_signal_profiles", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
+          path(reads_bed)
+
+    output:
+    path "read_end_heatmap_*.png", optional: true
+
+    script:
+    def bed_args = []
+    def map_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        bed_args << "${bed_labels[i]}:${bed_files[i]}"
+        map_args << "${bed_labels[i]}:${read_map_files[i]}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/read_end_heatmap.py \\
+        --bed ${bed_args.join(' ')} \\
+        --read-map ${map_args.join(' ')} \\
+        --reads-bed ${reads_bed} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
 // TED log analysis (E1+E2): TSS vs TTS spread violin + summary
 // scatter, CAGE peak width vs cluster IQR, threshold margin violin.
 // Requires TED log files + CAGE peaks BED.
@@ -842,6 +988,52 @@ process TedLogAnalysis {
     python ${projectDir}/bin/evaluation/ted_log_analysis.py \\
         --ted-log ${log_args.join(' ')} \\
         ${cage_arg} \\
+        --output . \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
+// Isoform end AUC-ROC: treats each isoform as a binary prediction
+// (TP = end within --window bp of a reference peak), uses orthogonal
+// signal at the called end as the classifier score, and plots TPR vs
+// FPR curves for all methods overlaid.  JC-deduplication is applied
+// so over-segmented assemblers don't inflate their AUC.
+// Outputs:
+//   roc_5prime.png        TSS ROC curves (CAGE signal)
+//   roc_3prime.png        TTS ROC curves (dRNA signal)
+//   roc_combined.png      Side-by-side 5′/3′
+//   roc_auc_summary.tsv   mode, end, AUC, n_isoforms, n_tp, n_fp
+// -----------------------------------------------------------------
+process IsoformEndRoc {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/end_accuracy/roc", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(bed_labels), path(bed_files),
+          val(cage_peaks), val(drna_peaks),
+          val(cage_signal_plus), val(cage_signal_minus),
+          val(drna_signal_plus), val(drna_signal_minus)
+
+    output:
+    path "roc_*.png",           optional: true
+    path "roc_auc_summary.tsv", optional: true
+
+    script:
+    def bed_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        bed_args << "${bed_labels[i]}:${bed_files[i]}"
+    }
+    def cage_pk_arg = (cage_peaks && cage_peaks != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
+    def drna_pk_arg = (drna_peaks && drna_peaks != 'NO_DRNA') ? "--drna-peaks ${drna_peaks}" : ""
+    """
+    python ${projectDir}/bin/evaluation/isoform_end_roc.py \\
+        --bed ${bed_args.join(' ')} \\
+        ${cage_pk_arg} \\
+        ${drna_pk_arg} \\
+        --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
+        --qs-plus ${drna_signal_plus}   --qs-minus ${drna_signal_minus} \\
         --output . \\
         --verbose || true
     """

@@ -257,11 +257,13 @@ workflow {
     // --- Summary plots + divergence + UTR features ---
     SUMMARY_AND_VIZ(
         ASSEMBLE_AND_EVAL.out.evaluation_results,
+        ASSEMBLE_AND_EVAL.out.isoform_categories,
         ASSEMBLE_AND_EVAL.out.cage_peak_reason_tsvs,
         ASSEMBLE_AND_EVAL.out.drna_peak_reason_tsvs,
         ASSEMBLE_AND_EVAL.out.all_eval_inputs,
         dataset_signal_ch,
-        ASSEMBLE_AND_EVAL.out.ted_precision_metrics
+        ASSEMBLE_AND_EVAL.out.ted_precision_metrics,
+        ASSEMBLE_AND_EVAL.out.ted_gtf_precision
     )
 
     // =========================================================================

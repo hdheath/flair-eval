@@ -27,6 +27,7 @@ from evaluation import (
     parse_gtf_transcripts,
     build_reference_structures,
     classify_transcripts,
+    classify_transcripts_per_isoform,
 )
 
 
@@ -52,6 +53,7 @@ def main():
     parser.add_argument('--stage', help='Stage name (e.g., collapse, transcriptome)')
     parser.add_argument('--plot-output-dir', help='Directory to save structural evaluation plots')
     parser.add_argument('--plot-prefix', default='', help='Prefix for plot filenames')
+    parser.add_argument('--categories-output', help='Path to write per-isoform category TSV (name, category)')
 
     args = parser.parse_args()
 
@@ -126,7 +128,25 @@ def main():
     # EVALUATE TRANSCRIPT CLASSIFICATION
     transcripttoexons = parse_gtf_transcripts(args.gtf)
     refjuncs, refjuncchains, refseends = build_reference_structures(transcripttoexons)
-    fsm, ism, nic, nnc, sem, sen, tot = classify_transcripts(isoforms_bed, refjuncs, refjuncchains, refseends)
+
+    # Use per-isoform classification so we can both count totals AND emit labels
+    iso_classifications = classify_transcripts_per_isoform(
+        isoforms_bed, refjuncs, refjuncchains, refseends
+    )
+    fsm = sum(1 for r in iso_classifications if r["category"] == "FSM")
+    ism = sum(1 for r in iso_classifications if r["category"] == "ISM")
+    nic = sum(1 for r in iso_classifications if r["category"] == "NIC")
+    nnc = sum(1 for r in iso_classifications if r["category"] == "NNC")
+    sem = sum(1 for r in iso_classifications if r["category"] == "SEM")
+    sen = sum(1 for r in iso_classifications if r["category"] == "SEN")
+    tot = len(iso_classifications)
+
+    # Write per-isoform category TSV if requested (consumed downstream by sqanti_precision.py)
+    if args.categories_output:
+        with open(args.categories_output, 'w') as cat_out:
+            cat_out.write("isoform_name\tcategory\n")
+            for r in iso_classifications:
+                cat_out.write(f"{r['name']}\t{r['category']}\n")
 
     # Write output as simple TSV (one header row, one data row)
     with open(args.output, 'w') as outfile:

@@ -104,6 +104,7 @@ from .flair_structural import (
     parse_gtf_transcripts,
     build_reference_structures,
     classify_transcripts,
+    classify_transcripts_per_isoform,
     SINGLE_EXON_END_WINDOW,
 )
 
@@ -206,6 +207,7 @@ __all__ = [
     'parse_gtf_transcripts',
     'build_reference_structures',
     'classify_transcripts',
+    'classify_transcripts_per_isoform',
     'SINGLE_EXON_END_WINDOW',
     # synthesize
     'parse_filename_metadata',

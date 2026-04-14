@@ -101,8 +101,11 @@ def plot_read_end_signal_scatter(
         style_ax(ax)
         ax.text(0.04, 0.96, sample, transform=ax.transAxes,
                 ha="left", va="top", fontsize=6, fontweight="bold")
-        sub_note = f" ({MAX_READS:,} sampled)" if total > MAX_READS else ""
-        ax.text(0.96, 0.04, f"n = {total:,}{sub_note}", transform=ax.transAxes,
+        if total > MAX_READS:
+            count_note = f"n = {MAX_READS:,} sampled / {total:,} total"
+        else:
+            count_note = f"n = {total:,}"
+        ax.text(0.96, 0.04, count_note, transform=ax.transAxes,
                 ha="right", va="bottom", fontsize=5, color="#666666")
 
     for idx in range(n, nrows * ncols):

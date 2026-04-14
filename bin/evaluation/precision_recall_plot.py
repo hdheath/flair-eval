@@ -192,6 +192,73 @@ def _plot_f1_bars(df, output_path, mode_order, styler, baseline_mode, title_pref
 
 
 # ---------------------------------------------------------------------------
+# Reference vs Orthogonal precision scatter
+# ---------------------------------------------------------------------------
+
+def plot_ref_vs_ortho_precision(
+    df_ortho: "pd.DataFrame",
+    df_ref: "pd.DataFrame",
+    output_path: "Path",
+    mode_order: list,
+    styler: "ModeStyler",
+    title_prefix: str = "",
+):
+    """Scatter: GTF-reference precision (X) vs orthogonal-signal precision (Y).
+
+    Each point is one method.  Points above the diagonal have better orthogonal
+    precision than annotation concordance (they place ends on real signal even
+    when that differs from the annotation).  Points below rely more on annotation.
+    Separate panels for 5′ and 3′.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(7.0, 3.5))
+
+    for ax, end, end_label in [
+        (axes[0], "5prime", "5′ TSS"),
+        (axes[1], "3prime", "3′ TTS"),
+    ]:
+        pcol = f"{end}_precision"
+        handles = []
+        for m in mode_order:
+            row_o = df_ortho[df_ortho["transcriptome_mode"] == m]
+            row_r = df_ref[df_ref["transcriptome_mode"] == m]
+            if row_o.empty or row_r.empty:
+                continue
+            p_ortho = _safe_numeric(row_o, pcol).mean()
+            p_ref   = _safe_numeric(row_r, pcol).mean()
+            if pd.isna(p_ortho) or pd.isna(p_ref):
+                continue
+            ax.scatter(
+                p_ref * 100, p_ortho * 100,
+                s=60, c=styler.color(m), marker=styler.marker(m),
+                edgecolors="white", linewidth=0.5, alpha=0.9, zorder=2,
+            )
+            handles.append(styler.legend_handle(m, label=m.replace("_", " "), markersize=7))
+
+        # Diagonal: orthogonal == reference
+        ax.plot([0, 100], [0, 100], "--", color="#cccccc", linewidth=0.8, zorder=0)
+        ax.set_xlim(0, 105)
+        ax.set_ylim(0, 105)
+        style_ax(ax,
+                 xlabel=f"{end_label} Reference precision (%)",
+                 ylabel=f"{end_label} Orthogonal precision (%)",
+                 title=f"{title_prefix}{end_label}")
+
+        # Shade quadrants
+        ax.axhspan(50, 105, xmin=0, xmax=0.5, alpha=0.03, color="steelblue")
+        ax.axhspan(0,  50,  xmin=0.5, xmax=1, alpha=0.03, color="salmon")
+
+        ax.text(2, 98, "better\northogonal", fontsize=5, color="#888888",
+                va="top", style="italic")
+        ax.text(52, 2, "better\nannotation", fontsize=5, color="#888888",
+                va="bottom", style="italic")
+
+    legend_outside(fig, handles=handles, loc="upper left",
+                   bbox_to_anchor=(1.02, 1.0), ncol=1, fontsize=7)
+    fig.tight_layout()
+    savefig(fig, output_path, dpi=300)
+
+
+# ---------------------------------------------------------------------------
 # Main entry
 # ---------------------------------------------------------------------------
 
@@ -222,7 +289,9 @@ def main():
         description="Create individual precision-recall, isoforms/gene, and F1 plots"
     )
     parser.add_argument('--input', '-i', nargs='+', required=True,
-                        help="Input evaluation TSV file(s)")
+                        help="Input evaluation TSV file(s) — orthogonal-signal precision")
+    parser.add_argument('--gtf-input', nargs='+', default=None,
+                        help="GTF-reference precision TSV file(s) — enables ref-vs-ortho scatter")
     parser.add_argument('--output', '-o', required=True,
                         help="Output directory (individual PNGs will be saved here)")
     parser.add_argument('--title-prefix', default="",
@@ -244,6 +313,23 @@ def main():
 
     success = create_precision_recall_plots(df, args.output, args.title_prefix,
                                             baseline=args.baseline)
+
+    # Optional: reference-vs-orthogonal precision scatter
+    if args.gtf_input:
+        df_ref = load_evaluation_files(args.gtf_input)
+        if df_ref is not None and len(df_ref) > 0:
+            mode_order = _resolve_mode_order(df)
+            styler = ModeStyler(mode_order)
+            output_dir = Path(args.output)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            plot_ref_vs_ortho_precision(
+                df, df_ref,
+                output_dir / "pr_ref_vs_ortho_precision.png",
+                mode_order, styler, args.title_prefix,
+            )
+            if args.verbose:
+                print("Saved reference-vs-orthogonal precision scatter")
+
     if success:
         print(f"Saved precision-recall plots to {args.output}")
     else:

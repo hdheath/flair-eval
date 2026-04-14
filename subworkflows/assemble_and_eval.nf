@@ -291,9 +291,11 @@ workflow ASSEMBLE_AND_EVAL {
 
     emit:
         evaluation_results      = Evaluation.out.evaluation_results
+        isoform_categories      = Evaluation.out.isoform_categories
         cage_peak_reason_tsvs   = Evaluation.out.cage_peak_reason_tsvs
-        drna_peak_reason_tsvs = Evaluation.out.drna_peak_reason_tsvs
+        drna_peak_reason_tsvs   = Evaluation.out.drna_peak_reason_tsvs
         ted_precision_metrics   = TedEndPrecision.out.metrics
+        ted_gtf_precision       = TedEndPrecision.out.gtf_metrics
         all_eval_inputs         = all_eval_inputs
         flair_transcriptome     = FlairTranscriptome.out.transcriptome
 }

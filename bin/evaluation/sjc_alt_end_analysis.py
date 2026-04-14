@@ -1,21 +1,45 @@
 #!/usr/bin/env python3
 """
-sjc_alt_end_analysis.py — Analyse alternative ends within splice-junction-chain groups.
+sjc_alt_end_analysis.py — Within-SJC joint end redundancy analysis.
 
 For each assembler, groups multi-exon isoforms by junction chain (SJC) and
-examines groups with >1 isoform.  Two panels per end type (5′ and 3′):
+asks: within each SJC group, does every isoform have a unique combination of
+5' and 3' orthogonal peak support?
 
-Panel A — Alt-end TP/FP breakdown (stacked bar)
-  For alt-end isoforms: fraction that are TP-unique (hit a peak not matched by
-  another member), TP-redundant (hit a peak already matched), FP (no peak hit).
+The core question: are any two isoforms in the same SJC group hitting the
+*same peak on both ends* — meaning one is fully redundant with the other?
+If they differ on even one end, they may be biologically justified.
 
-Panel B — Boundary signal at representative vs alternative ends (violin)
-  Within each multi-end SJC group the representative end (highest read count)
-  vs alternative ends, coloured by TP/FP status.
+Each isoform in a multi-isoform SJC group is assigned a
+(5prime_peak_iv, 3prime_peak_iv) pair.  Two isoforms are fully redundant if
+their pair is identical.  If only one end matches, they are partially redundant.
 
-Inputs mirror the cumulative-signal-plot pattern:
+Classification per isoform (relative to all others in its SJC group):
+
+  Fully unique        : (5p, 3p) pair not shared with any other group member
+  5p-only unique      : 5p peak distinct, 3p peak shared with another member
+  3p-only unique      : 3p peak distinct, 5p peak shared with another member
+  Fully redundant     : both ends shared with the same other group member
+  Fully unsupported   : no peak on either end
+
+Three panels:
+
+Panel A — Per-assembler stacked bar of isoform classifications
+  Shows what fraction of isoforms in multi-isoform SJC groups fall into
+  each category.
+
+Panel B — Group-level redundancy: how many groups are "fully justified"?
+  For each SJC group, count how many isoforms are fully unique.
+  Histogram of (n_fully_unique / n_isoforms) ratio — ratio = 1.0 means
+  every isoform in the group has its own unique (5p, 3p) peak pair.
+
+Panel C — Pairwise end-distance ECDF for fully-redundant vs fully-unique pairs
+  For each pair of isoforms in the same SJC group, compute the minimum of
+  (5p_distance, 3p_distance) and the sum.  Split by whether the pair is
+  fully redundant, partially redundant, or fully distinct.
+
+Inputs:
   --bed       label:path  (BED12 isoform files, one per assembler)
-  --read-map  label:path  (read-map files, optional per assembler)
   --cage-peaks   BED6 CAGE peaks
   --qs-peaks     BED6 dRNA peaks
   --cage-plus/--cage-minus/--qs-plus/--qs-minus  bedGraph signal tracks
@@ -26,291 +50,379 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
-from bisect import bisect_left
 from collections import defaultdict
+from itertools import combinations
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Tuple
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
 try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, PALETTE
     from signal_utils import (
-        parse_isoforms, group_by_junction_chain, isoform_signal,
+        parse_isoforms, group_by_junction_chain,
         load_signal_tracks,
     )
-    from cumulative_signal_plot import load_read_map, _lookup_read_count
+    from ted_end_precision import parse_peaks_bed, _nearest_annot
 except ImportError:
     from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, PALETTE
     from evaluation.signal_utils import (
-        parse_isoforms, group_by_junction_chain, isoform_signal,
+        parse_isoforms, group_by_junction_chain,
         load_signal_tracks,
     )
-    from evaluation.cumulative_signal_plot import load_read_map, _lookup_read_count
+    from evaluation.ted_end_precision import parse_peaks_bed, _nearest_annot
 
 apply_rc()
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)-8s  %(message)s")
 log = logging.getLogger(__name__)
 
-WINDOW = 50  # match distance window for peak-based TP
+WINDOW = 50  # peak-match window in bp
 
 
-# ── Peak helpers (same logic as ted_end_precision.py) ───────────────────────
-
-def _parse_peaks_bed(path: str) -> Dict[Tuple[str, str], List[int]]:
-    """Parse BED6 peaks → {(chrom, strand): sorted midpoints}."""
-    peaks: Dict[Tuple[str, str], List[int]] = defaultdict(list)
-    with open(path) as f:
-        for line in f:
-            if line.startswith("#"):
-                continue
-            cols = line.rstrip("\n").split("\t")
-            if len(cols) < 6:
-                continue
-            chrom, start, end, strand = cols[0], int(cols[1]), int(cols[2]), cols[5]
-            peaks[(chrom, strand)].append((start + end) // 2)
-    for k in peaks:
-        peaks[k].sort()
-    return peaks
-
-
-def _nearest_peak(pos: int, sorted_peaks: List[int], window: int = WINDOW
-                  ) -> Optional[int]:
-    """Return nearest peak midpoint within *window*, or None."""
-    if not sorted_peaks:
-        return None
-    idx = bisect_left(sorted_peaks, pos)
-    best, best_d = None, window + 1
-    for i in (idx - 1, idx):
-        if 0 <= i < len(sorted_peaks):
-            d = abs(pos - sorted_peaks[i])
-            if d < best_d:
-                best_d, best = d, sorted_peaks[i]
-    return best if best_d <= window else None
-
-
-# ── Per-assembler SJC analysis ──────────────────────────────────────────────
+# ── Per-assembler SJC analysis ───────────────────────────────────────────────
 
 def _analyse_assembler(
     label: str,
     isoforms: List[dict],
-    read_counts: dict[str, int],
-    peaks: Dict[Tuple[str, str], List[int]],
-    cage_p, cage_m, qs_p, qs_m,
-    end_type: str,  # "tss" or "tts"
+    cage_peaks: Dict[Tuple[str, str], List[Tuple[int, int]]],
+    qs_peaks:   Dict[Tuple[str, str], List[Tuple[int, int]]],
 ) -> dict:
-    """Analyse alt-end SJC groups for one assembler and one end type.
+    """Analyse joint (5p, 3p) peak-pair redundancy within SJC groups.
 
-    Returns dict with:
-      tp_unique, tp_redundant, fp  — counts for Panel A
-      rep_tp_signals, rep_fp_signals — representative-end signals for Panel B
-      alt_tp_signals, alt_fp_signals — alternative-end signals for Panel B
+    For each multi-isoform SJC group, assigns every isoform a
+    (5prime_peak_iv, 3prime_peak_iv) tuple and classifies it as:
+
+      fully_unique   : peak-pair not shared with any other group member
+      unique_5p_only : 5p peak is unique in the group; 3p is shared
+      unique_3p_only : 3p peak is unique in the group; 5p is shared
+      fully_redundant: both ends shared with at least one other member
+      fully_unsupported: no peak on either end
+
+    Also records per-group (n_isoforms, n_fully_unique) for Panel B and
+    pairwise distances split by redundancy class for Panel C.
     """
     groups = group_by_junction_chain(isoforms)
 
-    tp_unique = 0
-    tp_redundant = 0
-    fp = 0
-    rep_tp_signals: list[float] = []
-    rep_fp_signals: list[float] = []
-    alt_tp_signals: list[float] = []
-    alt_fp_signals: list[float] = []
+    n_fully_unique    = 0
+    n_unique_5p_only  = 0
+    n_unique_3p_only  = 0
+    n_fully_redundant = 0
+    n_fully_unsup     = 0
+
+    # Panel B: (n_isoforms, n_fully_unique) per group
+    group_stats: List[Tuple[int, int]] = []
+
+    # Panel C: pairwise end distances split by redundancy class
+    # Each entry: (5p_dist, 3p_dist)
+    pairs_fully_redundant: List[Tuple[float, float]] = []
+    pairs_partial:         List[Tuple[float, float]] = []
+    pairs_fully_distinct:  List[Tuple[float, float]] = []
 
     for jc_key, members in groups.items():
         if len(members) < 2:
             continue
         chrom, strand, _ = jc_key
-        peak_list = peaks.get((chrom, strand), [])
+        cage_list = cage_peaks.get((chrom, strand), [])
+        qs_list   = qs_peaks.get((chrom, strand), [])
 
-        # Compute per-member: end position, signal, read count, peak match
+        # Assign each member its (5p_peak, 3p_peak) pair
         enriched = []
         for iso in members:
-            pos = iso["tss"] if end_type == "tss" else iso["tts"]
-            sig_tss, sig_tts = isoform_signal(iso, cage_p, cage_m, qs_p, qs_m)
-            sig = sig_tss if end_type == "tss" else sig_tts
-            rc = _lookup_read_count(iso["name"], read_counts)
-            peak_hit = _nearest_peak(pos, peak_list)
+            p5 = _nearest_annot(iso["tss"], cage_list, WINDOW)
+            p3 = _nearest_annot(iso["tts"], qs_list,  WINDOW)
             enriched.append({
                 "name": iso["name"],
-                "pos": pos,
-                "signal": sig,
-                "read_count": rc if rc is not None else 0,
-                "peak_hit": peak_hit,
+                "tss":  iso["tss"],
+                "tts":  iso["tts"],
+                "p5":   p5,
+                "p3":   p3,
             })
 
-        # Representative = highest read count (tie-break: first)
-        enriched.sort(key=lambda x: -x["read_count"])
-        representative = enriched[0]
-        alternatives = enriched[1:]
+        # Count how many times each peak-pair appears in this group
+        pair_counts: Dict[Tuple, int] = defaultdict(int)
+        for e in enriched:
+            pair_counts[(e["p5"], e["p3"])] += 1
 
-        # Track peaks already matched by any member to detect redundancy
-        # Process all members in read-count order; first match to a peak is "unique"
-        seen_peaks: Set[Optional[int]] = set()
+        # Count occurrences of each individual end peak across the group
+        p5_counts: Dict[Optional[Tuple[int,int]], int] = defaultdict(int)
+        p3_counts: Dict[Optional[Tuple[int,int]], int] = defaultdict(int)
+        for e in enriched:
+            p5_counts[e["p5"]] += 1
+            p3_counts[e["p3"]] += 1
 
-        # Classify representative
-        rp = representative["peak_hit"]
-        if rp is not None:
-            seen_peaks.add(rp)
-            # representative is always "unique" for its peak
-        # We only count alternatives for the alt-end breakdown
+        # Classify each isoform
+        n_fu_this_group = 0
+        for e in enriched:
+            p5, p3 = e["p5"], e["p3"]
+            no_5p = p5 is None
+            no_3p = p3 is None
 
-        # Classify each alternative
-        for alt in alternatives:
-            ap = alt["peak_hit"]
-            if ap is None:
-                fp += 1
-                alt_fp_signals.append(alt["signal"])
-            elif ap in seen_peaks:
-                tp_redundant += 1
-                alt_tp_signals.append(alt["signal"])
+            if no_5p and no_3p:
+                n_fully_unsup += 1
+                continue
+
+            # Is the full pair unique in this group?
+            pair_unique = pair_counts[(p5, p3)] == 1
+            # Is each individual end unique in this group?
+            p5_unique = (not no_5p) and p5_counts[p5] == 1
+            p3_unique = (not no_3p) and p3_counts[p3] == 1
+
+            if pair_unique:
+                # Both ends together are unique — fully justified
+                n_fully_unique += 1
+                n_fu_this_group += 1
+            elif p5_unique and not p3_unique:
+                n_unique_5p_only += 1
+            elif p3_unique and not p5_unique:
+                n_unique_3p_only += 1
             else:
-                tp_unique += 1
-                seen_peaks.add(ap)
-                alt_tp_signals.append(alt["signal"])
+                # Neither end is unique in this group → fully redundant
+                n_fully_redundant += 1
 
-        # Panel B: representative signal
-        if representative["peak_hit"] is not None:
-            rep_tp_signals.append(representative["signal"])
-        else:
-            rep_fp_signals.append(representative["signal"])
+        group_stats.append((len(enriched), n_fu_this_group))
+
+        # Panel C: pairwise distances
+        for a, b in combinations(enriched, 2):
+            d5 = abs(a["tss"] - b["tss"])
+            d3 = abs(a["tts"] - b["tts"])
+            pa5, pa3 = a["p5"], a["p3"]
+            pb5, pb3 = b["p5"], b["p3"]
+            same_5p = (pa5 is not None and pa5 == pb5)
+            same_3p = (pa3 is not None and pa3 == pb3)
+            if same_5p and same_3p:
+                pairs_fully_redundant.append((d5, d3))
+            elif same_5p or same_3p:
+                pairs_partial.append((d5, d3))
+            else:
+                pairs_fully_distinct.append((d5, d3))
 
     return {
-        "tp_unique": tp_unique,
-        "tp_redundant": tp_redundant,
-        "fp": fp,
-        "rep_tp_signals": rep_tp_signals,
-        "rep_fp_signals": rep_fp_signals,
-        "alt_tp_signals": alt_tp_signals,
-        "alt_fp_signals": alt_fp_signals,
+        "n_fully_unique":    n_fully_unique,
+        "n_unique_5p_only":  n_unique_5p_only,
+        "n_unique_3p_only":  n_unique_3p_only,
+        "n_fully_redundant": n_fully_redundant,
+        "n_fully_unsup":     n_fully_unsup,
+        "group_stats":               group_stats,
+        "pairs_fully_redundant":     pairs_fully_redundant,
+        "pairs_partial":             pairs_partial,
+        "pairs_fully_distinct":      pairs_fully_distinct,
     }
 
 
-# ── Panel A — Stacked bar ──────────────────────────────────────────────────
+# ── Panel A — Per-assembler isoform classification (stacked bar) ─────────────
 
-def plot_panel_a(
-    results: dict[str, dict],
-    end_label: str,
-    outdir: Path,
-) -> None:
-    """Stacked bar: alt-end TP-unique / TP-redundant / FP per assembler."""
+def plot_panel_a(results: dict, outdir: Path) -> None:
+    """Horizontal stacked bar: classification of isoforms in multi-isoform
+    SJC groups by joint (5p, 3p) peak-pair uniqueness.
+    """
     labels = [l for l in results if results[l] is not None]
-    # Filter labels with at least one alt-end isoform
-    labels = [l for l in labels
-              if (results[l]["tp_unique"] + results[l]["tp_redundant"] + results[l]["fp"]) > 0]
+    labels = [l for l in labels if (
+        results[l]["n_fully_unique"] + results[l]["n_unique_5p_only"] +
+        results[l]["n_unique_3p_only"] + results[l]["n_fully_redundant"] +
+        results[l]["n_fully_unsup"]
+    ) > 0]
     if not labels:
-        log.warning("Panel A (%s): no assemblers with alt-end groups, skipping", end_label)
+        log.warning("Panel A: no multi-isoform SJC groups, skipping")
         return
 
-    tp_u = [results[l]["tp_unique"] for l in labels]
-    tp_r = [results[l]["tp_redundant"] for l in labels]
-    fp_  = [results[l]["fp"] for l in labels]
-
-    # Convert to fractions
-    totals = [u + r + f for u, r, f in zip(tp_u, tp_r, fp_)]
-    frac_u = [u / t if t > 0 else 0 for u, t in zip(tp_u, totals)]
-    frac_r = [r / t if t > 0 else 0 for r, t in zip(tp_r, totals)]
-    frac_f = [f / t if t > 0 else 0 for f, t in zip(fp_, totals)]
-
-    fig, ax = plt.subplots(figsize=(W2, W1))
+    fig, ax = plt.subplots(figsize=(W2, max(W1, 0.28 * len(labels) + 0.5)))
     y = np.arange(len(labels))
-    h = 0.6
+    h = 0.65
 
-    ax.barh(y, frac_u, h, label="TP-unique", color=PALETTE[2])
-    ax.barh(y, frac_r, h, left=frac_u, label="TP-redundant", color=PALETTE[0])
-    ax.barh(y, frac_f, h, left=[u + r for u, r in zip(frac_u, frac_r)],
-            label="FP (no peak)", color=PALETTE[3])
+    c_fu   = PALETTE[2]   # green  — fully unique (5p and 3p both distinct)
+    c_5p   = PALETTE[0]   # blue   — 5p unique, 3p shared
+    c_3p   = PALETTE[1]   # orange — 3p unique, 5p shared
+    c_red  = "#D55E00"    # vermillion — fully redundant (both ends shared)
+    c_unsup = "#999999"   # grey   — no peak on either end
+
+    totals = [
+        results[l]["n_fully_unique"] + results[l]["n_unique_5p_only"] +
+        results[l]["n_unique_3p_only"] + results[l]["n_fully_redundant"] +
+        results[l]["n_fully_unsup"]
+        for l in labels
+    ]
+
+    def frac(key, l):
+        t = totals[labels.index(l)]
+        return results[l][key] / t if t > 0 else 0.0
+
+    specs = [
+        ("n_fully_unique",    c_fu,    "Fully unique (distinct 5p AND 3p peak)"),
+        ("n_unique_5p_only",  c_5p,    "5p unique, 3p shared"),
+        ("n_unique_3p_only",  c_3p,    "3p unique, 5p shared"),
+        ("n_fully_redundant", c_red,   "Fully redundant (same 5p AND 3p peak)"),
+        ("n_fully_unsup",     c_unsup, "Fully unsupported (no peak on either end)"),
+    ]
+
+    left = np.zeros(len(labels))
+    for key, col, lbl in specs:
+        vals = [frac(key, l) for l in labels]
+        ax.barh(y, vals, h, left=left, label=lbl, color=col)
+        left += np.array(vals)
 
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=6)
     ax.set_xlim(0, 1)
-    ax.legend(fontsize=6, loc="lower right", frameon=False)
-    # Annotate absolute counts on each bar
-    for i, l in enumerate(labels):
-        ax.text(1.02, i, f"n={totals[i]}", va="center", fontsize=5,
+    ax.xaxis.set_major_formatter(
+        matplotlib.ticker.FuncFormatter(lambda v, _: f"{v:.0%}")
+    )
+    ax.legend(fontsize=5.5, loc="lower right", frameon=False,
+              handlelength=1.2, ncol=1)
+    for i, (l, t) in enumerate(zip(labels, totals)):
+        ax.text(1.02, i, f"n={t:,}", va="center", fontsize=5,
                 transform=ax.get_yaxis_transform())
-    style_ax(ax, xlabel="Fraction of alternative ends",
-             title=f"Alt-end classification within SJC groups ({end_label})")
+
+    style_ax(ax, xlabel="Fraction of isoforms in multi-isoform SJC groups",
+             title="Joint (5p, 3p) peak-pair uniqueness within SJC groups")
+    ax.axvline(0.0, color="#888888", linewidth=0.4)
     fig.tight_layout()
-    savefig(fig, outdir / f"sjc_alt_end_panel_a_{end_label}")
+    savefig(fig, outdir / "sjc_alt_end_panel_a")
 
 
-# ── Panel B — Violin / strip plot ───────────────────────────────────────────
+# ── Panel B — Group-level: fraction of isoforms that are fully unique ────────
 
-def plot_panel_b(
-    results: dict[str, dict],
-    end_label: str,
-    outdir: Path,
-) -> None:
-    """Violin: boundary signal for representative vs alternative ends."""
+def plot_panel_b(results: dict, outdir: Path) -> None:
+    """Histogram of (n_fully_unique / n_isoforms) per SJC group.
+
+    Ratio = 1.0: every isoform in the group has its own unique (5p, 3p) pair.
+    Ratio = 0.0: no isoform in the group is uniquely justified.
+    """
     labels = [l for l in results if results[l] is not None]
-    labels = [l for l in labels
-              if (len(results[l]["rep_tp_signals"]) + len(results[l]["rep_fp_signals"])
-                  + len(results[l]["alt_tp_signals"]) + len(results[l]["alt_fp_signals"])) > 0]
+    labels = [l for l in labels if results[l]["group_stats"]]
     if not labels:
-        log.warning("Panel B (%s): no data, skipping", end_label)
+        log.warning("Panel B: no group data, skipping")
         return
 
     n = len(labels)
-    fig, axes = plt.subplots(1, n, figsize=(W2, W1), sharey=True, squeeze=False)
+    fig, axes = plt.subplots(1, n, figsize=(max(W1, 1.8 * n), W1 * 1.3),
+                             sharey=True, sharex=True, squeeze=False)
     axes = axes[0]
+
+    bin_edges = np.linspace(0, 1, 21)
+
+    strata = [(2, 2), (3, 3), (4, 4), (5, 9999)]
+    strata_labels = ["2 isoforms", "3 isoforms", "4 isoforms", "5+ isoforms"]
+    strata_colors = [PALETTE[0], PALETTE[1], PALETTE[2], PALETTE[3]]
 
     for i, label in enumerate(labels):
         ax = axes[i]
-        r = results[label]
-        # Combine representative and alternative signals with category labels
-        categories = []
-        signals = []
-        colors = []
+        ratios_by_stratum = [[] for _ in strata]
+        for n_iso, n_fu in results[label]["group_stats"]:
+            ratio = n_fu / n_iso if n_iso > 0 else 0.0
+            for si, (lo, hi) in enumerate(strata):
+                if lo <= n_iso <= hi:
+                    ratios_by_stratum[si].append(ratio)
+                    break
 
-        for sig, cat, col in [
-            (r["rep_tp_signals"],  "Rep\n(TP)",  PALETTE[2]),
-            (r["rep_fp_signals"],  "Rep\n(FP)",  PALETTE[3]),
-            (r["alt_tp_signals"],  "Alt\n(TP)",  PALETTE[0]),
-            (r["alt_fp_signals"],  "Alt\n(FP)",  PALETTE[3]),
-        ]:
-            if sig:
-                categories.append(cat)
-                signals.append(sig)
-                colors.append(col)
+        bottom = np.zeros(len(bin_edges) - 1)
+        for ratios, slbl, col in zip(ratios_by_stratum, strata_labels, strata_colors):
+            if not ratios:
+                continue
+            counts, _ = np.histogram(ratios, bins=bin_edges)
+            ax.bar(bin_edges[:-1], counts, width=np.diff(bin_edges),
+                   bottom=bottom, align="edge",
+                   label=f"{slbl} (n={len(ratios):,})",
+                   color=col, alpha=0.8, linewidth=0)
+            bottom += counts
 
-        if not signals:
-            ax.set_visible(False)
-            continue
-
-        # Box plot with strip overlay
-        positions = list(range(len(signals)))
-        bp = ax.boxplot(signals, positions=positions, widths=0.5,
-                        patch_artist=True, showfliers=False,
-                        medianprops=dict(color="black", linewidth=1))
-        for patch, col in zip(bp["boxes"], colors):
-            patch.set_facecolor(col)
-            patch.set_alpha(0.4)
-
-        # Strip (jittered points)
-        for j, (sigs, col) in enumerate(zip(signals, colors)):
-            jitter = np.random.default_rng(42).uniform(-0.15, 0.15, len(sigs))
-            ax.scatter(j + jitter, sigs, s=4, alpha=0.5, color=col,
-                       edgecolors="none", zorder=3)
-
-        ax.set_xticks(positions)
-        ax.set_xticklabels(categories, fontsize=5)
+        ax.axvline(1.0, color="#333333", linewidth=0.8, linestyle="--", alpha=0.7)
         ax.set_title(label, fontsize=6)
-
+        ax.set_xlabel("Fully-unique isoforms / group size", fontsize=6)
         if i == 0:
-            style_ax(ax, ylabel=f"{end_label} boundary signal")
-        else:
-            style_ax(ax)
+            ax.set_ylabel("SJC groups", fontsize=6)
+        ax.legend(fontsize=4.5, frameon=False, loc="upper left")
+        style_ax(ax)
 
-    fig.suptitle(f"Boundary signal: representative vs alternative ends ({end_label})",
-                 fontsize=7, y=1.02)
+    fig.suptitle(
+        "Fraction of isoforms per SJC group with a unique (5p, 3p) peak pair\n"
+        "Ratio = 1: all isoforms justified  |  Ratio < 1: at least one redundant",
+        fontsize=6, y=1.03,
+    )
     fig.tight_layout()
-    savefig(fig, outdir / f"sjc_alt_end_panel_b_{end_label}")
+    savefig(fig, outdir / "sjc_alt_end_panel_b")
 
 
-# ── Main ────────────────────────────────────────────────────────────────────
+# ── Panel C — Pairwise end distances by redundancy class ─────────────────────
+
+def plot_panel_c(results: dict, outdir: Path) -> None:
+    """ECDF of pairwise (5p_dist, 3p_dist) within SJC groups, split by
+    whether the pair is fully redundant, partially sharing, or fully distinct.
+
+    Uses the sum of 5p and 3p distances as the x-axis (total end divergence).
+    """
+    labels = [l for l in results if results[l] is not None]
+    labels = [l for l in labels if (
+        results[l]["pairs_fully_redundant"] or
+        results[l]["pairs_partial"] or
+        results[l]["pairs_fully_distinct"]
+    )]
+    if not labels:
+        log.warning("Panel C: no pairwise distance data, skipping")
+        return
+
+    n = len(labels)
+    fig, axes = plt.subplots(1, n, figsize=(max(W1, 1.6 * n), W1 * 1.1),
+                             sharey=True, sharex=True, squeeze=False)
+    axes = axes[0]
+
+    def _total_dist(pairs):
+        return [d5 + d3 for d5, d3 in pairs]
+
+    x_max = 0
+    for l in labels:
+        r = results[l]
+        all_d = (
+            _total_dist(r["pairs_fully_redundant"]) +
+            _total_dist(r["pairs_partial"]) +
+            _total_dist(r["pairs_fully_distinct"])
+        )
+        if all_d:
+            x_max = max(x_max, np.percentile(all_d, 99))
+    x_max = max(x_max, 300)
+
+    def _ecdf(data):
+        xs = np.sort(data)
+        ys = np.arange(1, len(xs) + 1) / len(xs)
+        return xs, ys
+
+    grp_spec = [
+        ("pairs_fully_redundant", "Fully redundant (same 5p+3p peak)", "#D55E00", "--"),
+        ("pairs_partial",         "Partially sharing (one end shared)", "#E69F00", ":"),
+        ("pairs_fully_distinct",  "Fully distinct (different 5p+3p)",   PALETTE[2], "-"),
+    ]
+
+    for i, label in enumerate(labels):
+        ax = axes[i]
+        r  = results[label]
+        for key, lbl, col, ls in grp_spec:
+            d = _total_dist(r[key])
+            if not d:
+                continue
+            xs, ys = _ecdf(d)
+            ax.plot(xs, ys, color=col, linestyle=ls, linewidth=1.0,
+                    label=f"{lbl} (n={len(d):,})")
+
+        ax.set_xlim(0, x_max)
+        ax.set_ylim(0, 1.05)
+        ax.set_title(label, fontsize=6)
+        ax.set_xlabel("Sum of 5p + 3p end distance (bp)", fontsize=6)
+        ax.legend(fontsize=5, frameon=False, loc="lower right")
+        style_ax(ax, ylabel=("Cumulative fraction" if i == 0 else None))
+
+    fig.suptitle(
+        "Pairwise end divergence within SJC groups\n"
+        "x = 5p_dist + 3p_dist between each pair of isoforms in the same group",
+        fontsize=6, y=1.02,
+    )
+    fig.tight_layout()
+    savefig(fig, outdir / "sjc_alt_end_panel_c")
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -319,16 +431,14 @@ def main():
     )
     parser.add_argument("--bed", nargs="+", required=True,
                         help="label:path pairs for BED12 isoform files")
-    parser.add_argument("--read-map", nargs="+", default=[],
-                        help="label:path pairs for isoform read-map files")
     parser.add_argument("--cage-peaks", required=True, help="CAGE peaks BED6")
-    parser.add_argument("--qs-peaks", required=True, help="dRNA peaks BED6")
-    parser.add_argument("--cage-plus", required=True, help="CAGE bedGraph (+ strand)")
+    parser.add_argument("--qs-peaks",   required=True, help="dRNA peaks BED6")
+    parser.add_argument("--cage-plus",  required=True, help="CAGE bedGraph (+ strand)")
     parser.add_argument("--cage-minus", required=True, help="CAGE bedGraph (- strand)")
-    parser.add_argument("--qs-plus", required=True, help="dRNA bedGraph (+ strand)")
-    parser.add_argument("--qs-minus", required=True, help="dRNA bedGraph (- strand)")
-    parser.add_argument("--output", required=True, help="Output directory")
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--qs-plus",    required=True, help="dRNA bedGraph (+ strand)")
+    parser.add_argument("--qs-minus",   required=True, help="dRNA bedGraph (- strand)")
+    parser.add_argument("--output",     required=True, help="Output directory")
+    parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()
 
     if args.verbose:
@@ -337,23 +447,16 @@ def main():
     outdir = Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # ── Parse inputs ────────────────────────────────────────────────────
-    beds_by_method: dict[str, list[dict]] = {}
+    # ── Parse inputs ─────────────────────────────────────────────────────
+    beds_by_method: dict = {}
     for entry in args.bed:
         label, path = entry.split(":", 1)
-        beds_by_method[label] = parse_isoforms(path)
-        log.info("Loaded %d isoforms for %s", len(beds_by_method[label]), label)
+        isos = parse_isoforms(path)
+        beds_by_method[label] = isos
+        log.info("Loaded %d isoforms for %s", len(isos), label)
 
-    read_maps_by_method: dict[str, dict[str, int]] = {}
-    for entry in args.read_map:
-        label, path = entry.split(":", 1)
-        rm = load_read_map(path)
-        read_maps_by_method[label] = rm
-        log.info("Loaded read-map for %s: %d entries%s",
-                 label, len(rm), " (self-ref, skipped)" if not rm else "")
-
-    cage_peaks = _parse_peaks_bed(args.cage_peaks)
-    qs_peaks = _parse_peaks_bed(args.qs_peaks)
+    cage_peaks = parse_peaks_bed(args.cage_peaks)
+    qs_peaks   = parse_peaks_bed(args.qs_peaks)
     log.info("Loaded %d / %d CAGE / dRNA peak groups",
              len(cage_peaks), len(qs_peaks))
 
@@ -361,31 +464,36 @@ def main():
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
     )
 
-    # ── Run analysis per end type ───────────────────────────────────────
-    for end_type, end_label, peaks in [
-        ("tss", "5prime", cage_peaks),
-        ("tts", "3prime", qs_peaks),
-    ]:
-        results: dict[str, dict | None] = {}
-        for label, isoforms in beds_by_method.items():
-            rc = read_maps_by_method.get(label, {})
-            r = _analyse_assembler(
-                label, isoforms, rc, peaks,
-                cage_p, cage_m, qs_p, qs_m,
-                end_type,
+    # ── Run analysis per assembler ────────────────────────────────────────
+    results: dict = {}
+    for label, isoforms in beds_by_method.items():
+        r = _analyse_assembler(label, isoforms, cage_peaks, qs_peaks)
+        total = (
+            r["n_fully_unique"] + r["n_unique_5p_only"] +
+            r["n_unique_3p_only"] + r["n_fully_redundant"] + r["n_fully_unsup"]
+        )
+        if total == 0:
+            log.info("%s: no multi-isoform SJC groups, skipping", label)
+            results[label] = None
+        else:
+            n_groups = len(r["group_stats"])
+            n_fully_justified = sum(1 for ni, nfu in r["group_stats"] if nfu == ni)
+            log.info(
+                "%s: %d isoforms in %d multi-iso groups — "
+                "fully_unique=%d  5p_only=%d  3p_only=%d  "
+                "fully_redundant=%d  unsupported=%d  "
+                "groups_fully_justified=%d/%d (%.0f%%)",
+                label, total, n_groups,
+                r["n_fully_unique"], r["n_unique_5p_only"], r["n_unique_3p_only"],
+                r["n_fully_redundant"], r["n_fully_unsup"],
+                n_fully_justified, n_groups,
+                100 * n_fully_justified / n_groups if n_groups else 0,
             )
-            total = r["tp_unique"] + r["tp_redundant"] + r["fp"]
-            if total == 0:
-                log.info("%s %s: no multi-end SJC groups, skipping", label, end_label)
-                results[label] = None
-            else:
-                log.info("%s %s: %d alt ends (TP-unique=%d, TP-redundant=%d, FP=%d)",
-                         label, end_label, total,
-                         r["tp_unique"], r["tp_redundant"], r["fp"])
-                results[label] = r
+            results[label] = r
 
-        plot_panel_a(results, end_label, outdir)
-        plot_panel_b(results, end_label, outdir)
+    plot_panel_a(results, outdir)
+    plot_panel_b(results, outdir)
+    plot_panel_c(results, outdir)
 
     log.info("Done — output in %s", outdir)
 

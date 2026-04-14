@@ -48,10 +48,10 @@ import matplotlib.pyplot as plt
 
 try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler, legend_outside
-    from signal_utils import parse_isoforms, tss_tts
+    from signal_utils import parse_isoforms, tss_tts, load_read_map, lookup_read_count
 except ImportError:
     from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler, legend_outside
-    from evaluation.signal_utils import parse_isoforms, tss_tts
+    from evaluation.signal_utils import parse_isoforms, tss_tts, load_read_map, lookup_read_count
 
 apply_rc()
 
@@ -144,45 +144,6 @@ def nearest_apa_distance(chrom: str, tts: int,
     if idx > 0:
         candidates.append(abs(positions[idx - 1] - tts))
     return min(candidates) if candidates else None
-
-
-# ── Read-map loading ─────────────────────────────────────────────────────────
-
-def load_read_map(path: str | Path) -> Dict[str, int]:
-    counts: Dict[str, int] = {}
-    n_self = n_total = 0
-    with open(path) as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 2:
-                continue
-            iso_id = parts[0]
-            reads  = parts[1].split(",")
-            n_reads = len(reads)
-            counts[iso_id] = n_reads
-            n_total += 1
-            if n_reads == 1 and reads[0] == iso_id:
-                n_self += 1
-    if n_total > 0 and n_self / n_total > 0.9:
-        return {}
-    return counts
-
-
-def _lookup_count(name: str, rc: Dict[str, int]) -> int:
-    import re
-    if name in rc:
-        return rc[name]
-    m = re.search(r"_ENSG\d", name)
-    if m:
-        tid = name[:m.start()]
-        if tid in rc:
-            return rc[tid]
-    idx = name.rfind("_")
-    if idx > 0:
-        tid = name[:idx]
-        if tid in rc:
-            return rc[tid]
-    return 0
 
 
 # ── Support bin assignment ───────────────────────────────────────────────────

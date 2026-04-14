@@ -3,8 +3,15 @@
 Isoform end-signal density scatter — per-method KDE-coloured panels.
 
 For each method, plots TSS signal (CAGE) vs TTS signal (dRNA) for every
-isoform, coloured by KDE density.  Requires BED12 isoform files plus four
-bedGraph signal tracks (CAGE +/- strand, dRNA +/- strand).
+isoform.  Produces two figures:
+
+  end_signal_scatter.png        KDE-density coloured scatter (relative density)
+  end_signal_scatter_counts.png Hexbin 2D histogram coloured by log10 isoform
+                                count per bin — shows absolute concentration of
+                                isoforms on real signal peaks.
+
+Requires BED12 isoform files plus four bedGraph signal tracks
+(CAGE +/- strand, dRNA +/- strand).
 
 Usage:
     python end_signal_scatter_plot.py \\
@@ -121,6 +128,92 @@ def plot_end_signal_scatter(
     savefig(fig, output_dir / "end_signal_scatter.png")
 
 
+def plot_end_signal_hexbin(
+    beds_by_method: dict,
+    cage_p, cage_m, qs_p, qs_m,
+    output_dir: Path,
+    gridsize: int = 60,
+):
+    """Multi-panel 2D hexbin count scatter of TSS vs TTS signal.
+
+    Same axes as the KDE scatter but colour encodes raw isoform counts
+    per bin (log scale), making absolute density differences visible.
+    """
+    output_dir = Path(output_dir)
+    methods = list(beds_by_method.keys())
+    n = len(methods)
+    if n == 0:
+        return
+
+    ncols = min(4, n)
+    nrows = (n + ncols - 1) // ncols
+    pw = W2 / ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(W2, pw * nrows), squeeze=False)
+
+    eps = 1e-3
+    # Collect all signal values first to set a shared colour scale
+    all_tss, all_tts = [], []
+    per_method: list[tuple[np.ndarray, np.ndarray]] = []
+    for m in methods:
+        sigs = [isoform_signal(iso, cage_p, cage_m, qs_p, qs_m)
+                for iso in beds_by_method[m]]
+        tss = np.log10(np.array([s[0] for s in sigs]) + eps)
+        tts = np.log10(np.array([s[1] for s in sigs]) + eps)
+        per_method.append((tss, tts))
+        all_tss.extend(tss)
+        all_tts.extend(tts)
+
+    x_range = (min(all_tts), max(all_tts))
+    y_range = (min(all_tss), max(all_tss))
+
+    hb_ref = None  # store one hexbin for the shared colourbar
+
+    for idx, m in enumerate(methods):
+        ax = axes[idx // ncols][idx % ncols]
+        tss, tts = per_method[idx]
+
+        hb = ax.hexbin(
+            tts, tss,
+            gridsize=gridsize,
+            bins="log",          # log-scale count colouring
+            cmap="YlOrRd",
+            extent=[x_range[0], x_range[1], y_range[0], y_range[1]],
+            linewidths=0.0,
+        )
+        if hb_ref is None:
+            hb_ref = hb
+
+        # Restore readable tick labels (values are log10 of signal)
+        for axis, rng in [(ax.xaxis, x_range), (ax.yaxis, y_range)]:
+            tks = np.linspace(rng[0], rng[1], 5)
+            axis.set_ticks(tks)
+            axis.set_ticklabels([f"$10^{{{t:.1f}}}$" for t in tks], fontsize=4)
+
+        if idx >= n - ncols:
+            ax.set_xlabel("TTS signal (dRNA)", fontsize=7)
+        if idx % ncols == 0:
+            ax.set_ylabel("TSS signal (CAGE)", fontsize=7)
+
+        style_ax(ax)
+        ax.text(0.04, 0.96, m, transform=ax.transAxes,
+                ha="left", va="top", fontsize=6, fontweight="bold")
+        ax.text(0.96, 0.04, f"n = {len(tss):,}", transform=ax.transAxes,
+                ha="right", va="bottom", fontsize=5, color="#666666")
+
+    for idx in range(n, nrows * ncols):
+        axes[idx // ncols][idx % ncols].set_visible(False)
+
+    fig.subplots_adjust(left=0.07, right=0.90, bottom=0.10, top=0.97,
+                        hspace=0.35, wspace=0.35)
+    if hb_ref is not None:
+        cbar_ax = fig.add_axes([0.92, 0.15, 0.012, 0.7])
+        cbar = fig.colorbar(hb_ref, cax=cbar_ax)
+        cbar.set_label("log₁₀ isoform count", fontsize=6)
+        cbar.ax.tick_params(labelsize=5, length=1.5, width=0.3)
+
+    savefig(fig, output_dir / "end_signal_scatter_counts.png")
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -165,7 +258,9 @@ def main():
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
     )
 
-    plot_end_signal_scatter(beds_by_method, cage_p, cage_m, qs_p, qs_m, args.output)
+    output_dir = Path(args.output)
+    plot_end_signal_scatter(beds_by_method, cage_p, cage_m, qs_p, qs_m, output_dir)
+    plot_end_signal_hexbin(beds_by_method, cage_p, cage_m, qs_p, qs_m, output_dir)
     print(f"Saved end-signal scatter to {args.output}")
 
 
