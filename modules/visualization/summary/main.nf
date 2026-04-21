@@ -107,6 +107,7 @@ process PrecisionRecallPlot {
 
     script:
     """
+    # v5: add paired P/R scatter plot
     python ${projectDir}/bin/evaluation/precision_recall_plot.py \\
         --input ${precision_recall_tsvs} \\
         --gtf-input ${gtf_precision_recall_tsvs} \\
@@ -584,6 +585,7 @@ process TedComponentDiagnostic {
         bed_args << "${bed_labels[i]}:${bed_files[i]}"
     }
     """
+    # v2: add joint threshold sweep panel
     python ${projectDir}/bin/evaluation/ted_component_diagnostic.py \\
         --bed ${bed_args.join(' ')} \\
         --cage-peaks ${cage_peaks} --qs-peaks ${drna_peaks} \\
@@ -771,7 +773,8 @@ process SqantiPrecision {
     errorStrategy 'ignore'
 
     input:
-    tuple val(test_name), val(bed_labels), path(bed_files), path(gtf), path(category_tsvs)
+    tuple val(test_name), val(bed_labels), path(bed_files), path(gtf), path(category_tsvs),
+          path(cage_peaks), path(drna_peaks)
 
     output:
     path "*.png", optional: true
@@ -785,11 +788,16 @@ process SqantiPrecision {
     for (int i = 0; i < bed_labels.size(); i++) {
         cat_args << "${bed_labels[i]}:${category_tsvs[i]}"
     }
+    def cage_arg = cage_peaks.name != 'NO_CAGE' ? "--cage-peaks ${cage_peaks}" : ""
+    def drna_arg = drna_peaks.name != 'NO_DRNA' ? "--drna-peaks ${drna_peaks}" : ""
     """
+    # v8: add SEM/SEN single-exon categories
     python ${projectDir}/bin/evaluation/sqanti_precision.py \\
         --bed ${bed_args.join(' ')} \\
         --categories-tsv ${cat_args.join(' ')} \\
         --gtf ${gtf} \\
+        ${cage_arg} \\
+        ${drna_arg} \\
         --output . \\
         --verbose || true
     """

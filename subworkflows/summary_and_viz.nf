@@ -432,6 +432,14 @@ workflow SUMMARY_AND_VIZ {
             .map { test_name, labels, beds, gtfs, cat_tsvs ->
                 [test_name, labels, beds.flatten(), gtfs[0], cat_tsvs.flatten()]
             }
+            .join(
+                all_eval_inputs
+                    .map { items -> [items[0], items[14], items[15]] }
+                    .unique { it[0] }
+            )
+            .map { test_name, labels, beds, gtf, cat_tsvs, cage_peaks, drna_peaks ->
+                [test_name, labels, beds, gtf, cat_tsvs, cage_peaks, drna_peaks]
+            }
 
         SqantiPrecision(sqanti_prec_ch)
 

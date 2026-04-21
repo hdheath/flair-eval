@@ -28,8 +28,8 @@ process FlairTranscriptome {
     // Auto-detect junction file format: .bed → --junction_bed, .tab → --junction_tab
     def has_junction_flag = transcriptome_args.contains('--junction_tab') && junction_tab.name != 'NO_JUNCTION_TAB'
     def junction_flag = junction_tab.name.endsWith('.bed') ? '--junction_bed' : '--junction_tab'
-    def junction_tab_arg = has_junction_flag ? "${junction_flag} ${junction_tab}" : ""
-    def cleaned_args = transcriptome_args.replaceAll('--junction_tab\\s*', '')
+    def junction_tab_arg = has_junction_flag ? "${junction_flag} ${junction_tab.name}" : ""
+    def cleaned_args = transcriptome_args.replaceAll('--junction_tab\\s*', '').replaceAll('--ted_log\\s*', '')
     def is_ted = (transcriptome_args =~ /(?:^|\s)--ted(?:\s|$)/).find()
     def ted_log_flag = is_ted ? '--ted_log' : ''
     def ted_log_file = "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.ted_log.tsv"

@@ -35,3 +35,9 @@ scripts/
 # SLURM / cluster
 *.err
 *.out
+
+# Jupyter plot code
+jupyter/
+
+# Local analysis scratch
+analysis/

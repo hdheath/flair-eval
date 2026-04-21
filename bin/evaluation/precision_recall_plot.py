@@ -127,6 +127,142 @@ def _plot_pr_scatter(df, output_path, mode_order, styler, baseline_mode,
     savefig(fig, output_path, dpi=300)
 
 
+def _plot_paired_summary(df, output_dir, mode_order, styler, baseline_mode, title_prefix=""):
+    """Three paired-end plots: paired precision, paired recall (geom mean), paired F1.
+
+    Paired precision  = paired_dedup_precision (both ends hit orthogonal peaks / unique pairs)
+    Paired recall     = sqrt(5prime_recall * 3prime_recall)  [geometric mean]
+    Paired F1         = harmonic mean of paired precision and paired recall
+    """
+    output_dir = Path(output_dir)
+
+    paired_prec, paired_rec, paired_f1 = [], [], []
+    for mode in mode_order:
+        subset = df[df['transcriptome_mode'] == mode]
+        r5 = _safe_numeric(subset, '5prime_recall').mean()
+        r3 = _safe_numeric(subset, '3prime_recall').mean()
+        pp = _safe_numeric(subset, 'paired_dedup_precision').mean()
+
+        if not (np.isnan(pp)):
+            paired_prec.append(pp * 100)
+        else:
+            paired_prec.append(np.nan)
+
+        if not (np.isnan(r5) or np.isnan(r3)) and r5 >= 0 and r3 >= 0:
+            pr = np.sqrt(r5 * r3)
+            paired_rec.append(pr * 100)
+        else:
+            paired_rec.append(np.nan)
+            pr = np.nan
+
+        pp_val = pp if not np.isnan(pp) else np.nan
+        pr_val = np.sqrt(r5 * r3) if (not (np.isnan(r5) or np.isnan(r3)) and r5 >= 0 and r3 >= 0) else np.nan
+        if not (np.isnan(pp_val) or np.isnan(pr_val)) and (pp_val + pr_val) > 0:
+            paired_f1.append(2 * pp_val * pr_val / (pp_val + pr_val) * 100)
+        else:
+            paired_f1.append(np.nan)
+
+    # Baseline values
+    bl_prec = bl_rec = bl_f1 = np.nan
+    if baseline_mode:
+        bl_sub = df[df['transcriptome_mode'] == baseline_mode]
+        bl_r5 = _safe_numeric(bl_sub, '5prime_recall').mean()
+        bl_r3 = _safe_numeric(bl_sub, '3prime_recall').mean()
+        bl_pp = _safe_numeric(bl_sub, 'paired_dedup_precision').mean()
+        bl_prec = bl_pp * 100 if not np.isnan(bl_pp) else np.nan
+        if not (np.isnan(bl_r5) or np.isnan(bl_r3)) and bl_r5 >= 0 and bl_r3 >= 0:
+            bl_pr = np.sqrt(bl_r5 * bl_r3)
+            bl_rec = bl_pr * 100
+            if not np.isnan(bl_pp) and (bl_pp + bl_pr) > 0:
+                bl_f1 = 2 * bl_pp * bl_pr / (bl_pp + bl_pr) * 100
+
+    # Single grouped bar plot: precision / recall / F1 per mode
+    x = np.arange(len(mode_order))
+    bar_width = 0.25
+    fig, ax = plt.subplots(figsize=(max(4.0, len(mode_order) * 0.9), 3.2))
+    for i, mode in enumerate(mode_order):
+        c = styler.color(mode)
+        for j, (vals, alpha, hatch) in enumerate([
+            (paired_prec, 0.90, None),
+            (paired_rec,  0.55, '///'),
+            (paired_f1,   0.75, 'xx'),
+        ]):
+            v = vals[i]
+            offset = (j - 1) * bar_width
+            bar = ax.bar(x[i] + offset, v if not np.isnan(v) else 0,
+                         width=bar_width * 0.9, color=c, alpha=alpha,
+                         edgecolor='white', linewidth=0.4,
+                         hatch=hatch if hatch else '')
+            if not np.isnan(v) and v > 0:
+                ax.text(bar[0].get_x() + bar[0].get_width() / 2, v + 0.5,
+                        f"{v:.1f}", ha='center', va='bottom', fontsize=5, color='#333333')
+
+    for bl_val, ls in [(bl_prec, ':'), (bl_rec, '--'), (bl_f1, '-.')]:
+        if not np.isnan(bl_val):
+            ax.axhline(bl_val, color='#555555', linestyle=ls, linewidth=1.0, alpha=0.6)
+
+    mode_handles = [
+        mpatches.Patch(facecolor=styler.color(m), edgecolor='none',
+                       label=_short_mode(m), alpha=0.9)
+        for m in mode_order
+    ]
+    metric_handles = [
+        mpatches.Patch(facecolor='#666666', alpha=0.90, edgecolor='none', label="Paired Precision"),
+        mpatches.Patch(facecolor='#666666', alpha=0.55, edgecolor='none', hatch='///', label="Paired Recall (\u221ar5\u00b7r3)"),
+        mpatches.Patch(facecolor='#666666', alpha=0.75, edgecolor='none', hatch='xx',  label="Paired F1"),
+    ]
+    ax.set_xticks(x)
+    ax.set_xticklabels([_short_mode(m) for m in mode_order], rotation=45, ha='right', fontsize=7)
+    ax.set_ylim(0, 105)
+    legend_outside(fig, handles=mode_handles + metric_handles,
+                   loc='upper left', bbox_to_anchor=(1.02, 1.0), ncol=1, fontsize=7)
+    style_ax(ax, ylabel="Score (%)", faint_y_grid=True,
+             title=f"{title_prefix}Paired End Precision / Recall / F1")
+    fig.tight_layout()
+    savefig(fig, output_dir / "paired_summary.png", dpi=300)
+
+
+def _plot_paired_pr_scatter(df, output_path, mode_order, styler, baseline_mode, title_prefix=""):
+    """Scatter: paired recall (geom mean) on X, paired dedup precision on Y."""
+    fig, ax = plt.subplots(figsize=(3.5, 3.5))
+    for _, row in df.iterrows():
+        m = str(row.get('transcriptome_mode', 'unknown'))
+        pp  = pd.to_numeric(row.get('paired_dedup_precision'), errors='coerce')
+        r5  = pd.to_numeric(row.get('5prime_recall'), errors='coerce')
+        r3  = pd.to_numeric(row.get('3prime_recall'), errors='coerce')
+        if pd.isna(pp) or pd.isna(r5) or pd.isna(r3) or r5 < 0 or r3 < 0:
+            continue
+        pr = np.sqrt(r5 * r3)
+        ax.scatter(pr * 100, pp * 100,
+                   s=55, c=styler.color(m), marker=styler.marker(m),
+                   edgecolors='white', linewidth=0.5, alpha=0.9, zorder=2)
+
+    style_ax(ax,
+             xlabel="Paired Recall (%) (\u221a(5\u2032\u00d73\u2032 recall))",
+             ylabel="Paired Precision (%)",
+             title=f"{title_prefix}Paired Precision vs Recall")
+    ax.set_xlim(0, 105)
+    ax.set_ylim(0, 105)
+    ax.plot([0, 100], [0, 100], "--", color="#cccccc", linewidth=0.8, zorder=0)
+
+    if baseline_mode:
+        bl_sub = df[df['transcriptome_mode'] == baseline_mode]
+        bl_pp = _safe_numeric(bl_sub, 'paired_dedup_precision').mean()
+        bl_r5 = _safe_numeric(bl_sub, '5prime_recall').mean()
+        bl_r3 = _safe_numeric(bl_sub, '3prime_recall').mean()
+        if not (np.isnan(bl_pp) or np.isnan(bl_r5) or np.isnan(bl_r3)):
+            bl_pr = np.sqrt(bl_r5 * bl_r3)
+            ax.axhline(bl_pp * 100, color='#888888', linestyle=':', linewidth=1.0, zorder=1, alpha=0.7)
+            ax.axvline(bl_pr * 100, color='#888888', linestyle=':', linewidth=1.0, zorder=1, alpha=0.7)
+
+    handles = [styler.legend_handle(m, label=m.replace("_", " "), markersize=7)
+               for m in mode_order]
+    legend_outside(fig, handles=handles, loc='upper left', bbox_to_anchor=(1.02, 1.0),
+                   ncol=1, fontsize=7)
+    fig.tight_layout()
+    savefig(fig, output_path, dpi=300)
+
+
 def _plot_f1_bars(df, output_path, mode_order, styler, baseline_mode, title_prefix=""):
     x = np.arange(len(mode_order))
     f1_5p, f1_3p = [], []
@@ -281,6 +417,9 @@ def create_precision_recall_plots(df, output_dir, title_prefix="", baseline=None
                      baseline_mode, "3prime", "3\u2032 TTS", title_prefix)
     _plot_f1_bars(df, output_dir / "f1_score.png", mode_order, styler,
                   baseline_mode, title_prefix)
+    _plot_paired_pr_scatter(df, output_dir / "pr_paired_scatter.png", mode_order, styler,
+                            baseline_mode, title_prefix)
+    _plot_paired_summary(df, output_dir, mode_order, styler, baseline_mode, title_prefix)
     return True
 
 
