@@ -156,6 +156,49 @@ def _nearest_peak(pos: int, sorted_peaks: List[int]) -> Optional[int]:
 
 # ── Per-config data extraction ──────────────────────────────────────────────
 
+def _extract_joint(
+    isoforms: List[dict],
+    cage_peaks: Dict[Tuple[str, str], List[int]],
+    qs_peaks: Dict[Tuple[str, str], List[int]],
+) -> dict:
+    """Extract paired per-isoform TSS and TTS scores + joint TP label.
+
+    An isoform is jointly TP only if both its TSS and TTS hit an orthogonal peak.
+    Returns arrays indexed identically so row i = same isoform for all arrays.
+    """
+    tss_depths, tss_models, tss_annots = [], [], []
+    tts_depths, tts_models, tts_annots = [], [], []
+    tss_tp, tts_tp, joint_tp = [], [], []
+
+    for iso in isoforms:
+        cage_list = cage_peaks.get((iso["chrom"], iso["strand"]), [])
+        qs_list   = qs_peaks.get((iso["chrom"], iso["strand"]), [])
+        is_tss_tp = _nearest_peak(iso["tss"], cage_list) is not None
+        is_tts_tp = _nearest_peak(iso["tts"], qs_list)   is not None
+
+        tss_depths.append(iso.get("TED_depth", 0.0))
+        tss_models.append(iso.get("TED_tss_model", 0.0))
+        tss_annots.append(iso.get("TED_tss_annot", 0.0))
+        tts_depths.append(iso.get("TED_depth", 0.0))
+        tts_models.append(iso.get("TED_tts_model", 0.0))
+        tts_annots.append(iso.get("TED_tts_annot", 0.0))
+        tss_tp.append(1 if is_tss_tp else 0)
+        tts_tp.append(1 if is_tts_tp else 0)
+        joint_tp.append(1 if (is_tss_tp and is_tts_tp) else 0)
+
+    return {
+        "tss_depth":  np.asarray(tss_depths),
+        "tss_model":  np.asarray(tss_models),
+        "tss_annot":  np.asarray(tss_annots),
+        "tts_depth":  np.asarray(tts_depths),
+        "tts_model":  np.asarray(tts_models),
+        "tts_annot":  np.asarray(tts_annots),
+        "tss_tp":     np.asarray(tss_tp, dtype=int),
+        "tts_tp":     np.asarray(tts_tp, dtype=int),
+        "joint_tp":   np.asarray(joint_tp, dtype=int),
+    }
+
+
 def _extract(
     isoforms: List[dict],
     peaks: Dict[Tuple[str, str], List[int]],
@@ -628,6 +671,114 @@ def plot_marginal_value(
     savefig(fig, outdir / "marginal_value_bar")
 
 
+# ── Panel 7: Joint threshold sweep ─────────────────────────────────────────
+
+def _composite_score(d: dict, end: str, opt: dict) -> np.ndarray:
+    """Weighted composite for one end using optimal weights from weight sweep."""
+    wd = opt["w_depth"]
+    wm = opt["w_model"]
+    wa = opt["w_annot"]
+    return wd * d[f"{end}_depth"] + wm * d[f"{end}_model"] + wa * d[f"{end}_annot"]
+
+
+def plot_joint_threshold_sweep(
+    joint_data_by_label: dict,
+    opt_5prime: dict,
+    opt_3prime: dict,
+    outdir: Path,
+    n_steps: int = 31,
+) -> dict:
+    """2D heatmap over (t_tss, t_tts) using per-end optimal weights.
+
+    For each threshold pair, an isoform passes if BOTH composite scores meet
+    their respective threshold. Evaluates joint F1 (both ends must hit peaks).
+    Returns {label: {t_tss, t_tts, f1, precision, recall}}.
+    """
+    labels = [l for l in joint_data_by_label if l in opt_5prime and l in opt_3prime]
+    n = len(labels)
+    if n == 0:
+        return {}
+
+    fig, axes = plt.subplots(1, n, figsize=(min(W2, n * 3.5), 3.5),
+                             squeeze=False)
+    axes = axes[0]
+    optimal = {}
+    grid = np.linspace(0.05, 0.95, n_steps)
+
+    for i, label in enumerate(labels):
+        ax = axes[i]
+        d = joint_data_by_label[label]
+        tss_scores = _composite_score(d, "tss", opt_5prime[label])
+        tts_scores = _composite_score(d, "tts", opt_3prime[label])
+        joint_tp = d["joint_tp"]
+
+        f1_grid   = np.zeros((n_steps, n_steps))
+        prec_grid = np.zeros((n_steps, n_steps))
+        rec_grid  = np.zeros((n_steps, n_steps))
+
+        for ti, t_tss in enumerate(grid):
+            for tj, t_tts in enumerate(grid):
+                pred = ((tss_scores >= t_tss) & (tts_scores >= t_tts)).astype(int)
+                tp_hit = ((pred == 1) & (joint_tp == 1)).sum()
+                fp_hit = ((pred == 1) & (joint_tp == 0)).sum()
+                fn_hit = ((pred == 0) & (joint_tp == 1)).sum()
+                prec = tp_hit / (tp_hit + fp_hit) if (tp_hit + fp_hit) > 0 else 0.0
+                rec  = tp_hit / (tp_hit + fn_hit) if (tp_hit + fn_hit) > 0 else 0.0
+                f1   = 2 * prec * rec / (prec + rec) if (prec + rec) > 0 else 0.0
+                f1_grid[ti, tj]   = f1
+                prec_grid[ti, tj] = prec
+                rec_grid[ti, tj]  = rec
+
+        best_flat = np.argmax(f1_grid)
+        best_ti, best_tj = np.unravel_index(best_flat, f1_grid.shape)
+        opt_t_tss = grid[best_ti]
+        opt_t_tts = grid[best_tj]
+        best_f1   = f1_grid[best_ti, best_tj]
+        best_prec = prec_grid[best_ti, best_tj]
+        best_rec  = rec_grid[best_ti, best_tj]
+        optimal[label] = {
+            "t_tss": opt_t_tss, "t_tts": opt_t_tts,
+            "f1": best_f1, "precision": best_prec, "recall": best_rec,
+        }
+
+        im = ax.imshow(
+            f1_grid.T,
+            origin="lower", aspect="auto",
+            extent=[grid[0], grid[-1], grid[0], grid[-1]],
+            cmap="viridis", vmin=0, vmax=max(f1_grid.max(), 0.5),
+        )
+        # Contour lines
+        cs = ax.contour(
+            grid, grid, f1_grid.T,
+            levels=6, colors="white", linewidths=0.4, alpha=0.6,
+        )
+        ax.clabel(cs, fmt="%.2f", fontsize=4, inline=True)
+
+        # Mark optimum
+        ax.scatter([opt_t_tss], [opt_t_tts], marker="*", s=120,
+                   color="red", edgecolors="black", linewidths=0.5, zorder=5)
+        ax.text(0.03, 0.97,
+                f"F1={best_f1:.3f}\nP={best_prec:.3f} R={best_rec:.3f}\n"
+                f"t_tss={opt_t_tss:.2f}  t_tts={opt_t_tts:.2f}",
+                transform=ax.transAxes, fontsize=5, va="top",
+                bbox=dict(facecolor="white", alpha=0.85, pad=1, edgecolor="none"))
+
+        ax.set_title(label, fontsize=6)
+        if i == 0:
+            style_ax(ax, xlabel="t_tss (5′ threshold)", ylabel="t_tts (3′ threshold)")
+        else:
+            style_ax(ax, xlabel="t_tss (5′ threshold)")
+
+    fig.colorbar(im, ax=axes, shrink=0.8, pad=0.02, label="Joint F1")
+    fig.suptitle(
+        "Joint threshold sweep — isoform TP requires both ends to hit peaks",
+        fontsize=8, y=1.02,
+    )
+    fig.tight_layout()
+    savefig(fig, outdir / "joint_threshold_sweep")
+    return optimal
+
+
 # ── Summary TSV ─────────────────────────────────────────────────────────────
 
 def write_summary(
@@ -776,6 +927,21 @@ def main():
 
     # Panel 6 — Marginal model value (cross-end)
     plot_marginal_value(auc_5prime, auc_3prime, outdir)
+
+    # Panel 7 — Joint threshold sweep (isoform-level, both ends must hit peaks)
+    joint_data_by_label: dict[str, dict] = {}
+    for label, isoforms in beds_by_method.items():
+        jd = _extract_joint(isoforms, cage_peaks, qs_peaks)
+        n_joint_tp = jd["joint_tp"].sum()
+        n_joint_fp = len(jd["joint_tp"]) - n_joint_tp
+        if n_joint_tp == 0 or n_joint_fp == 0:
+            log.warning("%s joint: TP=%d FP=%d — skipping", label, n_joint_tp, n_joint_fp)
+            continue
+        joint_data_by_label[label] = jd
+        log.info("%s joint: %d isoforms (joint_TP=%d, joint_FP=%d)",
+                 label, len(jd["joint_tp"]), n_joint_tp, n_joint_fp)
+
+    plot_joint_threshold_sweep(joint_data_by_label, opt_5prime, opt_3prime, outdir)
 
     # Summary TSV
     write_summary(auc_5prime, auc_3prime, opt_5prime, opt_3prime,

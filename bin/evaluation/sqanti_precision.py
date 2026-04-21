@@ -38,45 +38,38 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import numpy as np
 import matplotlib
 import matplotlib.ticker
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-try:
-    from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
-    from flair_structural import (
-        classify_transcripts_per_isoform,
-        parse_reference,
-    )
-    from ted_end_precision import (
-        parse_gtf_ends,
-        parse_gtf_transcripts,
-        compute_jc_deduplicated_precision_recall,
-    )
-except ImportError:
-    from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
-    from evaluation.flair_structural import (
-        classify_transcripts_per_isoform,
-        parse_reference,
-    )
-    from evaluation.ted_end_precision import (
-        parse_gtf_ends,
-        parse_gtf_transcripts,
-        compute_jc_deduplicated_precision_recall,
-    )
+from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
+from flair_structural import (
+    classify_transcripts_per_isoform,
+    build_reference_structures,
+)
+from ted_end_precision import (
+    parse_gtf_ends,
+    parse_gtf_transcripts,
+    parse_peaks_bed,
+    compute_jc_deduplicated_precision_recall,
+)
 
 apply_rc()
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-CATEGORY_ORDER  = ["FSM", "ISM", "NIC", "NNC"]
+CATEGORY_ORDER  = ["FSM", "ISM", "NIC", "NNC", "SEM", "SEN"]
 CATEGORY_COLORS = {
     "FSM": "#009E73",
     "ISM": "#56B4E9",
     "NIC": "#E69F00",
     "NNC": "#D55E00",
+    "SEM": "#CC79A7",
+    "SEN": "#999999",
 }
 END_WINDOW = 50   # bp tolerance for end match
 
@@ -88,12 +81,14 @@ def compute_category_precision(
     annotated_ends: Dict[str, Dict[str, List[int]]],
     annot_transcripts: List[dict],
     window: int = END_WINDOW,
+    peaks_5prime=None,
+    peaks_3prime=None,
 ) -> Dict[str, Dict]:
     """Per-category 5′ and 3′ JC-deduplicated end precision for one mode.
 
-    Uses compute_jc_deduplicated_precision_recall (GTF path, no orthogonal peaks)
-    on the subset of isoforms in each SQANTI category.  This matches the
-    authoritative metric used by TedEndPrecision in the Nextflow pipeline.
+    When peaks_5prime/peaks_3prime are provided, uses orthogonal signal (CAGE/dRNA)
+    as ground truth — matching the primary evaluation metric. Falls back to GTF-only
+    when peaks are not available.
 
     Returns:
         {category: {"n": int, "tss_prec": float|None, "tts_prec": float|None}}
@@ -115,8 +110,8 @@ def compute_category_precision(
         metrics = compute_jc_deduplicated_precision_recall(
             isos, annotated_ends, annot_transcripts,
             window=window,
-            peaks_5prime=None,   # GTF-only path — matches ted_end_precision GTF mode
-            peaks_3prime=None,
+            peaks_5prime=peaks_5prime,
+            peaks_3prime=peaks_3prime,
         )
         result[cat] = {
             "n":        n,
@@ -258,7 +253,8 @@ def plot_heatmap(
             ))
 
         ax.set_xticks(range(len(cats)))
-        ax.set_xticklabels(cats, fontsize=7, labelpad=8)
+        ax.set_xticklabels(cats, fontsize=7)
+        ax.tick_params(axis='x', pad=8)
         ax.set_yticks(range(len(modes)))
         ax.set_yticklabels([_short(m) for m in modes], fontsize=6)
         ax.set_title(end_label, fontsize=7, pad=4)
@@ -294,23 +290,46 @@ def _parse_label_path(entries: List[str]) -> Dict[str, str]:
     return out
 
 
-def _load_categories_tsv(path: str) -> List[dict]:
-    """Load a pre-classified isoform categories TSV written by flair_eval.py.
-
-    Expected format (tab-separated, header row):
-        isoform_name  category
-
-    Returns list of dicts compatible with classify_transcripts_per_isoform output:
-        [{"name": str, "category": str}, ...]
-    """
-    isoforms = []
+def _load_categories_tsv(path: str) -> Dict[str, str]:
+    """Load a pre-classified isoform categories TSV → {name: category}."""
+    cats: Dict[str, str] = {}
     with open(path) as fh:
-        header = fh.readline()  # skip header
+        fh.readline()  # skip header
         for line in fh:
             parts = line.rstrip("\n").split("\t")
-            if len(parts) < 2:
+            if len(parts) >= 2:
+                cats[parts[0]] = parts[1]
+    return cats
+
+
+def _parse_bed_isoforms(bed_path: str) -> List[dict]:
+    """Parse BED12 into minimal isoform dicts with geometry fields needed by
+    compute_jc_deduplicated_precision_recall (chrom, start, end, strand,
+    name, n_exons, junctions).  GTF inputs are skipped (no category assigned).
+    """
+    isoforms = []
+    with open(bed_path) as fh:
+        for line in fh:
+            if line.startswith("#") or line.startswith("track"):
                 continue
-            isoforms.append({"name": parts[0], "category": parts[1]})
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 12:
+                continue
+            chrom, start, end = parts[0], int(parts[1]), int(parts[2])
+            name, strand = parts[3], parts[5]
+            esizes  = [int(x) for x in parts[10].rstrip(",").split(",") if x]
+            estarts = [int(x) for x in parts[11].rstrip(",").split(",") if x]
+            exons = [(start + estarts[i], start + estarts[i] + esizes[i])
+                     for i in range(len(esizes))]
+            junctions = tuple((exons[i][1], exons[i + 1][0])
+                              for i in range(len(exons) - 1))
+            tss = start if strand == "+" else end
+            tts = end   if strand == "+" else start
+            isoforms.append({
+                "name": name, "chrom": chrom, "start": start, "end": end,
+                "strand": strand, "n_exons": len(exons), "junctions": junctions,
+                "tss": tss, "tts": tts,
+            })
     return isoforms
 
 
@@ -329,6 +348,10 @@ def main() -> None:
                              "When provided, skips GTF re-parsing and re-classification.")
     parser.add_argument("--gtf", required=True,
                         help="Reference GTF for annotated end positions")
+    parser.add_argument("--cage-peaks", default=None,
+                        help="CAGE peaks BED6 (both strands) for orthogonal 5′ precision")
+    parser.add_argument("--drna-peaks", default=None,
+                        help="dRNA peaks BED6 (both strands) for orthogonal 3′ precision")
     parser.add_argument("--window", type=int, default=END_WINDOW,
                         help=f"bp tolerance for end match (default {END_WINDOW})")
     parser.add_argument("--output", required=True)
@@ -343,6 +366,18 @@ def main() -> None:
         print("  Parsing reference GTF for end positions...", file=sys.stderr)
     annotated_ends = parse_gtf_ends(args.gtf)
     annot_transcripts = parse_gtf_transcripts(args.gtf)
+
+    # Load orthogonal peaks if provided
+    peaks_5prime = None
+    peaks_3prime = None
+    if args.cage_peaks and Path(args.cage_peaks).exists():
+        if args.verbose:
+            print("  Loading CAGE peaks for orthogonal 5′ precision...", file=sys.stderr)
+        peaks_5prime = parse_peaks_bed(args.cage_peaks)
+    if args.drna_peaks and Path(args.drna_peaks).exists():
+        if args.verbose:
+            print("  Loading dRNA peaks for orthogonal 3′ precision...", file=sys.stderr)
+        peaks_3prime = parse_peaks_bed(args.drna_peaks)
     if args.verbose:
         n_tss = sum(len(v["tss"]) for v in annotated_ends.values())
         n_tts = sum(len(v["tts"]) for v in annotated_ends.values())
@@ -352,14 +387,16 @@ def main() -> None:
     # Pre-classified categories TSVs (from flair_eval.py) — skip GTF parse + classification
     cat_paths = _parse_label_path(args.categories_tsv) if args.categories_tsv else {}
 
-    # Only parse reference structures when at least one label lacks pre-classified categories
     bed_paths = _parse_label_path(args.bed)
+
+    # Only build reference structures when needed for classification
     needs_classification = [lbl for lbl in bed_paths if lbl not in cat_paths]
     if needs_classification:
         if args.verbose:
             print("  Parsing reference GTF for classification "
                   f"(needed for: {', '.join(needs_classification)})...", file=sys.stderr)
-        refjuncs, refjuncchains, refseends = parse_reference(args.gtf)
+        transcripttoexons = parse_gtf_transcripts(args.gtf)
+        refjuncs, refjuncchains, refseends = build_reference_structures(transcripttoexons)
     else:
         refjuncs = refjuncchains = refseends = None
 
@@ -370,14 +407,23 @@ def main() -> None:
             print(f"WARNING: {path} not found — skipping {label}", file=sys.stderr)
             continue
 
-        if label in cat_paths:
-            # Fast path: load pre-classified categories from TSV
+        # Skip GTF inputs (IsoQuant etc.) — no BED12 geometry
+        if path.endswith(".gtf") or path.endswith(".gff"):
             if args.verbose:
-                print(f"  Loading pre-classified categories for {label}...", file=sys.stderr)
+                print(f"  Skipping GTF input for {label}", file=sys.stderr)
+            continue
+
+        if label in cat_paths:
+            # Fast path: load pre-classified categories, merge with BED geometry
+            if args.verbose:
+                print(f"  Loading categories + BED geometry for {label}...", file=sys.stderr)
             try:
-                isoforms = _load_categories_tsv(cat_paths[label])
+                name_to_cat = _load_categories_tsv(cat_paths[label])
+                isoforms = _parse_bed_isoforms(path)
+                for iso in isoforms:
+                    iso["category"] = name_to_cat.get(iso["name"], "UNK")
             except Exception as e:
-                print(f"WARNING: failed to load categories TSV for {label}: {e} — "
+                print(f"WARNING: failed fast path for {label}: {e} — "
                       "falling back to re-classification", file=sys.stderr)
                 isoforms = None
         else:
@@ -398,7 +444,8 @@ def main() -> None:
         if not isoforms:
             continue
         data[label] = compute_category_precision(
-            isoforms, annotated_ends, annot_transcripts, args.window
+            isoforms, annotated_ends, annot_transcripts, args.window,
+            peaks_5prime=peaks_5prime, peaks_3prime=peaks_3prime,
         )
         if args.verbose:
             for cat, d in data[label].items():
