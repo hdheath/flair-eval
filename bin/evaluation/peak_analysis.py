@@ -6,10 +6,14 @@ and generating annotated output files for troubleshooting.
 """
 
 import csv
+import random
 import statistics
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+_DOWNSAMPLE_LIMIT = 1_000_000
 
 from .utils import timed_section, get_logger
 from .bed_utils import read_bed6
@@ -25,9 +29,13 @@ def find_recoverable_peaks(
 ) -> Dict[str, int]:
     """Determine which peaks have at least one read end within the window.
 
+    Uses sorted bisect lookup (O(log n) per peak) and downsamples to
+    _DOWNSAMPLE_LIMIT read ends when the input is very large, so that
+    full-genome BAMs with millions of read ends don't cause OOM or timeouts.
+
     Args:
         peaks_path: BED file of experimental peaks (CAGE or dRNA)
-        read_ends: List of dicts with 'Chrom', 'Start', 'End', 'Strand' for each read end
+        read_ends: List of dicts with 'Chrom', 'Start', 'End', 'Strand'
         window: Distance window in bp
 
     Returns:
@@ -37,33 +45,42 @@ def find_recoverable_peaks(
     if not peaks_rows or not read_ends:
         return {}
 
-    # Group read ends by chrom/strand
-    reads_by_cs = defaultdict(list)
+    # Downsample before indexing so memory stays bounded
+    if len(read_ends) > _DOWNSAMPLE_LIMIT:
+        logger.debug(
+            "Downsampling read ends %d → %d for find_recoverable_peaks",
+            len(read_ends), _DOWNSAMPLE_LIMIT,
+        )
+        read_ends = random.sample(read_ends, _DOWNSAMPLE_LIMIT)
+
+    # Build sorted position arrays per (chrom, strand) for bisect lookup
+    # Each entry is the 1-bp start position (read ends are stored as [Start, Start+1))
+    sorted_starts: Dict = defaultdict(list)
     for r in read_ends:
-        key = (r['Chrom'], r['Strand'])
-        reads_by_cs[key].append(r)
+        sorted_starts[(r['Chrom'], r['Strand'])].append(r['Start'])
+    for key in sorted_starts:
+        sorted_starts[key].sort()
 
     recoverable: Dict[str, int] = {}
     for peak in peaks_rows:
         peak_id = f"{peak['Chrom']}_{peak['Start']}_{peak['End']}"
         lo = peak['Start'] - window
-        hi = peak['End'] + window
+        hi = peak['End'] + window  # read Start must be <= hi (End = Start+1 >= lo always)
+
+        strands_to_check = [peak['Strand']] if peak['Strand'] != '.' else ['+', '-']
 
         count = 0
-        strands_to_check = [peak['Strand']]
-        if peak['Strand'] == '.':
-            strands_to_check = ['+', '-']
-
         for strand in strands_to_check:
-            key = (peak['Chrom'], strand)
-            for r in reads_by_cs.get(key, []):
-                if r['End'] >= lo and r['Start'] <= hi:
-                    count += 1
+            arr = sorted_starts.get((peak['Chrom'], strand))
+            if not arr:
+                continue
+            # Count positions in [lo, hi] using bisect
+            count += bisect_right(arr, hi) - bisect_left(arr, lo)
 
         if count > 0:
             recoverable[peak_id] = count
 
-    logger.debug(f"Recoverable peaks: {len(recoverable)}/{len(peaks_rows)}")
+    logger.debug("Recoverable peaks: %d/%d", len(recoverable), len(peaks_rows))
     return recoverable
 
 
@@ -100,20 +117,27 @@ def classify_isoform_recoverability(
     return classifications
 
 
-def extract_read_end_positions(reads_bed: Path, end_type: str) -> List[dict]:
+def extract_read_end_positions(reads_bed: Path, end_type: str,
+                               max_reads: int = _DOWNSAMPLE_LIMIT) -> List[dict]:
     """Extract single-position BED-like dicts for read TSS or TTS positions.
+
+    Caps output at max_reads via reservoir sampling so that full-genome BAMs
+    with millions of reads don't inflate memory downstream.
 
     Args:
         reads_bed: Reads BED12 file
         end_type: 'tss' for 5' ends, 'tts' for 3' ends
+        max_reads: reservoir sample cap (default _DOWNSAMPLE_LIMIT)
 
     Returns:
         List of dicts with 'Chrom', 'Start', 'End', 'Strand'
     """
-    positions = []
+    # Reservoir sampling: keep at most max_reads without loading everything first
+    reservoir: List[dict] = []
+    seen: set = set()
+    n_seen = 0
     with open(reads_bed) as f:
         reader = csv.reader(f, delimiter='\t')
-        seen = set()
         for row in reader:
             if not row or row[0].startswith('#'):
                 continue
@@ -129,18 +153,25 @@ def extract_read_end_positions(reads_bed: Path, end_type: str) -> List[dict]:
             end = int(row[2])
             strand = row[5]
 
-            if end_type == 'tss':
-                pos = start if strand == '+' else end
-            else:  # tts
-                pos = end if strand == '+' else start
+            pos = (start if strand == '+' else end) if end_type == 'tss' \
+                  else (end if strand == '+' else start)
 
-            positions.append({
-                'Chrom': chrom,
-                'Start': pos,
-                'End': pos + 1,
-                'Strand': strand,
-            })
-    return positions
+            entry = {'Chrom': chrom, 'Start': pos, 'End': pos + 1, 'Strand': strand}
+
+            if n_seen < max_reads:
+                reservoir.append(entry)
+            else:
+                j = random.randint(0, n_seen)
+                if j < max_reads:
+                    reservoir[j] = entry
+            n_seen += 1
+
+    if n_seen > max_reads:
+        logger.debug(
+            "extract_read_end_positions (%s): sampled %d from %d reads",
+            end_type, max_reads, n_seen,
+        )
+    return reservoir
 
 
 def write_recoverable_peaks_bed(
@@ -235,13 +266,32 @@ def classify_read_sj_support(
     """Classify a single read's splice junction chain support.
 
     Returns one of: 'full_match', 'subset_match', 'unsupported', 'single_exon'.
+
+    For subset matching, either:
+      - found_subsets[chrom] is a pre-materialised set of subchains (legacy path,
+        memory-expensive on full-genome inputs), OR
+      - found_subsets[chrom] is None/empty, in which case we check on the fly
+        whether read_chain is a contiguous slice of any isoform chain. The
+        on-the-fly path avoids pre-building O(L²) subchains per isoform, which
+        on full-genome data easily exceeded 50 GB RSS.
     """
     if not read_chain:
         return 'single_exon'
     if chrom in found_sjc and read_chain in found_sjc[chrom]:
         return 'full_match'
-    if chrom in found_subsets and read_chain in found_subsets[chrom]:
-        return 'subset_match'
+    sub_for_chrom = found_subsets.get(chrom) if found_subsets else None
+    if sub_for_chrom:
+        if read_chain in sub_for_chrom:
+            return 'subset_match'
+    elif chrom in found_sjc:
+        n = len(read_chain)
+        for full in found_sjc[chrom]:
+            if len(full) < n:
+                continue
+            # contiguous slice check
+            for i in range(len(full) - n + 1):
+                if full[i:i + n] == read_chain:
+                    return 'subset_match'
     return 'unsupported'
 
 
@@ -265,6 +315,7 @@ def classify_missed_peak_reads(
     end_type: str,  # 'tss' (CAGE/5') or 'tts' (dRNA/3')
     window: int = 50,
     nearby_threshold: int = 200,
+    read_to_iso: Optional[Dict[str, str]] = None,
 ) -> dict:
     """
     For reads that support a missed peak, classify where they actually got assigned.
@@ -293,7 +344,10 @@ def classify_missed_peak_reads(
     if end_type not in ("tss", "tts"):
         raise ValueError(f"end_type must be 'tss' or 'tts', got: {end_type}")
 
-    read_to_iso = get_reads_to_isoforms(iso_to_reads)
+    # Accept caller-provided read_to_iso (hoisted out of the per-peak loop)
+    # to avoid re-inverting the iso_to_reads map for every missed peak.
+    if read_to_iso is None:
+        read_to_iso = get_reads_to_isoforms(iso_to_reads)
 
     peak_pos = (peak_info["Start"] + peak_info["End"]) // 2
     peak_strand = peak_info["Strand"]
@@ -390,16 +444,25 @@ def analyze_missed_peaks_comprehensive(
     peaks_rows = read_bed6(peaks_path)
     peak_id_to_info = {f"{p['Chrom']}_{p['Start']}_{p['End']}": p for p in peaks_rows}
 
-    # Index read ends by chrom/strand for quick lookup
-    reads_by_chrom_strand = defaultdict(list)
-    for r in read_end_positions:
-        reads_by_chrom_strand[(r["Chrom"], r["Strand"])].append(r)
+    # Build sorted position arrays per (chrom, strand) for bisect-based window
+    # lookup.  pos_list[(chrom, strand)] = sorted [(start_pos, read_id), ...]
+    # so we can range-slice it with bisect in O(log n) per peak.
+    sorted_by_cs: Dict = defaultdict(list)
+    for rid, rinfo in read_ends.items():
+        pos = rinfo.get(end_type)
+        if pos is None:
+            continue
+        sorted_by_cs[(rinfo["chrom"], rinfo["strand"])].append((pos, rid))
+    for key in sorted_by_cs:
+        sorted_by_cs[key].sort(key=lambda x: x[0])
+    # Separate sorted position arrays for bisect
+    sorted_positions: Dict = {
+        key: [p for p, _ in lst] for key, lst in sorted_by_cs.items()
+    }
 
-    # Map read_id -> endpoint position for the requested end_type
-    # NOTE: parse_reads_bed_ends returns lowercase keys for chrom/strand, but keeps 'tss'/'tts' numeric fields
+    # Map read_id -> endpoint position for downstream truncation + read-length
+    # analyses.
     read_id_to_end = {}
-    # Create reverse index: (chrom, strand, pos) -> read_id for O(1) lookup
-    pos_to_read_id = {}
     for rid, rinfo in read_ends.items():
         pos = rinfo.get(end_type)
         if pos is None:
@@ -409,9 +472,11 @@ def analyze_missed_peaks_comprehensive(
             "pos": pos,
             "Strand": rinfo["strand"],
         }
-        # Index by (chrom, strand, pos) for fast reverse lookup
-        key = (rinfo["chrom"], rinfo["strand"], pos)
-        pos_to_read_id[key] = rid
+
+    # Hoist the iso→read inversion out of the per-peak loop: previously
+    # classify_missed_peak_reads rebuilt this for every call, making the
+    # analysis O(n_peaks × n_reads).
+    read_to_iso = get_reads_to_isoforms(iso_to_reads)
 
     # Determine whether SJ support analysis is possible
     has_sj_data = (read_sj_chains is not None and found_sjc is not None
@@ -430,20 +495,19 @@ def analyze_missed_peaks_comprehensive(
 
             peak_pos = (peak_info["Start"] + peak_info["End"]) // 2
 
-            # Find read IDs supporting this peak (within window around peak_pos)
+            # Find read IDs supporting this peak via sorted bisect range-slice.
             supporting_reads = []
             strands = [peak_info["Strand"]] if peak_info["Strand"] != "." else ["+", "-"]
-
+            lo, hi = peak_pos - window, peak_pos + window
             for strand in strands:
                 key = (peak_info["Chrom"], strand)
-                for r in reads_by_chrom_strand.get(key, []):
-                    # r is a 1bp interval [Start, End)
-                    if abs(r["Start"] - peak_pos) <= window:
-                        # Use reverse index for O(1) lookup instead of O(N) iteration
-                        lookup_key = (r["Chrom"], r["Strand"], r["Start"])
-                        rid = pos_to_read_id.get(lookup_key)
-                        if rid:
-                            supporting_reads.append(rid)
+                positions = sorted_positions.get(key)
+                if not positions:
+                    continue
+                pairs = sorted_by_cs[key]
+                i_lo = bisect_left(positions, lo)
+                i_hi = bisect_right(positions, hi)
+                supporting_reads.extend(rid for _, rid in pairs[i_lo:i_hi])
 
             # Deduplicate + cap for performance
             supporting_reads = list(set(supporting_reads))[:100]
@@ -468,6 +532,7 @@ def analyze_missed_peaks_comprehensive(
                 read_ends=read_ends,
                 end_type=end_type,
                 window=window,
+                read_to_iso=read_to_iso,
             )
 
             classification_summary["unassigned"] += classification.get("unassigned_count", 0)
@@ -563,28 +628,25 @@ def analyze_all_recoverable_peaks_truncation(
             f"{p['Chrom']}_{p['Start']}_{p['End']}": p for p in peaks_rows
         }
 
-    # Index read ends by position for quick lookup
-    reads_by_chrom_strand = defaultdict(list)
-    for r in read_end_positions:
-        key = (r['Chrom'], r['Strand'])
-        reads_by_chrom_strand[key].append(r)
-
-    # Build read ID to end position mapping
-    # Note: parse_reads_bed_ends returns lowercase keys ('chrom', 'strand', 'tss', 'tts')
+    # Build sorted (pos, read_id) arrays per (chrom, strand) for O(log n) window
+    # lookup — replaces the former per-peak linear scan.
+    sorted_by_cs: Dict = defaultdict(list)
     read_id_to_end = {}
-    # Create reverse index: (chrom, strand, pos) -> read_id for O(1) lookup
-    pos_to_read_id = {}
     for rid, rinfo in read_ends.items():
         pos = rinfo.get('tss')
-        if pos is not None:
-            read_id_to_end[rid] = {
-                'Chrom': rinfo['chrom'],
-                'pos': pos,
-                'Strand': rinfo['strand'],
-            }
-            # Index by (chrom, strand, pos) for fast reverse lookup
-            key = (rinfo['chrom'], rinfo['strand'], pos)
-            pos_to_read_id[key] = rid
+        if pos is None:
+            continue
+        read_id_to_end[rid] = {
+            'Chrom': rinfo['chrom'],
+            'pos': pos,
+            'Strand': rinfo['strand'],
+        }
+        sorted_by_cs[(rinfo['chrom'], rinfo['strand'])].append((pos, rid))
+    for key in sorted_by_cs:
+        sorted_by_cs[key].sort(key=lambda x: x[0])
+    sorted_positions: Dict = {
+        key: [p for p, _ in lst] for key, lst in sorted_by_cs.items()
+    }
 
     peak_patterns = {}
 
@@ -595,18 +657,19 @@ def analyze_all_recoverable_peaks_truncation(
         peak_info = peak_id_to_info[peak_id]
         peak_pos = (peak_info['Start'] + peak_info['End']) // 2
 
-        # Find reads supporting this peak
+        # Find reads supporting this peak via bisect range-slice
         supporting_reads = []
         strands = [peak_info['Strand']] if peak_info['Strand'] != '.' else ['+', '-']
+        lo, hi = peak_pos - window, peak_pos + window
         for strand in strands:
             key = (peak_info['Chrom'], strand)
-            for r in reads_by_chrom_strand.get(key, []):
-                if abs(r['Start'] - peak_pos) <= window or abs(r['End'] - peak_pos) <= window:
-                    # Use reverse index for O(1) lookup instead of O(N) nested loop
-                    lookup_key = (r['Chrom'], r['Strand'], r['Start'])
-                    rid = pos_to_read_id.get(lookup_key)
-                    if rid:
-                        supporting_reads.append(rid)
+            positions = sorted_positions.get(key)
+            if not positions:
+                continue
+            pairs = sorted_by_cs[key]
+            i_lo = bisect_left(positions, lo)
+            i_hi = bisect_right(positions, hi)
+            supporting_reads.extend(rid for _, rid in pairs[i_lo:i_hi])
 
         supporting_reads = list(set(supporting_reads))[:100]  # Limit for performance
 

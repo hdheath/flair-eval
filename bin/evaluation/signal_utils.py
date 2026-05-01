@@ -147,10 +147,26 @@ def gene_from_name(name: str) -> str:
 _ATTR_RE = re.compile(r'(\w+)\s+"([^"]*)"')
 
 
-def parse_gtf(path: str | Path) -> List[dict]:
-    """Parse a GTF file and return isoform dicts (same shape as parse_bed12).
+def parse_feature_attributes(attr_string: str) -> dict:
+    """Parse GTF key "value" and GFF3 key=value attributes."""
+    attrs = dict(_ATTR_RE.findall(attr_string))
+    for part in attr_string.strip().rstrip(";").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" in part:
+            key, value = part.split("=", 1)
+            attrs.setdefault(key.strip(), value.strip().strip('"'))
+        elif " " in part and ' "' not in part:
+            key, value = part.split(" ", 1)
+            attrs.setdefault(key.strip(), value.strip().strip('"'))
+    return attrs
 
-    Groups exons by transcript_id, builds junctions from exon boundaries,
+
+def parse_gtf(path: str | Path) -> List[dict]:
+    """Parse a GTF/GFF file and return isoform dicts (same shape as parse_bed12).
+
+    Groups exons by transcript_id or GFF3 Parent, builds junctions from exon boundaries,
     and returns one dict per transcript with: chrom, start, end, name,
     score, strand, junctions, n_exons.
     """
@@ -169,15 +185,22 @@ def parse_gtf(path: str | Path) -> List[dict]:
             cols = line.rstrip("\n").split("\t")
             if len(cols) < 9:
                 continue
-            if cols[2] != "exon":
-                continue
             chrom = cols[0]
             start = int(cols[3]) - 1  # GTF is 1-based → 0-based
             end = int(cols[4])
             strand = cols[6]
-            attrs = dict(_ATTR_RE.findall(cols[8]))
-            tid = attrs.get("transcript_id", "")
-            gid = attrs.get("gene_id", "")
+            attrs = parse_feature_attributes(cols[8])
+            feature = cols[2]
+            if feature in ("transcript", "mRNA"):
+                tid = attrs.get("transcript_id") or attrs.get("ID", "")
+                gid = attrs.get("gene_id") or attrs.get("gene") or attrs.get("Parent", "")
+                if tid and gid:
+                    tx_gene[tid] = gid.split(",", 1)[0]
+                continue
+            if feature != "exon":
+                continue
+            tid = attrs.get("transcript_id") or attrs.get("Parent", "").split(",", 1)[0]
+            gid = attrs.get("gene_id") or attrs.get("gene", "")
             if not tid:
                 continue
             tx_exons[tid].append((chrom, start, end, strand))

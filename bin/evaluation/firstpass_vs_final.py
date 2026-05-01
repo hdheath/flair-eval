@@ -18,6 +18,7 @@ try:
     from signal_utils import parse_bed12, tss_tts
     from ted_end_precision import (
         parse_gtf_ends, parse_gtf_transcripts, parse_peaks_bed,
+        parse_isoforms_bed, parse_region_values,
         compute_jc_deduplicated_precision_recall,
     )
     from pub_style import apply_rc, savefig as pub_savefig, style_ax, W2, PALETTE
@@ -25,6 +26,7 @@ except ImportError:
     from evaluation.signal_utils import parse_bed12, tss_tts
     from evaluation.ted_end_precision import (
         parse_gtf_ends, parse_gtf_transcripts, parse_peaks_bed,
+        parse_isoforms_bed, parse_region_values,
         compute_jc_deduplicated_precision_recall,
     )
     from evaluation.pub_style import apply_rc, savefig as pub_savefig, style_ax, W2, PALETTE
@@ -47,9 +49,9 @@ GOLDEN_RATIO = 1.618
 
 
 def run_precision_recall(bed_path, annotated_ends, annot_transcripts,
-                         window, peaks_5prime, peaks_3prime):
+                         window, peaks_5prime, peaks_3prime, regions=None):
     """Parse a BED file and compute JC-deduplicated P/R."""
-    isoforms = parse_bed12(bed_path)
+    isoforms = parse_isoforms_bed(bed_path, regions)
     log.info(f"  {len(isoforms)} isoforms from {Path(bed_path).name}")
     return compute_jc_deduplicated_precision_recall(
         isoforms, annotated_ends, annot_transcripts,
@@ -160,8 +162,9 @@ def main():
                         help="BED6 dRNA/dRNA peaks for TTS evaluation")
     parser.add_argument("--window", type=int, default=50,
                         help="Max distance (bp) for end matching (default: 50)")
-    parser.add_argument("--region", default=None,
-                        help="Restrict annotation to region (e.g. chr22:16000000-26000000)")
+    parser.add_argument("--region", nargs="+", default=None,
+                        help=("Restrict evaluation to one or more regions "
+                              "(e.g. chr22:16000000-26000000 chr3:48000000-53000000)"))
     parser.add_argument("--mode", default="",
                         help="Label for the transcriptome mode")
     parser.add_argument("--outdir", required=True,
@@ -171,40 +174,34 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # Parse region
-    region_chrom, region_start, region_end = None, None, None
-    if args.region:
-        if ":" in args.region:
-            region_chrom, coords = args.region.split(":", 1)
-            region_start, region_end = [int(x) for x in coords.split("-")]
-        else:
-            region_chrom = args.region
+    regions = parse_region_values(args.region)
+    region_label = " ".join(args.region) if args.region else "all"
 
-    log.info(f"Parsing GTF ends (region={args.region or 'all'})...")
-    annotated_ends = parse_gtf_ends(args.gtf, region_chrom, region_start, region_end)
+    log.info(f"Parsing GTF ends (region={region_label})...")
+    annotated_ends = parse_gtf_ends(args.gtf, regions)
 
     log.info("Parsing GTF transcripts for JC-matched recall...")
-    annot_transcripts = parse_gtf_transcripts(args.gtf, region_chrom, region_start, region_end)
+    annot_transcripts = parse_gtf_transcripts(args.gtf, regions)
     log.info(f"  {len(annot_transcripts)} annotation transcripts")
 
     peaks_5prime = None
     peaks_3prime = None
     if args.peaks_5prime:
         log.info(f"Parsing 5' peaks: {args.peaks_5prime}")
-        peaks_5prime = parse_peaks_bed(args.peaks_5prime, region_chrom, region_start, region_end)
+        peaks_5prime = parse_peaks_bed(args.peaks_5prime, regions)
     if args.peaks_3prime:
         log.info(f"Parsing 3' peaks: {args.peaks_3prime}")
-        peaks_3prime = parse_peaks_bed(args.peaks_3prime, region_chrom, region_start, region_end)
+        peaks_3prime = parse_peaks_bed(args.peaks_3prime, regions)
 
     log.info("Computing firstpass P/R...")
     fp_results = run_precision_recall(
         args.firstpass_bed, annotated_ends, annot_transcripts,
-        args.window, peaks_5prime, peaks_3prime)
+        args.window, peaks_5prime, peaks_3prime, regions)
 
     log.info("Computing final P/R...")
     fn_results = run_precision_recall(
         args.final_bed, annotated_ends, annot_transcripts,
-        args.window, peaks_5prime, peaks_3prime)
+        args.window, peaks_5prime, peaks_3prime, regions)
 
     write_comparison_tsv(fp_results, fn_results,
                          outdir / "firstpass_vs_final.tsv",

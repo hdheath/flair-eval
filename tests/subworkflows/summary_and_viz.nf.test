@@ -9,6 +9,7 @@ nextflow_workflow {
             params {
                 test_data_dir = "${projectDir}/tests/data"
                 test_name     = 'nf_test'
+                params_file   = "${projectDir}/tests/data/tiny_params.json"
             }
             workflow {
                 """
@@ -20,52 +21,92 @@ nextflow_workflow {
                           file("${params.test_data_dir}/tiny_evaluation_dup.tsv"))
                 )
 
-                // -- cage_peak_reason_tsvs: tuple [test_name, path]
+                // -- isoform_categories: tuple [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode, categories.tsv]
                 input[1] = Channel.of(
+                    tuple('nf_test', 'sample1', 'pre-aligned', 'chr-test', 'default',
+                          file("${params.test_data_dir}/tiny_isoform_categories_default.tsv")),
+                    tuple('nf_test', 'sample1', 'pre-aligned', 'chr-test', 'bambu_default',
+                          file("${params.test_data_dir}/tiny_isoform_categories_bambu.tsv"))
+                )
+
+                // -- cage_peak_reason_tsvs: tuple [test_name, path]
+                input[2] = Channel.of(
                     tuple('nf_test', file("${params.test_data_dir}/tiny_cage_peak_reasons.tsv"))
                 )
 
-                // -- quantseq_peak_reason_tsvs: tuple [test_name, path]
-                input[2] = Channel.of(
-                    tuple('nf_test', file("${params.test_data_dir}/tiny_quantseq_peak_reasons.tsv"))
+                // -- drna_peak_reason_tsvs: tuple [test_name, path]
+                input[3] = Channel.of(
+                    tuple('nf_test', file("${params.test_data_dir}/tiny_drna_peak_reasons.tsv"))
                 )
 
-                // -- all_eval_inputs: 21-field channel
+                // -- all_eval_inputs: 23-field channel
                 def no_bed   = file("NO_ISOFORMS_BED")
                 no_bed.text  = ''
                 def no_gtf   = file("NO_ISOFORMS_GTF")
                 no_gtf.text  = ''
+                def no_ted_log = file("NO_TED_LOG")
+                no_ted_log.text = ''
 
-                input[3] = Channel.of(
+                input[4] = Channel.of(
                     tuple('nf_test', 'sample1', 'pre-aligned', 'chr-test', 'default',
                           file("${params.test_data_dir}/tiny_isoforms.bed"),
                           no_gtf,
                           file("${params.test_data_dir}/tiny_read_map.txt"),
+                          no_ted_log,
                           file("${params.test_data_dir}/tiny_reads.bam"),
                           file("${params.test_data_dir}/tiny_reads.bam.bai"),
                           file("${params.test_data_dir}/tiny_reads.bed"),
                           file("${params.test_data_dir}/tiny_genome.fa"),
                           file("${params.test_data_dir}/tiny_annotation.gtf"),
                           file("${params.test_data_dir}/tiny_cage_peaks.bed"),
-                          file("${params.test_data_dir}/tiny_quantseq_peaks.bed"),
+                          file("${params.test_data_dir}/tiny_drna_peaks.bed"),
                           file("${params.test_data_dir}/tiny_ref_tss.bed"),
                           file("${params.test_data_dir}/tiny_ref_tts.bed"),
+                          'pacbio_cDNA',
                           '', '', '', ''),
                     tuple('nf_test', 'sample1', 'pre-aligned', 'chr-test', 'bambu_default',
                           no_bed,
                           file("${params.test_data_dir}/tiny_isoforms.gtf"),
                           file("${params.test_data_dir}/tiny_read_map_tool2.txt"),
+                          no_ted_log,
                           file("${params.test_data_dir}/tiny_reads.bam"),
                           file("${params.test_data_dir}/tiny_reads.bam.bai"),
                           file("${params.test_data_dir}/tiny_reads.bed"),
                           file("${params.test_data_dir}/tiny_genome.fa"),
                           file("${params.test_data_dir}/tiny_annotation.gtf"),
                           file("${params.test_data_dir}/tiny_cage_peaks.bed"),
-                          file("${params.test_data_dir}/tiny_quantseq_peaks.bed"),
+                          file("${params.test_data_dir}/tiny_drna_peaks.bed"),
                           file("${params.test_data_dir}/tiny_ref_tss.bed"),
                           file("${params.test_data_dir}/tiny_ref_tts.bed"),
+                          'pacbio_cDNA',
                           '', '', '', '')
                 )
+
+                // -- dataset_signal_ch
+                input[5] = Channel.of(
+                    tuple('nf_test', 'pacbio_cDNA', '', '', '', '')
+                )
+
+                // -- ted_precision_metrics
+                input[6] = Channel.of(
+                    tuple('nf_test', 'sample1', 'default',
+                          file("${params.test_data_dir}/tiny_precision_recall_default.tsv"),
+                          file("${params.test_data_dir}/tiny_per_junction_chain.tsv")),
+                    tuple('nf_test', 'sample1', 'bambu_default',
+                          file("${params.test_data_dir}/tiny_precision_recall_bambu.tsv"),
+                          file("${params.test_data_dir}/tiny_per_junction_chain.tsv"))
+                )
+
+                // -- ted_gtf_precision
+                input[7] = Channel.of(
+                    tuple('nf_test', 'sample1', 'default',
+                          file("${params.test_data_dir}/tiny_gtf_precision_recall_default.tsv")),
+                    tuple('nf_test', 'sample1', 'bambu_default',
+                          file("${params.test_data_dir}/tiny_gtf_precision_recall_bambu.tsv"))
+                )
+
+                // -- flair_firstpass
+                input[8] = Channel.empty()
                 """
             }
         }

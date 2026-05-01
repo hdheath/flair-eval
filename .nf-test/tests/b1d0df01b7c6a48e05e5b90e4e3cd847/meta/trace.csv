@@ -1,0 +1,2 @@
+task_id	hash	native_id	process	tag	name	status	exit	submit	start	complete	duration	realtime	workdir
+1	c7/f8e947	933	Evaluation	sample1_pre-aligned_chr-test_default	Evaluation (sample1_pre-aligned_chr-test_default)	COMPLETED	0	2026-04-28 14:00:49.566	2026-04-28 14:01:18.163	2026-04-28 14:01:37.265	47.7s	39.7s	/private/home/hdheath/projects/flair4_ted/.nf-test/tests/b1d0df01b7c6a48e05e5b90e4e3cd847/work/c7/f8e947b2f96b5cad15de89360a4114

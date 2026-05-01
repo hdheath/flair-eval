@@ -49,14 +49,37 @@ def get_regions(chromtoint, outfilename):
     return totregions
 
 
-def get_intersect_count(filea, fileb):
-    """Use bedtools to count intersecting regions"""
+def get_intersect_count(filea, fileb, timeout=3600):
+    """Use bedtools to count intersecting regions.
+
+    Streams bedtools stdout line-by-line so we don't materialise multi-GB
+    output as a single Python string (full-genome reads BED with --u can
+    easily exceed memory).  Times out after `timeout` seconds with a clear
+    exception so an NFS stall doesn't hang the job indefinitely.
+    """
+    proc = subprocess.Popen(
+        ['bedtools', 'intersect', '-f', '0.5', '-u', '-a', filea, '-b', fileb],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
     c = 0
-    result = subprocess.run(['bedtools', 'intersect', '-f', '0.5', '-u', '-a', filea, '-b', fileb],
-                          capture_output=True, text=True)
-    for line in result.stdout.rstrip('\n').split('\n'):
-        if line:
-            c += 1
+    try:
+        for line in proc.stdout:
+            if line.strip():
+                c += 1
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise RuntimeError(
+            f'bedtools intersect timed out after {timeout}s on '
+            f'{filea} vs {fileb}; likely NFS / cluster stall.'
+        )
+    if proc.returncode != 0:
+        err = proc.stderr.read() if proc.stderr else ''
+        raise RuntimeError(
+            f'bedtools intersect failed (rc={proc.returncode}) on '
+            f'{filea} vs {fileb}: {err.strip()[:500]}'
+        )
     return c
 
 

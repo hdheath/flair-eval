@@ -2,7 +2,7 @@
 // Unified evaluation process for all assemblers (FLAIR, Bambu, IsoQuant).
 // Automatically detects assembler type and runs appropriate evaluation:
 //   - FLAIR: Full evaluation with --isoforms-bed and read-level metrics
-//   - Bambu/IsoQuant: Full evaluation with --gtf-input and read-level metrics from converted read maps
+//   - GTF/GFF-based assemblers: evaluation with --gtf-input; read metrics only when a real read map exists
 //
 // Outputs:
 //   1. TED (Transcript End Distance) — measures TSS/TTS accuracy
@@ -23,7 +23,6 @@ process Evaluation {
     publishDir "${params.outdir}/evaluations/per_sample/${test_name}/per_method/entropy", mode: 'copy', pattern: 'ted_plots/*entropy*.png', saveAs: { it.toString().tokenize('/').last() }
     // --- Logs ---
     publishDir "${params.outdir}/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_${it}" }
-    errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}"
 
     input:
@@ -75,6 +74,7 @@ process Evaluation {
     def drna_signal_plus_arg_ted = drna_signal_plus ? "--drna-signal-plus ${drna_signal_plus}" : ""
     def drna_signal_minus_arg_ted = drna_signal_minus ? "--drna-signal-minus ${drna_signal_minus}" : ""
     def library_type_arg = library_type && library_type != 'unknown' ? "--library-type ${library_type}" : ""
+    def supports_read_metrics = !transcriptome_mode.toLowerCase().startsWith('stringtie2')
     // TED internal decision log (only exists for FLAIR --ted runs)
     def ted_log_arg = (ted_log.name != 'NO_TED_LOG' && ted_log.size() > 0) ? "--ted-log ${ted_log}" : ""
     def output_prefix = "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}"
@@ -89,7 +89,7 @@ process Evaluation {
     BAM_ARG=""
     READS_BED_ARG=""
     SKIP_ARG=""
-    if [ -s "${isoform_read_map}" ]; then
+    if [ "${supports_read_metrics}" = "true" ] && [ -s "${isoform_read_map}" ]; then
         READ_MAP_ARG="--map-file ${isoform_read_map}"
         BAM_ARG="--bam ${bam}"
         READS_BED_ARG="--reads-bed ${reads_bed}"
@@ -247,7 +247,6 @@ process Evaluation {
  *   per_junction_chain.tsv       — per-JC detail
  */
 process TedEndPrecision {
-    errorStrategy 'ignore'
     tag "${dataset_name}_${transcriptome_mode}"
 
     input:
@@ -269,11 +268,14 @@ process TedEndPrecision {
     script:
     def cage_arg = (cage_peaks.name != 'NO_CAGE' && cage_peaks.size() > 0) ? "--peaks-5prime ${cage_peaks}" : ""
     def drna_arg = (drna_peaks.name != 'NO_DRNA' && drna_peaks.size() > 0) ? "--peaks-3prime ${drna_peaks}" : ""
-    // partition_args is e.g. "--region chr22:16000000-26000000" or empty; extract region value
-    def region_match = (partition_args =~ /--region\s+(\S+)/)
-    def region_arg = region_match ? "--region ${region_match[0][1]}" : ""
+    // partition_args is e.g. "--region chr22:16000000-26000000 chr3:48000000-53000000" or empty.
+    def region_match = (partition_args =~ /--region\s+(.+?)(?:\s+--|$)/)
+    def region_arg = region_match ? "--region ${region_match[0][1].trim()}" : ""
     def isoforms_arg = (isoforms_bed.name != 'NO_ISOFORMS_BED') ? "--isoforms-bed ${isoforms_bed}" : "--isoforms-gtf ${isoforms_gtf}"
     """
+    # v3: GTF-based recall now uses every distinct annotated TSS/TTS as the
+    # denominator (was JC-filtered, which made annotation-passthrough tools
+    # score ~100% trivially).
     # --- Orthogonal-signal precision (peaks, primary metric) ---
     python ${projectDir}/bin/evaluation/ted_end_precision.py \\
         ${isoforms_arg} \\
@@ -315,7 +317,6 @@ process TedEndPrecision {
  */
 process FirstpassComparison {
     publishDir "${params.outdir}/evaluations/per_sample/${test_name}/per_method/firstpass_comparison", mode: 'copy', saveAs: { "${transcriptome_mode}_${it}" }
-    errorStrategy 'ignore'
     tag "${dataset_name}_${transcriptome_mode}"
 
     input:
@@ -331,8 +332,8 @@ process FirstpassComparison {
     script:
     def cage_arg = (cage_peaks.name != 'NO_CAGE' && cage_peaks.size() > 0) ? "--peaks-5prime ${cage_peaks}" : ""
     def drna_arg = (drna_peaks.name != 'NO_DRNA' && drna_peaks.size() > 0) ? "--peaks-3prime ${drna_peaks}" : ""
-    def region_match = (partition_args =~ /--region\s+(\S+)/)
-    def region_arg = region_match ? "--region ${region_match[0][1]}" : ""
+    def region_match = (partition_args =~ /--region\s+(.+?)(?:\s+--|$)/)
+    def region_arg = region_match ? "--region ${region_match[0][1].trim()}" : ""
     """
     python ${projectDir}/bin/evaluation/firstpass_vs_final.py \\
         --firstpass-bed ${firstpass_bed} \\

@@ -17,10 +17,19 @@ JC-deduplication is applied to the TP labels:
   compute_jc_deduplicated_precision_recall() used throughout the pipeline
   and prevents over-segmented assemblers from inflating their ROC curves.
 
+Paired ROC:
+  Score  = geometric mean of CAGE signal at TSS and dRNA signal at TTS.
+           This is the joint signal discriminating full-isoform correctness.
+  Label  = 1 (joint TP) only if BOTH ends independently hit their respective
+           orthogonal peaks within --window bp.  JC-dedup applied: within each
+           JC group, only ONE isoform may claim a given (tss_peak, tts_peak) pair
+           as a TP.
+
 Outputs (all in --output dir):
   roc_5prime.png          — TSS ROC curves, all methods overlaid
   roc_3prime.png          — TTS ROC curves, all methods overlaid
   roc_combined.png        — 5' and 3' side-by-side
+  roc_paired.png          — Paired joint-TP ROC curves, all methods overlaid
   roc_auc_summary.tsv     — mode, end, AUC, n_isoforms, n_tp, n_fp
 
 Usage:
@@ -120,6 +129,63 @@ def _jc_dedup_labels(
     return results
 
 
+# ── Paired JC-dedup TP labelling ─────────────────────────────────────────────
+
+def _jc_dedup_paired_labels(
+    isoforms: List[dict],
+    cage_peaks: Dict[Tuple[str, str], List[Tuple[int, int]]],
+    drna_peaks: Dict[Tuple[str, str], List[Tuple[int, int]]],
+    window: int,
+) -> List[Tuple[float, int]]:
+    """Return list of (joint_score, joint_tp_label) for every isoform.
+
+    joint_score = geometric mean of CAGE signal at TSS and dRNA signal at TTS.
+                  NaN if either signal is zero/missing.
+    joint_tp    = 1 only if BOTH ends hit their respective orthogonal peaks AND
+                  the (tss_peak, tts_peak) pair has not already been claimed by
+                  another isoform in the same JC group (JC-dedup).
+    """
+    jc_groups: Dict[tuple, List[dict]] = defaultdict(list)
+    for iso in isoforms:
+        if iso["n_exons"] >= 2 and iso["junctions"]:
+            key = (iso["chrom"], iso["strand"], iso["junctions"])
+        else:
+            rnd = lambda v: 100 * round(v / 100)
+            key = (iso["chrom"], iso["strand"], "__se__",
+                   rnd(iso["start"]), rnd(iso["end"]))
+        jc_groups[key].append(iso)
+
+    results: List[Tuple[float, int]] = []
+
+    for key, members in jc_groups.items():
+        claimed_pairs: set = set()
+
+        for iso in members:
+            ch, strand = iso["chrom"], iso["strand"]
+            sig_tss = iso.get("_sig_tss", np.nan)
+            sig_tts = iso.get("_sig_tts", np.nan)
+            # Geometric mean — zero if either end is missing
+            if sig_tss == 0.0 or sig_tts == 0.0 or np.isnan(sig_tss) or np.isnan(sig_tts):
+                joint_score = np.nan
+            else:
+                joint_score = float(np.sqrt(sig_tss * sig_tts))
+
+            cage_iv = _nearest_annot(iso["tss"], cage_peaks.get((ch, strand), []), window)
+            drna_iv = _nearest_annot(iso["tts"], drna_peaks.get((ch, strand), []), window)
+
+            if cage_iv is None or drna_iv is None:
+                results.append((joint_score, 0))
+            else:
+                pair = (cage_iv, drna_iv)
+                if pair in claimed_pairs:
+                    results.append((joint_score, 0))
+                else:
+                    claimed_pairs.add(pair)
+                    results.append((joint_score, 1))
+
+    return results
+
+
 # ── ROC computation ───────────────────────────────────────────────────────────
 
 def _roc_curve(
@@ -180,19 +246,26 @@ def collect_roc_data(
 
         for end, peaks in [("5prime", cage_peaks), ("3prime", drna_peaks)]:
             end_key = "tss" if end == "5prime" else "tts"
-
-            # Build (score, label) pairs with JC-dedup labels
             pairs = _jc_dedup_labels(isoforms, peaks, end_key, window)
-
             n       = len(pairs)
             n_tp    = sum(l for s, l in pairs if not np.isnan(s))
             n_fp    = sum(1 - l for s, l in pairs if not np.isnan(s))
             fpr, tpr, auc = _roc_curve(pairs)
-
             entry[end] = {
                 "fpr": fpr, "tpr": tpr, "auc": auc,
                 "n": n, "n_tp": int(n_tp), "n_fp": int(n_fp),
             }
+
+        # Paired: joint_tp label, geometric-mean signal score
+        paired_pairs = _jc_dedup_paired_labels(isoforms, cage_peaks, drna_peaks, window)
+        n_p    = len(paired_pairs)
+        n_tp_p = sum(l for s, l in paired_pairs if not np.isnan(s))
+        n_fp_p = sum(1 - l for s, l in paired_pairs if not np.isnan(s))
+        fpr_p, tpr_p, auc_p = _roc_curve(paired_pairs)
+        entry["paired"] = {
+            "fpr": fpr_p, "tpr": tpr_p, "auc": auc_p,
+            "n": n_p, "n_tp": int(n_tp_p), "n_fp": int(n_fp_p),
+        }
 
         results[method] = entry
 
@@ -256,8 +329,9 @@ def plot_roc(
     out_5prime: Path,
     out_3prime: Path,
     out_combined: Path,
+    out_paired: Path,
 ) -> None:
-    """Produce three output figures."""
+    """Produce four output figures."""
     # --- 5' only ---
     fig, ax = plt.subplots(1, 1, figsize=(W1 * 1.15, W1 * 1.15))
     _plot_roc_panel(ax, roc_data, "5prime", styler, "5′ TSS end accuracy  (CAGE signal)")
@@ -277,6 +351,13 @@ def plot_roc(
     fig.tight_layout(pad=0.4, w_pad=1.0)
     savefig(fig, out_combined)
 
+    # --- Paired joint-TP ---
+    fig, ax = plt.subplots(1, 1, figsize=(W1 * 1.15, W1 * 1.15))
+    _plot_roc_panel(ax, roc_data, "paired", styler,
+                   "Paired joint-TP  (√CAGE·dRNA signal,  both ends must hit peaks)")
+    fig.tight_layout(pad=0.4)
+    savefig(fig, out_paired)
+
 
 # ── TSV summary ───────────────────────────────────────────────────────────────
 
@@ -285,8 +366,10 @@ def write_auc_tsv(roc_data: Dict[str, dict], path: Path) -> None:
     with open(path, "w") as f:
         f.write("mode\tend\tauc\tn_isoforms\tn_tp\tn_fp\n")
         for method in roc_data:
-            for end in ("5prime", "3prime"):
-                d = roc_data[method][end]
+            for end in ("5prime", "3prime", "paired"):
+                d = roc_data[method].get(end)
+                if d is None:
+                    continue
                 f.write(
                     f"{method}\t{end}\t{d['auc']:.6f}\t"
                     f"{d['n']}\t{d['n_tp']}\t{d['n_fp']}\n"
@@ -402,7 +485,9 @@ def main() -> None:
                 f"  {method}: 5′ AUC={d['5prime']['auc']:.3f} "
                 f"(n={d['5prime']['n']})  "
                 f"3′ AUC={d['3prime']['auc']:.3f} "
-                f"(n={d['3prime']['n']})",
+                f"(n={d['3prime']['n']})  "
+                f"paired AUC={d['paired']['auc']:.3f} "
+                f"(n_tp={d['paired']['n_tp']})",
                 file=sys.stderr,
             )
 
@@ -413,6 +498,7 @@ def main() -> None:
         out_5prime   = out / "roc_5prime.png",
         out_3prime   = out / "roc_3prime.png",
         out_combined = out / "roc_combined.png",
+        out_paired   = out / "roc_paired.png",
     )
 
     # --- TSV summary ---

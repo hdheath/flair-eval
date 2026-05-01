@@ -421,10 +421,14 @@ def plot_joint_heatmaps(
             h_fp_n = h_fp / max(h_fp.sum(), 1)
 
             # Log-ratio: log2(TP / FP), with pseudocounts
+            # Mask cells where both TP and FP counts are sparse (< 3) to
+            # suppress the patchy noise caused by near-empty bins.
             pseudo = 1e-4
             ratio = np.log2((h_tp_n + pseudo) / (h_fp_n + pseudo))
+            sparse_mask = (h_tp + h_fp) < 3
+            ratio_masked = np.where(sparse_mask, np.nan, ratio)
 
-            im = ax.imshow(ratio.T, origin="lower", aspect="auto",
+            im = ax.imshow(ratio_masked.T, origin="lower", aspect="auto",
                            extent=[0, 1, 0, 1],
                            cmap="RdBu", vmin=-3, vmax=3)
 
@@ -779,6 +783,67 @@ def plot_joint_threshold_sweep(
     return optimal
 
 
+# ── Panel 8: Paired diagnostics (joint_tp label) ────────────────────────────
+
+def plot_paired_diagnostics(
+    joint_data_by_label: dict,
+    outdir: Path,
+) -> dict:
+    """Re-run ROC, violin, and weight sweep panels using joint_tp as the label.
+
+    For each end (TSS / TTS), constructs a data dict with:
+      - component scores for that end (depth, model, annot, reality=0)
+      - tp = joint_tp  (isoform is TP only if BOTH ends hit orthogonal peaks)
+
+    This shows how well each end's scores predict full-isoform correctness,
+    rather than just their own end's correctness.
+    Returns {end_label: {label: optimal_weights}} for both ends.
+    """
+    paired_outdir = outdir / "paired"
+    paired_outdir.mkdir(parents=True, exist_ok=True)
+
+    paired_opts = {}
+
+    for end, end_label, depth_key, model_key, annot_key in [
+        ("tss", "paired_5prime", "tss_depth", "tss_model", "tss_annot"),
+        ("tts", "paired_3prime", "tts_depth", "tts_model", "tts_annot"),
+    ]:
+        data_by_label: dict[str, dict] = {}
+        for label, jd in joint_data_by_label.items():
+            joint_tp = jd["joint_tp"]
+            n_tp = joint_tp.sum()
+            n_fp = len(joint_tp) - n_tp
+            if n_tp == 0 or n_fp == 0:
+                continue
+            # Shape data dict to match what existing panel functions expect
+            data_by_label[label] = {
+                "tp":      joint_tp,
+                "depth":   jd[depth_key],
+                "model":   jd[model_key],
+                "annot":   jd[annot_key],
+                "reality": np.zeros(len(joint_tp)),  # not available in joint data
+                "signal":  np.zeros(len(joint_tp)),
+            }
+
+        if not data_by_label:
+            continue
+
+        # Panel 1 equivalent — ROC with joint_tp label
+        plot_roc(data_by_label, end_label, paired_outdir)
+
+        # Panel 2 equivalent — violins split by joint_tp
+        plot_violins(data_by_label, end_label, paired_outdir)
+
+        # Panel 3 equivalent — joint heatmaps
+        plot_joint_heatmaps(data_by_label, end_label, paired_outdir)
+
+        # Panel 5 equivalent — weight sweep optimising joint F1
+        opts = plot_weight_sweep(data_by_label, end_label, paired_outdir)
+        paired_opts[end_label] = opts
+
+    return paired_opts
+
+
 # ── Summary TSV ─────────────────────────────────────────────────────────────
 
 def write_summary(
@@ -942,6 +1007,9 @@ def main():
                  label, len(jd["joint_tp"]), n_joint_tp, n_joint_fp)
 
     plot_joint_threshold_sweep(joint_data_by_label, opt_5prime, opt_3prime, outdir)
+
+    # Panel 8 — Paired diagnostics (ROC / violins / weight sweep with joint_tp label)
+    plot_paired_diagnostics(joint_data_by_label, outdir)
 
     # Summary TSV
     write_summary(auc_5prime, auc_3prime, opt_5prime, opt_3prime,

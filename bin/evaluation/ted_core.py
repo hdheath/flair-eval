@@ -61,6 +61,33 @@ from .plots import (
 logger = get_logger()
 
 
+def _parse_feature_attributes(attr_string: str) -> dict:
+    """Parse GTF key "value" and GFF3 key=value attributes."""
+    attrs = {}
+    for part in attr_string.strip().rstrip(";").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if ' "' in part:
+            key, value = part.split(' "', 1)
+            attrs[key.strip()] = value.rstrip('"')
+        elif "=" in part:
+            key, value = part.split("=", 1)
+            attrs[key.strip()] = value.strip().strip('"')
+        elif " " in part:
+            key, value = part.split(" ", 1)
+            attrs[key.strip()] = value.strip().strip('"')
+    return attrs
+
+
+def _normalize_gene_id(gene_id: str) -> str:
+    """Strip version suffixes only for reference-style Ensembl gene IDs."""
+    gene_id = str(gene_id).strip()
+    if gene_id.startswith(("ENSG", "ENSMUSG")):
+        return gene_id.split(".", 1)[0]
+    return gene_id
+
+
 def tss_tts_metrics(
     iso_bed: Path,
     peaks: Dict[str, Optional[Path]],
@@ -418,14 +445,13 @@ def tss_tts_metrics(
                 # Parse splice junction chains for reads and isoforms
                 read_sj_chains = parse_read_sj_chains(reads_bed)
                 found_sjc, _ = extract_sj_info(str(iso_bed))
-                # Pre-compute SJ chain subsets for subset matching
+                # Previously pre-materialised every contiguous subchain of every
+                # isoform chain into `found_subsets` for O(1) subset lookup.
+                # On full-genome inputs this balloons memory past 50 GB and
+                # triggers OOM kills in the Evaluation step.  `classify_read_sj_support`
+                # now falls back to on-the-fly contiguous-slice checks when
+                # found_subsets is empty, which is far cheaper in memory.
                 found_subsets = {}
-                for cs in found_sjc:
-                    found_subsets[cs] = set()
-                    for sjc in found_sjc[cs]:
-                        for slen in range(len(sjc) - 1, 0, -1):
-                            for i in range(0, len(sjc) - slen + 1):
-                                found_subsets[cs].add(sjc[i:i + slen])
 
                 # Analyze ALL recoverable CAGE peaks (5' ends) for truncation patterns
                 peak_patterns_5 = {}
@@ -712,27 +738,30 @@ def calculate_ted_metrics(
                 parts = str(name).split("_")
                 for part in parts:
                     if part.startswith(("ENSG", "ENSMUSG")):
-                        genes.add(part.split(".")[0])
+                        genes.add(_normalize_gene_id(part))
 
     n_iso = len(isoform_names)
 
     # For GTF-based assemblers (IsoQuant, Bambu, StringTie2, etc.) the BED names
     # are bare transcript IDs with no embedded gene ID, so genes will be empty.
-    # Fall back to parsing gene_id attributes directly from the source GTF.
+    # Fall back to parsing gene_id attributes directly from the source GTF/GFF.
     if not genes and source_gtf is not None:
-        import re as _re
-        _gene_id_re = _re.compile(r'gene_id\s+"([^"]+)"')
         try:
             with open(source_gtf) as _fh:
                 for _line in _fh:
                     if _line.startswith('#') or '\t' not in _line:
                         continue
                     _cols = _line.split('\t')
-                    if len(_cols) < 9 or _cols[2] != 'transcript':
+                    if len(_cols) < 9 or _cols[2] not in ('transcript', 'mRNA'):
                         continue
-                    _m = _gene_id_re.search(_cols[8])
-                    if _m:
-                        genes.add(_m.group(1).split('.')[0])
+                    _attrs = _parse_feature_attributes(_cols[8])
+                    _gene_id = (
+                        _attrs.get('gene_id')
+                        or _attrs.get('gene')
+                        or _attrs.get('Parent')
+                    )
+                    if _gene_id:
+                        genes.add(_normalize_gene_id(str(_gene_id).split(',', 1)[0]))
         except OSError:
             pass
 
