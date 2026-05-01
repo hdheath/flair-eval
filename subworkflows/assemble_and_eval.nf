@@ -298,4 +298,5 @@ workflow ASSEMBLE_AND_EVAL {
         ted_gtf_precision       = TedEndPrecision.out.gtf_metrics
         all_eval_inputs         = all_eval_inputs
         flair_transcriptome     = FlairTranscriptome.out.transcriptome
+        flair_firstpass         = FlairTranscriptome.out.firstpass
 }

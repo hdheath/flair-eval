@@ -39,10 +39,10 @@ process StringTie2Assembly {
         -p ${task.cpus} \\
         ${stringtie2_args}
 
-    # Extract read-to-transcript assignments from StringTie2 GTF
-    python ${projectDir}/bin/convert_read_map.py \\
-        --stringtie2-gtf ${output_prefix}.gtf \\
-        --output ${output_prefix}_read_map.txt \\
-        --verbose
+    # StringTie2 does not emit per-read transcript assignments.
+    # Keep the expected file path, but leave it empty so Evaluation skips
+    # read-assignment and read-end entropy metrics instead of using a
+    # transcript_id -> transcript_id placeholder map.
+    : > ${output_prefix}_read_map.txt
     """
 }

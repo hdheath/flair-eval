@@ -1,0 +1,2 @@
+task_id	hash	native_id	process	tag	name	status	exit	submit	start	complete	duration	realtime	workdir
+1	6b/244ea2	3404	Evaluation	sample1_pre-aligned_chr-test_bambu_default	Evaluation (sample1_pre-aligned_chr-test_bambu_default)	COMPLETED	0	2026-04-28 14:02:28.684	2026-04-28 14:02:56.788	2026-04-28 14:03:09.508	40.8s	34.1s	/private/home/hdheath/projects/flair4_ted/.nf-test/tests/9d7cbf113d5d686571e5d08b9c931d9b/work/6b/244ea2a52808e2e9f5f4ef52f7ed91

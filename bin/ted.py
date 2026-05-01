@@ -30,7 +30,7 @@ def main():
     # Input options - either BED+map or GTF-only
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument("--isoforms-bed", type=Path, help="Isoforms BED file (*.isoforms.bed)")
-    input_group.add_argument("--gtf-input", type=Path, help="Isoforms GTF file (for Bambu/IsoQuant outputs)")
+    input_group.add_argument("--gtf-input", type=Path, help="Isoforms GTF/GFF file (for GTF/GFF-based assemblers)")
     
     parser.add_argument("--map-file", type=Path, help="Read map file (*.isoform.read.map.txt) - required unless --skip-read-metrics")
     parser.add_argument("--bam", type=Path, help="BAM file for alignment metrics")
@@ -98,12 +98,14 @@ def main():
         logger.info(f"Converting GTF to BED12: {args.gtf_input} -> {temp_bed}")
         from pathlib import Path as P
         gtf_to_bed12_script = P(__file__).parent / "gtf_to_bed12.py"
-        subprocess.run([
+        cmd = [
             "python", str(gtf_to_bed12_script),
             "--gtf", str(args.gtf_input),
             "--output", str(temp_bed),
-            "--verbose" if args.verbose else ""
-        ], check=True)
+        ]
+        if args.verbose:
+            cmd.append("--verbose")
+        subprocess.run(cmd, check=True)
         iso_bed = temp_bed
 
     # Build plot prefix from metadata

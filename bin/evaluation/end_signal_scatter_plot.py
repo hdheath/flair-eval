@@ -252,8 +252,22 @@ def main():
         print("No BED data loaded — skipping", file=sys.stderr)
         sys.exit(1)
 
+    # Cap any single method's isoform set at 300,000.  KDE density colouring
+    # is O(N²); tools like IsoSeq can emit >1M isoforms, which makes the KDE
+    # step never finish.  Subsampling at this scale doesn't lose visual
+    # density information (the scatter is already saturated past ~50K points).
+    SCATTER_CAP = 300_000
+    rng = np.random.default_rng(0)
+    for label, isoforms in list(beds_by_method.items()):
+        if len(isoforms) > SCATTER_CAP:
+            idx = rng.choice(len(isoforms), size=SCATTER_CAP, replace=False)
+            beds_by_method[label] = [isoforms[i] for i in idx]
+            if args.verbose:
+                print(f"  {label}: subsampled {len(isoforms):,} -> {SCATTER_CAP:,} "
+                      f"(scatter density cap)", flush=True)
+
     if args.verbose:
-        print("  Loading signal tracks...")
+        print("  Loading signal tracks...", flush=True)
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
     )

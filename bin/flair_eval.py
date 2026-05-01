@@ -2,13 +2,17 @@
 """
 FLAIR Evaluation Script
 
-Performs comprehensive evaluation of FLAIR isoform predictions including:
-- Genic region analysis
-- Splice junction evaluation
-- Transcript classification (FSM, ISM, NIC, NNC, SEM, SEN)
+Computes SQANTI-style transcript classification (FSM, ISM, NIC, NNC, SEM, SEN)
+for an isoform set against a reference GTF.
+
+Previously also computed read-based metrics (genic-region overlap, splice-chain
+support stats), but those columns were never visualized in any downstream plot
+and cost ~1.5h on full-genome ONT data due to repeated multi-pass scans of the
+3GB reads BED.  They have been removed; the columns remain in the output TSV
+header for back-compat but are written as empty strings.
 
 Usage:
-    python flair_eval.py --reads-bed <reads.bed> --isoforms-bed <isoforms.bed> --gtf <annotation.gtf> --output <output.txt>
+    python flair_eval.py --isoforms-bed <isoforms.bed> --gtf <annotation.gtf> --output <output.txt>
 
 This is the CLI entry point. All logic is implemented in the evaluation package.
 """
@@ -20,25 +24,22 @@ import subprocess
 from pathlib import Path
 
 from evaluation import (
-    get_chromtoint,
-    get_regions,
-    get_intersect_count,
-    extract_sj_info,
     parse_gtf_transcripts,
     build_reference_structures,
-    classify_transcripts,
     classify_transcripts_per_isoform,
 )
 
 
 def main():
     parser = argparse.ArgumentParser(description='Evaluate FLAIR isoform predictions')
-    parser.add_argument('--reads-bed', required=True, help='Input reads BED file')
+    # --reads-bed kept for CLI back-compat; no longer used.
+    parser.add_argument('--reads-bed', help='[DEPRECATED] Input reads BED file '
+                                            '(no longer used; kept for CLI compatibility)')
     # Input options - either BED or GTF
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument('--isoforms-bed', help='FLAIR isoforms BED file')
-    input_group.add_argument('--gtf-input', help='Isoforms GTF file (for Bambu/IsoQuant outputs)')
-    
+    input_group.add_argument('--gtf-input', help='Isoforms GTF/GFF file (for GTF/GFF-based assemblers)')
+
     parser.add_argument('--gtf', required=True, help='Reference annotation GTF file')
     parser.add_argument('--output', required=True, help='Output evaluation summary file (TSV format)')
     parser.add_argument('--verbose', action='store_true', help='Print verbose output')
@@ -64,7 +65,7 @@ def main():
         # Convert GTF to BED12 using our converter script
         temp_bed = tempfile.mktemp(suffix='.bed')
         if args.verbose:
-            print(f"Converting GTF to BED12: {args.gtf_input} -> {temp_bed}")
+            print(f"Converting GTF to BED12: {args.gtf_input} -> {temp_bed}", flush=True)
         gtf_to_bed12_script = Path(__file__).parent / "gtf_to_bed12.py"
         cmd = ["python", str(gtf_to_bed12_script), "--gtf", args.gtf_input, "--output", temp_bed]
         if args.verbose:
@@ -73,60 +74,26 @@ def main():
         isoforms_bed = temp_bed
 
     if args.verbose:
-        print(f"Evaluating: {isoforms_bed}")
-        print(f"Against reads: {args.reads_bed}")
-        print(f"Using annotation: {args.gtf}")
+        print(f"Evaluating: {isoforms_bed}", flush=True)
+        print(f"Using annotation: {args.gtf}", flush=True)
 
-    # EVALUATE GENIC REGIONS
-    chromtoint, totreads = get_chromtoint(args.reads_bed)
-    reads_intervals_file = args.reads_bed.replace('.bed', '.intervals.bed')
-    totregions = get_regions(chromtoint, reads_intervals_file)
-
-    chromtoint_iso, _ = get_chromtoint(isoforms_bed)
-    iso_intervals_file = isoforms_bed.replace('.bed', '.intervals.bed')
-    get_regions(chromtoint_iso, iso_intervals_file)
-
-    foundregions = get_intersect_count(reads_intervals_file, iso_intervals_file)
-    genicreads = get_intersect_count(args.reads_bed, iso_intervals_file)
-
-    # EVALUATE SPLICE JUNCTIONS
-    read_sjc, read_se_ends = extract_sj_info(args.reads_bed)
-    found_sjc, found_se_ends = extract_sj_info(isoforms_bed)
-
-    found_subsets = {}
-    for cs in found_sjc:
-        found_subsets[cs] = set()
-        for sjc in found_sjc[cs]:
-            for slen in range(len(sjc)-1, 0, -1):
-                for i in range(0, len(sjc)-slen+1):
-                    found_subsets[cs].add(sjc[i:i+slen])
-
-    tot_sjc, sup_sjc, tot_se, sup_se = 0, 0, 0, 0
-    subset_sjc = 0
-    for cs in read_sjc:
-        if cs in found_sjc:
-            for sjc in read_sjc[cs]:
-                if sjc in found_sjc[cs]:
-                    sup_sjc += read_sjc[cs][sjc]
-                elif sjc in found_subsets[cs]:
-                    subset_sjc += read_sjc[cs][sjc]
-                tot_sjc += read_sjc[cs][sjc]
-        else:
-            for sjc in read_sjc[cs]:
-                tot_sjc += read_sjc[cs][sjc]
-
-    for cs in read_se_ends:
-        if cs in found_se_ends:
-            for se in read_se_ends[cs]:
-                if se in found_se_ends[cs]:
-                    sup_se += read_se_ends[cs][se]
-                tot_se += read_se_ends[cs][se]
-        else:
-            for se in read_se_ends[cs]:
-                tot_se += read_se_ends[cs][se]
+    # Read-based metrics (genic regions, splice-chain support) are removed.
+    # The columns stay in the output for back-compat but are empty strings.
+    totregions = ''
+    foundregions = ''
+    genicreads = ''
+    tot_sjc = ''
+    sup_sjc = ''
+    subset_sjc = ''
+    tot_se = ''
+    sup_se = ''
 
     # EVALUATE TRANSCRIPT CLASSIFICATION
+    if args.verbose:
+        print(f"Parsing reference GTF: {args.gtf}", flush=True)
     transcripttoexons = parse_gtf_transcripts(args.gtf)
+    if args.verbose:
+        print(f"Building reference structures", flush=True)
     refjuncs, refjuncchains, refseends = build_reference_structures(transcripttoexons)
 
     # Use per-isoform classification so we can both count totals AND emit labels
@@ -203,20 +170,15 @@ def main():
         outfile.write('\t'.join(str(v) for v in values) + '\n')
 
     # Note: transcript_classification and splice_junction_support plots removed.
-    # These metrics are still computed and written to the evaluation TSV above.
+    # The classification counts are still emitted to the evaluation TSV above.
 
     # Clean up temp file if we created one
     if temp_bed and Path(temp_bed).exists():
         Path(temp_bed).unlink()
-        # Also clean up interval files created during evaluation
-        for suffix in ['.intervals.bed']:
-            interval_file = Path(temp_bed.replace('.bed', suffix))
-            if interval_file.exists():
-                interval_file.unlink()
 
     if args.verbose:
-        print(f"Evaluation complete. Results written to {args.output}")
-        print(f"Total transcripts classified: {tot}")
+        print(f"Evaluation complete. Results written to {args.output}", flush=True)
+        print(f"Total transcripts classified: {tot}", flush=True)
 
 if __name__ == "__main__":
     main()

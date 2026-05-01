@@ -35,30 +35,100 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)-8s  %(message)s")
 log = logging.getLogger(__name__)
 
+Region = Tuple[str, Optional[int], Optional[int]]
+
+
+def parse_region_spec(region: str) -> Region:
+    """Parse chr or chr:start-end into a normalized region tuple."""
+    if ":" not in region:
+        return region, None, None
+    chrom, coords = region.split(":", 1)
+    start_s, end_s = coords.split("-", 1)
+    start, end = int(start_s), int(end_s)
+    if start > end:
+        start, end = end, start
+    return chrom, start, end
+
+
+def parse_region_values(region_values: Optional[List[str]]) -> List[Region]:
+    """Parse optional argparse --region values."""
+    if not region_values:
+        return []
+    return [parse_region_spec(r) for r in region_values if r]
+
+
+def _overlaps_regions(chrom: str, start: int, end: int,
+                      regions: Optional[List[Region]] = None) -> bool:
+    """Return True when an interval overlaps any requested region."""
+    if not regions:
+        return True
+    for r_chrom, r_start, r_end in regions:
+        if chrom != r_chrom:
+            continue
+        if r_start is None or r_end is None:
+            return True
+        if not (end < r_start or start > r_end):
+            return True
+    return False
+
+
+def parse_feature_attributes(attr_string: str) -> dict:
+    """Parse GTF/GFF3 attributes into a dict."""
+    attrs = {}
+    for part in attr_string.strip().rstrip(";").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if ' "' in part:
+            key, value = part.split(' "', 1)
+            attrs[key.strip()] = value.rstrip('"')
+        elif "=" in part:
+            key, value = part.split("=", 1)
+            attrs[key.strip()] = value.strip().strip('"')
+        elif " " in part:
+            key, value = part.split(" ", 1)
+            attrs[key.strip()] = value.strip().strip('"')
+    return attrs
+
+
+def _first_attr_value(attrs: dict, key: str) -> Optional[str]:
+    value = attrs.get(key)
+    if not value:
+        return None
+    return str(value).split(",", 1)[0]
+
+
+def _transcript_id_from_attrs(attrs: dict, feature: str) -> Optional[str]:
+    """Get transcript ID from GTF or GFF3 attributes."""
+    if attrs.get("transcript_id"):
+        return attrs["transcript_id"]
+    if feature in ("transcript", "mRNA") and attrs.get("ID"):
+        return attrs["ID"]
+    parent = _first_attr_value(attrs, "Parent")
+    if parent:
+        return parent
+    return None
+
 
 # ── Parse inputs ────────────────────────────────────────────────────────────
 
-def parse_gtf_ends(gtf_path: str, region_chrom: str = None,
-                   region_start: int = None, region_end: int = None
+def parse_gtf_ends(gtf_path: str, regions: Optional[List[Region]] = None
                    ) -> Dict[str, Dict[str, List[int]]]:
-    """Extract annotated TSS/TTS positions from GTF, optionally filtered to a region."""
+    """Extract annotated TSS/TTS positions from GTF/GFF, optionally filtered to regions."""
     ends: Dict[str, Dict[str, set]] = defaultdict(lambda: {"tss": set(), "tts": set()})
     with open(gtf_path) as f:
         for line in f:
             if line.startswith("#"):
                 continue
             cols = line.rstrip("\n").split("\t")
-            if len(cols) < 9 or cols[2] != "transcript":
+            if len(cols) < 9 or cols[2] not in ("transcript", "mRNA"):
                 continue
             chrom = cols[0]
-            if region_chrom and chrom != region_chrom:
-                continue
             start = int(cols[3]) - 1  # GTF is 1-based
             end = int(cols[4])
             strand = cols[6]
-            if region_start is not None and region_end is not None:
-                if end < region_start or start > region_end:
-                    continue
+            if not _overlaps_regions(chrom, start, end, regions):
+                continue
             if strand == "+":
                 ends[chrom]["tss"].add(start)
                 ends[chrom]["tts"].add(end)
@@ -69,12 +139,11 @@ def parse_gtf_ends(gtf_path: str, region_chrom: str = None,
             for c in ends}
 
 
-def parse_gtf_transcripts(gtf_path: str, region_chrom: str = None,
-                          region_start: int = None, region_end: int = None
+def parse_gtf_transcripts(gtf_path: str, regions: Optional[List[Region]] = None
                           ) -> List[dict]:
-    """Parse GTF transcript+exon features to get per-transcript junction chains and ends."""
+    """Parse GTF/GFF transcript+exon features to get junction chains and ends."""
     tx_exons: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
-    tx_info: Dict[str, Tuple[str, str, int, int]] = {}
+    tx_info: Dict[str, Tuple[str, str]] = {}
     with open(gtf_path) as f:
         for line in f:
             if line.startswith("#"):
@@ -83,38 +152,31 @@ def parse_gtf_transcripts(gtf_path: str, region_chrom: str = None,
             if len(cols) < 9:
                 continue
             chrom = cols[0]
-            if region_chrom and chrom != region_chrom:
-                continue
             feature = cols[2]
-            if feature not in ("transcript", "exon"):
+            if feature not in ("transcript", "mRNA", "exon"):
                 continue
             start = int(cols[3]) - 1  # GTF is 1-based
             end = int(cols[4])
             strand = cols[6]
-            if region_start is not None and region_end is not None:
-                if end < region_start or start > region_end:
-                    continue
-            # Extract transcript_id
-            tx_id = None
-            for attr in cols[8].split(";"):
-                attr = attr.strip()
-                if attr.startswith("transcript_id"):
-                    parts = attr.split('"')
-                    if len(parts) >= 2:
-                        tx_id = parts[1]
-                    break
+            if not _overlaps_regions(chrom, start, end, regions):
+                continue
+            attrs = parse_feature_attributes(cols[8])
+            tx_id = _transcript_id_from_attrs(attrs, feature)
             if tx_id is None:
                 continue
-            if feature == "transcript":
-                tx_info[tx_id] = (chrom, strand, start, end)
+            if feature in ("transcript", "mRNA"):
+                tx_info[tx_id] = (chrom, strand)
             elif feature == "exon":
+                tx_info.setdefault(tx_id, (chrom, strand))
                 tx_exons[tx_id].append((start, end))
     transcripts = []
     for tx_id, exons in tx_exons.items():
         if tx_id not in tx_info:
             continue
-        chrom, strand, tx_start, tx_end = tx_info[tx_id]
+        chrom, strand = tx_info[tx_id]
         exons_sorted = sorted(exons)
+        tx_start = min(start for start, _ in exons_sorted)
+        tx_end = max(end for _, end in exons_sorted)
         introns = tuple((exons_sorted[i][1], exons_sorted[i + 1][0])
                         for i in range(len(exons_sorted) - 1))
         n_exons = len(exons_sorted)
@@ -130,13 +192,18 @@ def parse_gtf_transcripts(gtf_path: str, region_chrom: str = None,
     return transcripts
 
 
-def parse_isoforms_bed(bed_path: str) -> List[dict]:
+def parse_isoforms_bed(bed_path: str, regions: Optional[List[Region]] = None) -> List[dict]:
     """Parse BED12 isoforms into list of dicts with junction chains."""
-    return parse_bed12(bed_path)
+    isoforms = parse_bed12(bed_path)
+    if not regions:
+        return isoforms
+    return [iso for iso in isoforms
+            if _overlaps_regions(iso["chrom"], iso["start"], iso["end"], regions)]
 
 
 def parse_isoforms_gtf(gtf_path: str, region_chrom: str = None,
-                       region_start: int = None, region_end: int = None
+                       region_start: int = None, region_end: int = None,
+                       regions: Optional[List[Region]] = None
                        ) -> List[dict]:
     """Parse assembler GTF (Bambu/IsoQuant/StringTie2/etc.) into same format as parse_bed12.
 
@@ -144,11 +211,14 @@ def parse_isoforms_gtf(gtf_path: str, region_chrom: str = None,
     junction chains.  Returns a list of transcript dicts compatible with
     compute_jc_deduplicated_precision_recall.
     """
-    return parse_gtf_transcripts(gtf_path, region_chrom, region_start, region_end)
+    if regions is None and isinstance(region_chrom, list):
+        regions = region_chrom
+    elif regions is None and region_chrom:
+        regions = [(region_chrom, region_start, region_end)]
+    return parse_gtf_transcripts(gtf_path, regions)
 
 
-def parse_peaks_bed(path: str, region_chrom: str = None,
-                    region_start: int = None, region_end: int = None
+def parse_peaks_bed(path: str, regions: Optional[List[Region]] = None
                     ) -> Dict[Tuple[str, str], List[Tuple[int, int]]]:
     """Parse BED6 peaks into {(chrom, strand): sorted (start, end) intervals}.
 
@@ -164,11 +234,8 @@ def parse_peaks_bed(path: str, region_chrom: str = None,
             if len(cols) < 6:
                 continue
             chrom, start, end, strand = cols[0], int(cols[1]), int(cols[2]), cols[5]
-            if region_chrom and chrom != region_chrom:
+            if not _overlaps_regions(chrom, start, end, regions):
                 continue
-            if region_start is not None and region_end is not None:
-                if end < region_start or start > region_end:
-                    continue
             peaks[(chrom, strand)].append((start, end))
     for k in peaks:
         peaks[k].sort()
@@ -288,32 +355,15 @@ def compute_jc_deduplicated_precision_recall(
                 current_end = max(current_end, end)
             jc_groups[(chrom, strand, "SE", group_id)].append(iso)
 
-    # Build set of predicted JC keys for recall filtering (multi-exon only)
-    predicted_jc_keys = set(k for k in jc_groups if len(k) == 3)
-
-    # Collect annotation ends only from transcripts whose JC matches a predicted one
-    relevant_annot_ends: Dict[str, Dict[str, Set[int]]] = defaultdict(
-        lambda: {"tss": set(), "tts": set()}
-    )
-    for tx in annot_transcripts:
-        jc_key = (tx["chrom"], tx["strand"], tx["junctions"])
-        if jc_key in predicted_jc_keys:
-            relevant_annot_ends[tx["chrom"]]["tss"].add(tx["tss"])
-            relevant_annot_ends[tx["chrom"]]["tts"].add(tx["tts"])
-
     # Clean up temporary marker
     for iso in isoforms:
         iso.pop("_se", None)
 
     results = {"per_jc": []}
 
-    # Build sorted lists of JC-relevant annotation ends for recall matching
-    relevant_annot_sorted: Dict[str, Dict[str, List[int]]] = {}
-    for chrom in relevant_annot_ends:
-        relevant_annot_sorted[chrom] = {
-            "tss": sorted(relevant_annot_ends[chrom]["tss"]),
-            "tts": sorted(relevant_annot_ends[chrom]["tts"]),
-        }
+    # GTF-based recall now uses every distinct annotated TSS/TTS as the
+    # denominator (see the recall block below).  The previous JC-filtered
+    # denominator made annotation-passthrough tools score ~100% trivially.
 
     # ── Pair-aware per-JC precision ─────────────────────────────────────
     # Process both ends together per JC group so dedup uses the full pair.
@@ -326,9 +376,9 @@ def compute_jc_deduplicated_precision_recall(
     total_paired_isoforms = 0
     total_paired_unique = 0
     total_paired_both_hit = 0
-    matched_annots_global_tss: Set[Tuple[str, int]] = set()
-    matched_annots_global_tts: Set[Tuple[str, int]] = set()
-
+    total_paired_both_hit_raw = 0
+    total_5p_raw_tp = 0
+    total_3p_raw_tp = 0
     for jc_key, members in jc_groups.items():
         chrom, strand = jc_key[0], jc_key[1]
         is_se_group = (len(jc_key) == 4 and jc_key[2] == "SE")
@@ -340,9 +390,6 @@ def compute_jc_deduplicated_precision_recall(
         peaks_3ref  = peaks_3prime.get((chrom, strand), []) if peaks_3prime is not None else None
         gtf_tss_ref = annotated_ends.get(chrom, {}).get("tss", [])
         gtf_tts_ref = annotated_ends.get(chrom, {}).get("tts", [])
-
-        tss_relevant = relevant_annot_sorted.get(chrom, {}).get("tss", [])
-        tts_relevant = relevant_annot_sorted.get(chrom, {}).get("tts", [])
 
         end_pairs: List[Tuple] = []
         tss_positions = []
@@ -358,22 +405,15 @@ def compute_jc_deduplicated_precision_recall(
             tss_positions.append(iso["tss"])
             tts_positions.append(iso["tts"])
 
-            # GTF-based recall (only for multi-exon, scalar positions)
-            if peaks_5prime is None and not is_se_group:
-                rel_m = _nearest_pos(iso["tss"], tss_relevant, window)
-                if rel_m is not None:
-                    matched_annots_global_tss.add((chrom, rel_m))
-            if peaks_3prime is None and not is_se_group:
-                rel_m = _nearest_pos(iso["tts"], tts_relevant, window)
-                if rel_m is not None:
-                    matched_annots_global_tts.add((chrom, rel_m))
-
         unique_pairs = set(end_pairs)
         n_members = len(members)
 
         n_5p_tp = sum(1 for p in unique_pairs if p[0] is not None)
         n_3p_tp = sum(1 for p in unique_pairs if p[1] is not None)
         n_both_hit = sum(1 for p in unique_pairs if p[0] is not None and p[1] is not None)
+        n_5p_raw_tp = sum(1 for p in end_pairs if p[0] is not None)
+        n_3p_raw_tp = sum(1 for p in end_pairs if p[1] is not None)
+        n_both_hit_raw = sum(1 for p in end_pairs if p[0] is not None and p[1] is not None)
 
         n_unique = len(unique_pairs)
         n_5p_unique_pos = len(set(tss_positions))
@@ -390,6 +430,9 @@ def compute_jc_deduplicated_precision_recall(
         total_paired_isoforms += n_members
         total_paired_unique += n_unique
         total_paired_both_hit += n_both_hit
+        total_paired_both_hit_raw += n_both_hit_raw
+        total_5p_raw_tp += n_5p_raw_tp
+        total_3p_raw_tp += n_3p_raw_tp
 
         results["per_jc"].append({
             "chrom": chrom, "strand": strand,
@@ -404,22 +447,22 @@ def compute_jc_deduplicated_precision_recall(
             "3prime_redundant": n_3p_redundant,
             "paired_unique": n_unique,
             "paired_both_hit": n_both_hit,
+            "paired_both_hit_raw": n_both_hit_raw,
             "paired_redundant": n_members - n_unique,
         })
 
     # ── Per-end precision ───────────────────────────────────────────────
-    for end_label, total_ends, total_tp, total_red in [
-        ("5prime", total_5p_ends, total_5p_dedup_tp, total_5p_redundant),
-        ("3prime", total_3p_ends, total_3p_dedup_tp, total_3p_redundant),
+    for end_label, total_ends, total_tp, total_raw_tp, total_red in [
+        ("5prime", total_5p_ends, total_5p_dedup_tp, total_5p_raw_tp, total_5p_redundant),
+        ("3prime", total_3p_ends, total_3p_dedup_tp, total_3p_raw_tp, total_3p_redundant),
     ]:
         dedup_precision = total_tp / total_ends if total_ends > 0 else None
-        naive_precision = (total_tp + total_red) / total_ends if total_ends > 0 else None
+        naive_precision = total_raw_tp / total_ends if total_ends > 0 else None
 
         # ── Recall ──────────────────────────────────────────────────────
         end_type = "tss" if end_label == "5prime" else "tts"
         current_peaks = peaks_5prime if end_type == "tss" else peaks_3prime
         use_peaks = current_peaks is not None
-        matched_annots_global = matched_annots_global_tss if end_type == "tss" else matched_annots_global_tts
 
         if use_peaks:
             # Peak-based recall: all isoforms (incl. single-exon) vs all peaks.
@@ -436,14 +479,29 @@ def compute_jc_deduplicated_precision_recall(
             n_annot_matched = len(all_matched_peaks)
             n_annot_total = total_peaks
         else:
-            # GTF-based: JC-matched recall
-            relevant = set()
-            for chrom in relevant_annot_ends:
-                for pos in relevant_annot_ends[chrom].get(end_type, set()):
-                    relevant.add((chrom, pos))
-            recall = len(matched_annots_global) / len(relevant) if relevant else None
-            n_annot_matched = len(matched_annots_global)
-            n_annot_total = len(relevant)
+            # GTF-based recall: every distinct annotated TSS/TTS in the
+            # reference GTF is a target — same denominator for every tool,
+            # matching the orthogonal-peak pattern above.  Previous behavior
+            # filtered the denominator to "annotated transcripts whose JC was
+            # also predicted by this tool", which made the denominator
+            # tool-dependent and trivially gave annotation-passthrough tools
+            # ~100% recall (their predicted JCs are reference JCs and their
+            # predicted ends are reference ends).
+            all_matched_annots: Set[Tuple[str, int]] = set()
+            for iso in isoforms:
+                pos = iso[end_type]
+                annot_ref = annotated_ends.get(iso["chrom"], {}).get(end_type, [])
+                m = _nearest_pos(pos, annot_ref, window)
+                if m is not None:
+                    all_matched_annots.add((iso["chrom"], m))
+            total_annot_ends = sum(
+                len(annotated_ends[c].get(end_type, []))
+                for c in annotated_ends
+            )
+            recall = (len(all_matched_annots) / total_annot_ends
+                      if total_annot_ends > 0 else None)
+            n_annot_matched = len(all_matched_annots)
+            n_annot_total = total_annot_ends
 
         # F1
         f1 = None
@@ -452,6 +510,7 @@ def compute_jc_deduplicated_precision_recall(
 
         results[f"{end_label}_n_isoform_ends"] = total_ends
         results[f"{end_label}_dedup_tp"] = total_tp
+        results[f"{end_label}_raw_tp"] = total_raw_tp
         results[f"{end_label}_redundant_calls"] = total_red
         results[f"{end_label}_dedup_precision"] = dedup_precision
         results[f"{end_label}_naive_precision"] = naive_precision
@@ -471,12 +530,15 @@ def compute_jc_deduplicated_precision_recall(
     results["paired_n_isoforms"] = total_paired_isoforms
     results["paired_unique_pairs"] = total_paired_unique
     results["paired_both_hit"] = total_paired_both_hit
+    results["paired_both_hit_raw"] = total_paired_both_hit_raw
+    # paired_dedup_precision: both-hit unique pairs / total unique pairs
+    # paired_naive_precision: both-hit isoforms (raw, no dedup) / total isoforms
     results["paired_dedup_precision"] = (
-        total_paired_both_hit / total_paired_isoforms
-        if total_paired_isoforms > 0 else None
+        total_paired_both_hit / total_paired_unique
+        if total_paired_unique > 0 else None
     )
     results["paired_naive_precision"] = (
-        total_paired_unique / total_paired_isoforms
+        total_paired_both_hit_raw / total_paired_isoforms
         if total_paired_isoforms > 0 else None
     )
 
@@ -499,7 +561,7 @@ def write_summary_tsv(results: dict, outpath: Path, mode_label: str = ""):
         "3prime_precision", "3prime_naive_precision", "3prime_recall", "3prime_f1",
         "3prime_n_annot_matched", "3prime_n_annot_total",
         "paired_n_isoforms", "paired_unique_pairs", "paired_both_hit",
-        "paired_dedup_precision", "paired_naive_precision",
+        "paired_both_hit_raw", "paired_dedup_precision", "paired_naive_precision",
     ]
     # Internal results dict still uses _dedup_ names; remap for output
     _remap = {
@@ -532,7 +594,8 @@ def write_per_jc_tsv(per_jc: list, outpath: Path):
     fields = ["chrom", "strand", "jc_hash", "n_isoforms", "n_junctions",
               "5prime_unique_pos", "5prime_dedup_tp", "5prime_redundant",
               "3prime_unique_pos", "3prime_dedup_tp", "3prime_redundant",
-              "paired_unique", "paired_both_hit", "paired_redundant"]
+              "paired_unique", "paired_both_hit", "paired_both_hit_raw",
+              "paired_redundant"]
     with open(outpath, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields, delimiter="\t",
                            extrasaction="ignore")
@@ -561,8 +624,9 @@ def main():
                         help="BED6 file of dRNA peaks for TTS evaluation")
     parser.add_argument("--window", type=int, default=50,
                         help="Max distance (bp) for end matching (default: 50)")
-    parser.add_argument("--region", default=None,
-                        help="Restrict annotation to region (e.g. chr7:116000000-117000000)")
+    parser.add_argument("--region", nargs="+", default=None,
+                        help=("Restrict evaluation to one or more regions "
+                              "(e.g. chr7:116000000-117000000 chr11:64000000-69000000)"))
     parser.add_argument("--mode", default="",
                         help="Label for the transcriptome mode (for summary TSV)")
     parser.add_argument("--outdir", required=True,
@@ -572,23 +636,17 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # Parse region filter
-    region_chrom, region_start, region_end = None, None, None
-    if args.region:
-        if ":" in args.region:
-            region_chrom, coords = args.region.split(":", 1)
-            region_start, region_end = [int(x) for x in coords.split("-")]
-        else:
-            region_chrom = args.region
+    regions = parse_region_values(args.region)
+    region_label = " ".join(args.region) if args.region else "all"
 
-    log.info(f"Parsing GTF ends (region={args.region or 'all'})...")
-    annotated_ends = parse_gtf_ends(args.gtf, region_chrom, region_start, region_end)
+    log.info(f"Parsing GTF ends (region={region_label})...")
+    annotated_ends = parse_gtf_ends(args.gtf, regions)
     n_tss = sum(len(v["tss"]) for v in annotated_ends.values())
     n_tts = sum(len(v["tts"]) for v in annotated_ends.values())
     log.info(f"  {n_tss} annotated TSS, {n_tts} annotated TTS (region total)")
 
     log.info("Parsing GTF transcripts for JC-matched recall...")
-    annot_transcripts = parse_gtf_transcripts(args.gtf, region_chrom, region_start, region_end)
+    annot_transcripts = parse_gtf_transcripts(args.gtf, regions)
     log.info(f"  {len(annot_transcripts)} annotation transcripts")
 
     # Parse orthogonal peaks if provided
@@ -596,21 +654,21 @@ def main():
     peaks_3prime = None
     if args.peaks_5prime:
         log.info(f"Parsing 5' peaks (CAGE): {args.peaks_5prime}")
-        peaks_5prime = parse_peaks_bed(args.peaks_5prime, region_chrom, region_start, region_end)
+        peaks_5prime = parse_peaks_bed(args.peaks_5prime, regions)
         n5 = sum(len(v) for v in peaks_5prime.values())
         log.info(f"  {n5} peaks in region")
     if args.peaks_3prime:
         log.info(f"Parsing 3' peaks (dRNA): {args.peaks_3prime}")
-        peaks_3prime = parse_peaks_bed(args.peaks_3prime, region_chrom, region_start, region_end)
+        peaks_3prime = parse_peaks_bed(args.peaks_3prime, regions)
         n3 = sum(len(v) for v in peaks_3prime.values())
         log.info(f"  {n3} peaks in region")
 
     if args.isoforms_bed:
         log.info("Parsing isoforms BED...")
-        isoforms = parse_isoforms_bed(args.isoforms_bed)
+        isoforms = parse_isoforms_bed(args.isoforms_bed, regions)
     else:
         log.info("Parsing isoforms GTF...")
-        isoforms = parse_isoforms_gtf(args.isoforms_gtf, region_chrom, region_start, region_end)
+        isoforms = parse_gtf_transcripts(args.isoforms_gtf, regions)
     log.info(f"  {len(isoforms)} isoforms")
 
     log.info("Computing JC-deduplicated precision/recall...")

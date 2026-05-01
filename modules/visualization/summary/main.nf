@@ -66,6 +66,7 @@ process CombinePrecisionRecall {
 
     script:
     """
+    # v2: re-combine after TedEndPrecision GTF-recall denominator fix
     python3 -c "
 import sys, csv
 files = '${pr_tsvs}'.split()
@@ -107,7 +108,8 @@ process PrecisionRecallPlot {
 
     script:
     """
-    # v5: add paired P/R scatter plot
+    # v10: re-render after TedEndPrecision GTF-recall denominator fix
+    # v9: rename pm_ prefix to descriptive names (5v3_, paired_, cross_)
     python ${projectDir}/bin/evaluation/precision_recall_plot.py \\
         --input ${precision_recall_tsvs} \\
         --gtf-input ${gtf_precision_recall_tsvs} \\
@@ -577,7 +579,7 @@ process TedComponentDiagnostic {
           val(drna_signal_plus), val(drna_signal_minus)
 
     output:
-    path "ted_component_diagnostic/*.{png,tsv}", optional: true
+    path "ted_component_diagnostic/**/*.{png,tsv}", optional: true
 
     script:
     def bed_args = []
@@ -585,7 +587,7 @@ process TedComponentDiagnostic {
         bed_args << "${bed_labels[i]}:${bed_files[i]}"
     }
     """
-    # v2: add joint threshold sweep panel
+    # v3: add paired diagnostics panel (Panel 8)
     python ${projectDir}/bin/evaluation/ted_component_diagnostic.py \\
         --bed ${bed_args.join(' ')} \\
         --cage-peaks ${cage_peaks} --qs-peaks ${drna_peaks} \\
@@ -834,8 +836,7 @@ process DepthCalibration {
 }
 
 // -----------------------------------------------------------------
-// Cluster spread plots (D2): TSS/TTS IQR by pass/reject, spread vs
-// signal, spread vs n_reads.  Requires TED log files + signal tracks.
+// Cluster spread plots (D2a): TSS/TTS IQR violin by pass/reject status.
 // -----------------------------------------------------------------
 process ClusterSpreadPlots {
     publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/ted_diagnostics/cluster_spread", mode: 'copy'
@@ -843,9 +844,7 @@ process ClusterSpreadPlots {
     errorStrategy 'ignore'
 
     input:
-    tuple val(test_name), val(ted_log_labels), path(ted_log_files),
-          val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+    tuple val(test_name), val(ted_log_labels), path(ted_log_files)
 
     output:
     path "*.png", optional: true
@@ -858,8 +857,6 @@ process ClusterSpreadPlots {
     """
     python ${projectDir}/bin/evaluation/cluster_spread_plots.py \\
         --ted-log ${log_args.join(' ')} \\
-        --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
-        --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
         --output . \\
         --verbose || true
     """
@@ -1002,6 +999,90 @@ process TedLogAnalysis {
 }
 
 // -----------------------------------------------------------------
+// TED rejection reason breakdown + spliced-length stratification.
+// Uses TED log drop_reason + firstpass BED12 (for spliced length)
+// + orthogonal CAGE/dRNA peaks to label joint TP.
+// -----------------------------------------------------------------
+process TedRejectionAnalysis {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/ted_diagnostics/rejection_analysis", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+    memory '8 GB'
+    time '30m'
+    clusterOptions '--partition=short'
+
+    input:
+    tuple val(test_name), val(labels), path(ted_log_files), path(firstpass_bed_files),
+          val(cage_peaks), val(drna_peaks)
+
+    output:
+    path "*.{png,tsv}", optional: true
+
+    script:
+    def log_args = []
+    for (int i = 0; i < labels.size(); i++) {
+        log_args << "${labels[i]}:${ted_log_files[i]}:${firstpass_bed_files[i]}"
+    }
+    def cage_arg = (cage_peaks && cage_peaks != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
+    def drna_arg = (drna_peaks && drna_peaks != 'NO_DRNA') ? "--drna-peaks ${drna_peaks}" : ""
+    """
+    # v2: use genomic span as length proxy (exact coord merge fails — centroids != endpoints)
+    if [ -n "${cage_arg}" ] && [ -n "${drna_arg}" ]; then
+        python ${projectDir}/bin/evaluation/ted_rejection_analysis.py \\
+            --ted-log ${log_args.join(' ')} \\
+            ${cage_arg} \\
+            ${drna_arg} \\
+            --output . \\
+            --verbose || true
+    else
+        echo "Skipping TED rejection analysis: CAGE and dRNA peaks are both required." > ted_rejection_analysis_skipped.txt
+    fi
+    """
+}
+
+// -----------------------------------------------------------------
+// TED confusion matrix: per-config 2x2 matrix of pass/reject × joint TP/FP
+// using TED log + orthogonal CAGE/dRNA peaks.  Outputs one PNG per config,
+// a multi-config comparison panel, and a summary TSV.
+// -----------------------------------------------------------------
+process TedConfusionMatrix {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/ted_diagnostics/confusion_matrix", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+    memory '8 GB'
+    time '30m'
+    clusterOptions '--partition=short'
+
+    input:
+    tuple val(test_name), val(labels), path(ted_log_files),
+          val(cage_peaks), val(drna_peaks)
+
+    output:
+    path "*.{png,tsv}", optional: true
+
+    script:
+    def log_args = []
+    for (int i = 0; i < labels.size(); i++) {
+        log_args << "${labels[i]}:${ted_log_files[i]}"
+    }
+    def cage_arg = (cage_peaks && cage_peaks != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
+    def drna_arg = (drna_peaks && drna_peaks != 'NO_DRNA') ? "--drna-peaks ${drna_peaks}" : ""
+    """
+    # v1: per-cluster confusion matrix from TED log + orthogonal peaks
+    if [ -n "${cage_arg}" ] && [ -n "${drna_arg}" ]; then
+        python ${projectDir}/bin/evaluation/ted_confusion_matrix.py \\
+            --ted-log ${log_args.join(' ')} \\
+            ${cage_arg} \\
+            ${drna_arg} \\
+            --output . \\
+            --verbose || true
+    else
+        echo "Skipping TED confusion matrix: CAGE and dRNA peaks are both required." > ted_confusion_matrix_skipped.txt
+    fi
+    """
+}
+
+// -----------------------------------------------------------------
 // Isoform end AUC-ROC: treats each isoform as a binary prediction
 // (TP = end within --window bp of a reference peak), uses orthogonal
 // signal at the called end as the classifier score, and plots TPR vs
@@ -1036,6 +1117,7 @@ process IsoformEndRoc {
     def cage_pk_arg = (cage_peaks && cage_peaks != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
     def drna_pk_arg = (drna_peaks && drna_peaks != 'NO_DRNA') ? "--drna-peaks ${drna_peaks}" : ""
     """
+    # v2: add paired joint-TP ROC (geometric-mean signal, both-ends label)
     python ${projectDir}/bin/evaluation/isoform_end_roc.py \\
         --bed ${bed_args.join(' ')} \\
         ${cage_pk_arg} \\

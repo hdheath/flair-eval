@@ -23,8 +23,8 @@ Supported input formats:
       the transcript_id and query name is the read_id.
 
   --stringtie2-gtf: StringTie2 output GTF
-      Transcript-level entries with reference_id attributes parsed to build
-      a transcript-to-gene mapping (read map is approximate at transcript level).
+      Creates an empty map because StringTie2 does not provide per-read
+      transcript assignments.
 
 Usage:
   python convert_read_map.py --isoquant-model-reads model_reads.tsv.gz --output read.map.txt
@@ -37,7 +37,6 @@ Usage:
 import argparse
 import csv
 import gzip
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -168,41 +167,15 @@ def convert_flames_realign_bam(input_path: Path, output_path: Path) -> int:
 
 
 def convert_stringtie2_gtf(input_path: Path, output_path: Path) -> int:
-    """Extract transcript IDs from StringTie2 GTF to create a minimal read map.
+    """Create an empty read map for StringTie2 output.
 
-    StringTie2 does not natively produce per-read assignments. This function
-    parses the GTF for transcript-level entries and creates a one-to-one
-    placeholder mapping (transcript_id -> transcript_id) so downstream
-    evaluation steps have a valid read map file.
-
-    If the GTF contains 'cov' attributes, the coverage value is noted but
-    individual read IDs are not available from StringTie2 output.
-
-    Returns number of isoforms written.
+    StringTie2 does not natively produce per-read transcript assignments.
+    A transcript_id -> transcript_id placeholder looks like a valid map but
+    corrupts assignment-rate and read-end entropy metrics, so downstream
+    evaluation should see an existing zero-byte file and skip read metrics.
     """
-    transcripts = []
-    attr_re = re.compile(r'transcript_id\s+"([^"]+)"')
-
-    with open(input_path, 'r') as f:
-        for line in f:
-            if line.startswith('#'):
-                continue
-            fields = line.strip().split('\t')
-            if len(fields) < 9:
-                continue
-            if fields[2] != 'transcript':
-                continue
-            m = attr_re.search(fields[8])
-            if m:
-                transcripts.append(m.group(1))
-
-    with open(output_path, 'w') as out:
-        for tx_id in sorted(set(transcripts)):
-            # Placeholder: transcript maps to itself since StringTie2
-            # does not provide per-read assignments
-            out.write(f"{tx_id}\t{tx_id}\n")
-
-    return len(set(transcripts))
+    output_path.write_text("")
+    return 0
 
 
 def main():
@@ -270,7 +243,7 @@ def main():
             sys.exit(1)
         n = convert_stringtie2_gtf(args.stringtie2_gtf, args.output)
         if args.verbose:
-            print(f"Converted StringTie2 GTF: {n} isoforms -> {args.output}")
+            print(f"Created empty StringTie2 read map: {n} assignments -> {args.output}")
 
 
 if __name__ == "__main__":

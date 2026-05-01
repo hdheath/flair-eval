@@ -15,6 +15,7 @@ process CrossSamplePrecisionRecall {
 
     script:
     """
+    # v6: re-render after TedEndPrecision GTF-recall denominator fix
     # v5: add paired P/R scatter plot
     python ${projectDir}/bin/evaluation/precision_recall_plot.py \\
         --input ${precision_recall_tsvs} \\

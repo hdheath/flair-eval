@@ -49,6 +49,8 @@ include { SqantiPrecision          } from '../modules/visualization/summary/main
 include { DepthCalibration         } from '../modules/visualization/summary/main'
 include { ClusterSpreadPlots       } from '../modules/visualization/summary/main'
 include { TedLogAnalysis           } from '../modules/visualization/summary/main'
+include { TedRejectionAnalysis     } from '../modules/visualization/summary/main'
+include { TedConfusionMatrix       } from '../modules/visualization/summary/main'
 include { EndSignalMetaplot        } from '../modules/visualization/summary/main'
 include { EndSignalHeatmap         } from '../modules/visualization/summary/main'
 include { ReadEndHeatmap           } from '../modules/visualization/summary/main'
@@ -72,6 +74,7 @@ workflow SUMMARY_AND_VIZ {
         dataset_signal_ch          // tuple [test_name, library_type, cage_signal_plus, cage_signal_minus, qs_signal_plus, qs_signal_minus]
         ted_precision_metrics      // tuple [test_name, dataset_name, transcriptome_mode, precision_recall_summary.tsv, per_junction_chain.tsv]
         ted_gtf_precision          // tuple [test_name, dataset_name, transcriptome_mode, gtf_precision_recall_summary.tsv]
+        flair_firstpass            // tuple [test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode, firstpass_bed]
 
     main:
 
@@ -475,29 +478,8 @@ workflow SUMMARY_AND_VIZ {
 
         DepthCalibration(depth_cal_ch)
 
-        // --- Cluster spread plots (D2): IQR violin, ECDF, spread vs signal ---
-        // Reuses depth_cal_ch (same TED log grouping) + signal tracks.
-        cluster_spread_inputs = depth_cal_ch
-            .join(
-                dataset_signal_ch
-                    .filter { it[2] && it[3] && it[4] && it[5] }
-                    .map { test_name, library_type,
-                           cage_signal_plus, cage_signal_minus,
-                           drna_signal_plus, drna_signal_minus ->
-                        [test_name,
-                         cage_signal_plus, cage_signal_minus,
-                         drna_signal_plus, drna_signal_minus]
-                    }
-            )
-            .map { test_name, ted_log_labels, ted_log_files,
-                   cage_signal_plus, cage_signal_minus,
-                   drna_signal_plus, drna_signal_minus ->
-                [test_name, ted_log_labels, ted_log_files,
-                 cage_signal_plus, cage_signal_minus,
-                 drna_signal_plus, drna_signal_minus]
-            }
-
-        ClusterSpreadPlots(cluster_spread_inputs)
+        // --- Cluster spread plots (D2a): IQR violin by pass/reject status ---
+        ClusterSpreadPlots(depth_cal_ch)
 
         // --- TED log analysis (E1+E2): end spread + CAGE peak width vs cluster IQR ---
         // Reuses depth_cal_ch + CAGE peaks BED (from dataset_peaks_ch).
@@ -508,6 +490,52 @@ workflow SUMMARY_AND_VIZ {
             }
 
         TedLogAnalysis(ted_log_analysis_inputs)
+
+        // --- TED rejection analysis: drop_reason breakdown + spliced-length stratification ---
+        // Joins TED log channel with firstpass BED (for spliced length) + cage/drna peaks.
+        firstpass_keyed = flair_firstpass
+            .map { test_name, dataset_name, align_mode, partition_mode, partition_args,
+                   transcriptome_mode, firstpass_bed ->
+                def has_bed = firstpass_bed != null && firstpass_bed.name != 'NO_FIRSTPASS' &&
+                              !firstpass_bed.name.startsWith('NO_') && firstpass_bed.size() > 0
+                has_bed ? [test_name, transcriptome_mode, firstpass_bed] : null
+            }
+            .filter { it != null }
+            .groupTuple(by: [0])
+            .map { test_name, labels, beds ->
+                [test_name, labels, beds.flatten()]
+            }
+
+        ted_rejection_inputs = depth_cal_ch
+            .join(firstpass_keyed, remainder: true)
+            .join(dataset_peaks_ch)
+            .map { test_name, ted_log_labels, ted_log_files,
+                   fp_labels, fp_files,
+                   cage_peaks, drna_peaks ->
+                if (fp_labels == null) return null
+                // Intersect labels: only configs that have both a ted log and a firstpass BED
+                def common = ted_log_labels.intersect(fp_labels)
+                if (common.isEmpty()) return null
+                def log_map = [ted_log_labels, ted_log_files].transpose().collectEntries()
+                def bed_map = [fp_labels, fp_files].transpose().collectEntries()
+                def paired_logs = common.collect { log_map[it] }
+                def paired_beds = common.collect { bed_map[it] }
+                [test_name, common, paired_logs, paired_beds, cage_peaks, drna_peaks]
+            }
+            .filter { it != null }
+
+        TedRejectionAnalysis(ted_rejection_inputs)
+
+        // --- TED confusion matrix: pass/reject × joint TP/FP per config ---
+        // Uses TED log + orthogonal CAGE/dRNA peaks.  No firstpass BED needed
+        // (we score the TED log positions directly).
+        ted_confusion_inputs = depth_cal_ch
+            .join(dataset_peaks_ch)
+            .map { test_name, ted_log_labels, ted_log_files, cage_peaks, drna_peaks ->
+                [test_name, ted_log_labels, ted_log_files, cage_peaks, drna_peaks]
+            }
+
+        TedConfusionMatrix(ted_confusion_inputs)
 
         // --- Isoform diversity: parallel-coordinates across multi-region partitions ---
         // Extract regions from partition_mode args.  Only runs when ≥2 regions detected.

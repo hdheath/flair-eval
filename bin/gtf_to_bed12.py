@@ -53,6 +53,25 @@ def parse_gtf_attributes(attr_string: str) -> dict:
     return attrs
 
 
+def _first_attr_value(attrs: dict, key: str):
+    value = attrs.get(key)
+    if not value:
+        return None
+    return str(value).split(',', 1)[0]
+
+
+def _transcript_id_from_attrs(attrs: dict, feature: str):
+    """Return a transcript ID from GTF or GFF3-style attributes."""
+    if attrs.get('transcript_id'):
+        return attrs['transcript_id']
+    if feature in {'transcript', 'mRNA'} and attrs.get('ID'):
+        return attrs['ID']
+    parent = _first_attr_value(attrs, 'Parent')
+    if parent:
+        return parent
+    return None
+
+
 def gtf_to_bed12(gtf_path: Path, output_path: Path, source_filter: str = None, verbose: bool = False):
     """
     Convert GTF to BED12 format.
@@ -90,7 +109,7 @@ def gtf_to_bed12(gtf_path: Path, output_path: Path, source_filter: str = None, v
                 continue
             
             attrs = parse_gtf_attributes(attributes)
-            transcript_id = attrs.get('transcript_id')
+            transcript_id = _transcript_id_from_attrs(attrs, feature)
             gene_id = attrs.get('gene_id', transcript_id)
             
             if not transcript_id:
