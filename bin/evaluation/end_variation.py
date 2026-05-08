@@ -281,12 +281,14 @@ def summarize_junction_chain_end_variation(
 def classify_genes_by_variation(
     isoforms: List[dict],
     min_exons: int = 2,
+    tx_to_gene: Optional[Dict[str, str]] = None,
 ) -> Dict[str, int]:
     """Classify genes by their type of isoform variation.
 
-    For each gene (extracted via ``gene_from_name``), multi-exon isoforms are
-    grouped by junction chain.  The gene is then placed in exactly one
-    category:
+    For each gene, multi-exon isoforms are grouped by junction chain.  Gene IDs
+    are resolved from an explicit ``tx_to_gene`` map first, then the parsed
+    ``gene_id`` field, then the historical ``gene_from_name`` fallback.  The
+    gene is then placed in exactly one category:
 
       - **single_isoform**: only one multi-exon isoform
       - **alt_ends_only**: all isoforms share one SJC but differ in TSS/TTS
@@ -300,7 +302,16 @@ def classify_genes_by_variation(
     for iso in isoforms:
         if int(iso.get("n_exons", 1)) < min_exons:
             continue
-        g = _gene_from_name(iso["name"])
+        name = iso.get("name", "")
+        g = None
+        if tx_to_gene is not None:
+            g = tx_to_gene.get(name)
+        if not g:
+            g = iso.get("gene_id")
+        if not g and name:
+            g = _gene_from_name(name)
+        if not g:
+            continue
         genes[g].append(iso)
 
     counts = {
@@ -341,4 +352,3 @@ def classify_genes_by_variation(
             counts["alt_splicing_only"] += 1
 
     return counts
-

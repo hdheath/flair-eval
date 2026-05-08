@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Read end-signal density scatter — per-sample KDE-coloured panels.
+Read end-signal density scatter - per-sample zero-safe hexbin panels.
 
 For each sample, plots TSS signal (CAGE) vs TTS signal (dRNA) for every
-aligned *read* (not assembled isoform), coloured by KDE density.  Shows what
-the raw data looks like against orthogonal signal before any assembly.
+aligned *read* (not assembled isoform), coloured by read count per hexbin.
+Shows what the raw data looks like against orthogonal signal before assembly.
 
 Usage:
     python read_end_signal_scatter.py \
@@ -23,23 +23,21 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 
-from pub_style import savefig, style_ax, W2
+from pub_style import savefig, W2
+from signal_hexbin import signal_hexbin_with_marginals, write_signal_summary
 from signal_utils import (
     parse_bed12,
     load_signal_tracks,
     isoform_signal,
-    kde_density,
 )
 
-MAX_READS = 100_000
 RNG_SEED = 42
 
 
-def subsample(reads, max_n=MAX_READS):
-    """Deterministic random subsample if len(reads) > max_n."""
-    if len(reads) <= max_n:
+def subsample(reads, max_n=0):
+    """Deterministic random subsample when max_n is positive."""
+    if not max_n or max_n <= 0 or len(reads) <= max_n:
         return reads
     rng = np.random.default_rng(RNG_SEED)
     idx = rng.choice(len(reads), size=max_n, replace=False)
@@ -50,8 +48,12 @@ def plot_read_end_signal_scatter(
     reads_by_sample: dict,
     cage_p, cage_m, qs_p, qs_m,
     output_dir: str,
+    *,
+    max_reads: int = 0,
+    signal_max: float = 100.0,
+    auto_range: bool = False,
 ):
-    """Multi-panel KDE-coloured density scatter of TSS vs TTS signal per read."""
+    """Multi-panel count-coloured hexbin scatter of TSS vs TTS signal per read."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -60,68 +62,52 @@ def plot_read_end_signal_scatter(
     if n == 0:
         return
 
-    ncols = min(4, n)
+    ncols = min(3, n)
     nrows = (n + ncols - 1) // ncols
-    pw = W2 / ncols
-    fig, axes = plt.subplots(nrows, ncols, figsize=(W2, pw * nrows), squeeze=False)
+    fig_h = max(2.6, (W2 / ncols) * 0.95 * nrows)
+    fig = plt.figure(figsize=(W2, fig_h))
+    outer = fig.add_gridspec(
+        nrows, ncols, left=0.08, right=0.985, bottom=0.10, top=0.94,
+        wspace=0.38, hspace=0.46,
+    )
 
-    eps = 1e-3
-
+    rows = []
     for idx, sample in enumerate(samples):
-        ax = axes[idx // ncols][idx % ncols]
+        ss = outer[idx // ncols, idx % ncols]
         reads = reads_by_sample[sample]
         total = len(reads)
-        reads = subsample(reads)
+        reads = subsample(reads, max_n=max_reads)
 
         sigs = [isoform_signal(r, cage_p, cage_m, qs_p, qs_m) for r in reads]
-        tss = np.array([s[0] for s in sigs]) + eps
-        tts = np.array([s[1] for s in sigs]) + eps
+        tss = np.array([s[0] for s in sigs], dtype=float)
+        tts = np.array([s[1] for s in sigs], dtype=float)
 
-        density = kde_density(tts, tss)
-        order = np.argsort(density)
-
-        ax.scatter(
-            tts[order], tss[order],
-            c=density[order], cmap="viridis_r", vmin=0, vmax=1,
-            s=1.5, alpha=0.5, edgecolors="none", rasterized=True,
+        fixed_range = None if auto_range else (signal_max, signal_max)
+        _, info = signal_hexbin_with_marginals(
+            tts,
+            tss,
+            fig=fig,
+            gs=ss,
+            xlabel="TTS signal (dRNA TPM)",
+            ylabel="TSS signal (CAGE TPM)",
+            title=sample,
+            fixed_range=fixed_range,
+            auto_range=auto_range,
+            hex_gridsize=46,
         )
-
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-
-        if idx >= n - ncols:
-            ax.set_xlabel("TTS signal (dRNA)", fontsize=7)
-        else:
-            ax.set_xticklabels([])
-        if idx % ncols == 0:
-            ax.set_ylabel("TSS signal (CAGE)", fontsize=7)
-        else:
-            ax.set_yticklabels([])
-
-        style_ax(ax)
-        ax.text(0.04, 0.96, sample, transform=ax.transAxes,
-                ha="left", va="top", fontsize=6, fontweight="bold")
-        if total > MAX_READS:
-            count_note = f"n = {MAX_READS:,} sampled / {total:,} total"
-        else:
-            count_note = f"n = {total:,}"
-        ax.text(0.96, 0.04, count_note, transform=ax.transAxes,
-                ha="right", va="bottom", fontsize=5, color="#666666")
-
-    for idx in range(n, nrows * ncols):
-        axes[idx // ncols][idx % ncols].set_visible(False)
-
-    fig.subplots_adjust(left=0.07, right=0.90, bottom=0.10, top=0.97,
-                        hspace=0.35, wspace=0.30)
-    cbar_ax = fig.add_axes([0.92, 0.15, 0.012, 0.7])
-    norm = mcolors.Normalize(vmin=0, vmax=1)
-    sm = plt.cm.ScalarMappable(cmap="viridis_r", norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, cax=cbar_ax)
-    cbar.set_label("Relative density", fontsize=6)
-    cbar.ax.tick_params(labelsize=5, length=1.5, width=0.3)
+        row = {
+            k: v for k, v in info.items()
+            if k not in {"ax_sc", "ax_top", "ax_right", "cax"}
+        }
+        row.update(
+            sample=sample,
+            total_reads=total,
+            plotted_reads=len(reads),
+        )
+        rows.append(row)
 
     savefig(fig, output_dir / "read_end_signal_scatter.png")
+    write_signal_summary(output_dir / "read_end_signal_scatter_summary.tsv", rows)
 
 
 def main():
@@ -138,6 +124,18 @@ def main():
     parser.add_argument("--qs-plus",    required=True, help="dRNA bedGraph (+ strand)")
     parser.add_argument("--qs-minus",   required=True, help="dRNA bedGraph (- strand)")
     parser.add_argument("--output",     required=True, help="Output directory")
+    parser.add_argument(
+        "--max-reads", type=int, default=0,
+        help="Deterministically subsample each read BED to this many reads; 0 uses all reads",
+    )
+    parser.add_argument(
+        "--signal-max", type=float, default=100.0,
+        help="Raw TPM upper axis limit when --auto-range is not set",
+    )
+    parser.add_argument(
+        "--auto-range", action="store_true",
+        help="Use per-panel data-driven signal axis limits instead of --signal-max",
+    )
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()
 
@@ -166,7 +164,14 @@ def main():
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
     )
 
-    plot_read_end_signal_scatter(reads_by_sample, cage_p, cage_m, qs_p, qs_m, args.output)
+    plot_read_end_signal_scatter(
+        reads_by_sample,
+        cage_p, cage_m, qs_p, qs_m,
+        args.output,
+        max_reads=args.max_reads,
+        signal_max=args.signal_max,
+        auto_range=args.auto_range,
+    )
     print(f"Saved read end-signal scatter to {args.output}")
 
 

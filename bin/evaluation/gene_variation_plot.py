@@ -19,16 +19,38 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 try:
-    from signal_utils import parse_isoforms
+    from signal_utils import parse_isoforms, parse_transcript_gene_map
     from end_variation import classify_genes_by_variation
+    from pub_style import style_ax, W2
 except ImportError:
-    from evaluation.signal_utils import parse_isoforms
+    from evaluation.signal_utils import parse_isoforms, parse_transcript_gene_map
     from evaluation.end_variation import classify_genes_by_variation
+    from evaluation.pub_style import style_ax, W2
 
 GOLDEN_RATIO = 1.618
 CATEGORIES = ["single_isoform", "alt_ends_only", "alt_splicing_only", "alt_splicing_and_ends"]
 LABELS = ["Single isoform", "Alt ends only", "Alt splicing only", "Alt splicing + ends"]
 COLORS = ["#999999", "#4C78A8", "#F58518", "#E45756"]
+
+
+def _parse_label_path_pairs(entries) -> dict:
+    pairs = {}
+    for entry in entries or []:
+        if ":" not in entry:
+            print(f"[WARN] Skipping malformed arg (no ':'): {entry}", file=sys.stderr)
+            continue
+        label, path = entry.split(":", 1)
+        pairs[label] = path
+    return pairs
+
+
+def _load_tx_to_gene(source_path: str | None) -> dict | None:
+    if not source_path:
+        return None
+    p = Path(source_path)
+    if p.suffix not in (".gtf", ".gff", ".gff3") or not p.exists():
+        return None
+    return parse_transcript_gene_map(p)
 
 
 def plot(gene_counts_by_sample, output_path, title="Gene-Level Isoform Variation"):
@@ -45,7 +67,7 @@ def plot(gene_counts_by_sample, output_path, title="Gene-Level Isoform Variation
             raw_counts[cat].append(c)
             proportions[cat].append(c / total if total > 0 else 0)
 
-    fig_width = max(5.0, 1.6 * n + 1.5)
+    fig_width = max(W2 * 0.72, min(W2, 0.75 * n + 2.0))
     fig, ax = plt.subplots(figsize=(fig_width, fig_width / GOLDEN_RATIO))
 
     x = range(n)
@@ -62,20 +84,19 @@ def plot(gene_counts_by_sample, output_path, title="Gene-Level Isoform Variation
                         color='white' if color in ("#999999", "#4C78A8", "#E45756") else 'black')
         bottoms = [b + v for b, v in zip(bottoms, vals)]
 
-    ax.set_ylim(0, 1.0)
-    ax.set_ylabel("Proportion of genes", fontsize=8)
     ax.set_xticks(list(x))
     ax.set_xticklabels(samples, fontsize=7, rotation=30, ha='right')
-    ax.legend(fontsize=7, loc='upper right', framealpha=0.9)
-    ax.set_title(title, fontsize=8, fontweight='normal')
-    ax.grid(True, alpha=0.25, linestyle='--', axis='y')
-    ax.set_axisbelow(True)
+    ax.legend(fontsize=7, loc='upper left', bbox_to_anchor=(1.01, 1.0),
+              frameon=False, handlelength=1.1, borderaxespad=0.2)
+    ax.set_ylim(0, 1.0)
+    style_ax(ax, ylabel="Proportion of multi-exon genes", title=title,
+             faint_y_grid=True)
 
     totals = [sum(raw_counts[cat][i] for cat in CATEGORIES) for i in range(n)]
     footer_parts = [f"{s}: {t} genes" for s, t in zip(samples, totals)]
     fig.text(0.5, 0.01, " | ".join(footer_parts), ha='center', fontsize=6)
 
-    plt.tight_layout(rect=(0, 0.04, 1, 1.0))
+    plt.tight_layout(rect=(0, 0.04, 0.86, 1.0))
     fig.savefig(output_path, dpi=200, bbox_inches='tight')
     plt.close(fig)
     print(f"[INFO] Saved plot to {output_path}", file=sys.stderr)
@@ -87,6 +108,10 @@ def main():
         "--bed", nargs="+", required=True,
         help="label:path pairs for BED12 isoform files",
     )
+    parser.add_argument(
+        "--source", nargs="*", default=[],
+        help="Optional label:path pairs for source GTF/GFF files carrying gene_id attributes",
+    )
     parser.add_argument("--output", required=True, help="Output directory")
     parser.add_argument("--title", default="Gene-Level Isoform Variation")
     parser.add_argument("--verbose", action="store_true")
@@ -95,18 +120,16 @@ def main():
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    source_by_label = _parse_label_path_pairs(args.source)
     gene_counts = {}
-    for item in args.bed:
-        if ":" not in item:
-            print(f"[WARN] Skipping malformed bed arg (no ':'): {item}", file=sys.stderr)
-            continue
-        label, bed_path = item.split(":", 1)
+    for label, bed_path in _parse_label_path_pairs(args.bed).items():
         p = Path(bed_path)
         if not p.exists():
             print(f"[WARN] BED file not found: {p}", file=sys.stderr)
             continue
         isos = parse_isoforms(p)
-        counts = classify_genes_by_variation(isos)
+        tx_to_gene = _load_tx_to_gene(source_by_label.get(label))
+        counts = classify_genes_by_variation(isos, tx_to_gene=tx_to_gene)
         gene_counts[label] = counts
         if args.verbose:
             print(f"  {label}: {counts}", file=sys.stderr)

@@ -104,12 +104,21 @@ def _parse_strand(junc_id: str) -> str:
 
 
 def load_ted_log(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path, sep="\t", dtype=str)
-    for col in ("tss_pos", "tts_pos", "n_reads"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    """Load a flair_ted.ted_log.tsv, restricted to per-isoform pass/reject
+    candidate rows with `chrom` / `strand` derived from junc_id.
+
+    Delegates the schema-aware filtering (drop --ted_global partition-summary
+    rows, drop sentinel-coordinate rows on either axis) to
+    ted_log_loader.load_ted_log. Without that, --ted_global mode emits
+    `global_peak` rows where one of (tss_pos, tts_pos) is the sentinel -1;
+    the previous local filter only checked `tss_pos >= 0`, so rows with
+    `tts_pos = -1` (TSS-only peaks) leaked through and showed up as phantom
+    confusion-matrix entries with no possible TTS hit.
+    """
+    from ted_log_loader import load_ted_log as _shared_load_ted_log
+
+    df = _shared_load_ted_log(path)
     df = df[df["status"].isin(["pass", "reject"])].copy()
-    df = df[df["tss_pos"].notna() & (df["tss_pos"] >= 0)].copy()
     df["chrom"] = df["junc_id"].apply(_parse_chrom)
     df["strand"] = df["junc_id"].apply(_parse_strand)
     return df.reset_index(drop=True)

@@ -151,10 +151,22 @@ def _strand(jid):
 
 
 def load_ted_log(path: str, chrom: str = None) -> pd.DataFrame:
-    df = pd.read_csv(path, sep="\t", dtype=str)
-    for col in ["tss_pos", "tts_pos", "n_reads", "TED_depth"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    """Load a flair_ted.ted_log.tsv, dropping --ted_global partition-summary
+    rows and adding `chrom`/`strand` columns derived from junc_id.
+
+    Delegates the schema-aware filtering to ted_log_loader.load_ted_log so
+    every diagnostic that consumes ted_log.tsv applies the same global-mode
+    filters. Without that filter, partition-level `global_peak` rows
+    (junc_id like `chr*:None-None:strand:0j`, with one of tss_pos/tts_pos
+    set to the -1 sentinel) leak through as phantom per-isoform rejections
+    and corrupt the rejection-reason and length-stratified plots downstream.
+    """
+    # Sibling import — the shim has no relative imports so it works whether
+    # this script is invoked directly (`python ted_rejection_analysis.py`)
+    # or imported as part of the `evaluation` package.
+    from ted_log_loader import load_ted_log as _shared_load_ted_log
+
+    df = _shared_load_ted_log(path)
     df["chrom"]  = df["junc_id"].apply(_chrom)
     df["strand"] = df["junc_id"].apply(_strand)
     if chrom:

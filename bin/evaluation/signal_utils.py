@@ -8,6 +8,7 @@ Provides:
   - tss_tts(start, end, strand)     Strand-aware TSS/TTS extraction
   - group_by_junction_chain(isos)   Group multi-exon isoforms by SJC
   - gene_from_name(name)            Extract ENSG gene ID from an isoform name
+  - parse_transcript_gene_map(path) Parse GTF/GFF transcript_id -> gene_id
   - BedGraphTrack                   Numpy-backed bedGraph reader with query()
   - isoform_signal(...)             Strand-aware TSS/TTS signal
   - load_read_map(path)             Read isoform→read-count map; detects self-ref maps
@@ -82,7 +83,8 @@ def parse_bed12(path: str | Path) -> List[dict]:
             tss, tts = tss_tts(start, end, strand)
             isoforms.append(dict(
                 chrom=chrom, start=start, end=end, name=name,
-                score=score, strand=strand, tss=tss, tts=tts,
+                score=score, strand=strand, gene_id=gene_from_name(name),
+                tss=tss, tts=tts,
                 junctions=tuple(juncs), n_exons=bc,
                 spliced_len=sum(bsz),
             ))
@@ -163,20 +165,83 @@ def parse_feature_attributes(attr_string: str) -> dict:
     return attrs
 
 
+def _first_attr_value(attrs: dict, key: str) -> Optional[str]:
+    value = attrs.get(key)
+    if value is None or value == "":
+        return None
+    return str(value).split(",", 1)[0].strip().strip('"')
+
+
+def _transcript_id_from_attrs(attrs: dict, feature: str) -> Optional[str]:
+    """Return transcript ID from GTF/GFF3 attributes for transcript or exon rows."""
+    tid = _first_attr_value(attrs, "transcript_id")
+    if tid:
+        return tid
+    if feature in {"transcript", "mRNA"}:
+        tid = _first_attr_value(attrs, "ID")
+        if tid:
+            return tid
+    return _first_attr_value(attrs, "Parent")
+
+
+def _gene_id_from_attrs(attrs: dict, feature: str) -> Optional[str]:
+    """Return gene ID from attributes.
+
+    For GFF3 exon rows, ``Parent`` usually points to the transcript, not the
+    gene, so Parent is only accepted on transcript-like features.
+    """
+    for key in ("gene_id", "gene", "geneID", "gene_name"):
+        gid = _first_attr_value(attrs, key)
+        if gid:
+            return gid
+    if feature in {"transcript", "mRNA"}:
+        return _first_attr_value(attrs, "Parent")
+    return None
+
+
+def parse_transcript_gene_map(path: str | Path) -> Dict[str, str]:
+    """Parse ``{transcript_id: gene_id}`` from GTF or GFF3.
+
+    Handles standard GTF attributes (``transcript_id "..."`` /
+    ``gene_id "..."``) and GFF3 attributes (``ID=...;Parent=...``).  Exon
+    rows contribute mappings only when they carry an explicit gene attribute;
+    for GFF3 transcript rows, ``Parent`` is treated as the gene ID.
+    """
+    p = Path(path)
+    tx2gene: Dict[str, str] = {}
+    if not p.exists():
+        return tx2gene
+    with open(p) as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) < 9:
+                continue
+            feature = cols[2]
+            attrs = parse_feature_attributes(cols[8])
+            tid = _transcript_id_from_attrs(attrs, feature)
+            if not tid:
+                continue
+            gid = _gene_id_from_attrs(attrs, feature)
+            if gid and tid not in tx2gene:
+                tx2gene[tid] = gid
+    return tx2gene
+
+
 def parse_gtf(path: str | Path) -> List[dict]:
     """Parse a GTF/GFF file and return isoform dicts (same shape as parse_bed12).
 
     Groups exons by transcript_id or GFF3 Parent, builds junctions from exon boundaries,
     and returns one dict per transcript with: chrom, start, end, name,
-    score, strand, junctions, n_exons.
+    score, strand, gene_id, junctions, n_exons, and spliced_len.
     """
     p = Path(path)
     if not p.exists():
         return []
 
-    # Collect exons per transcript
     tx_exons: Dict[str, List[Tuple[str, int, int, str]]] = defaultdict(list)
-    tx_gene: Dict[str, str] = {}
+    tx_gene: Dict[str, str] = parse_transcript_gene_map(p)
 
     with open(p) as f:
         for line in f:
@@ -192,17 +257,13 @@ def parse_gtf(path: str | Path) -> List[dict]:
             attrs = parse_feature_attributes(cols[8])
             feature = cols[2]
             if feature in ("transcript", "mRNA"):
-                tid = attrs.get("transcript_id") or attrs.get("ID", "")
-                gid = attrs.get("gene_id") or attrs.get("gene") or attrs.get("Parent", "")
-                if tid and gid:
-                    tx_gene[tid] = gid.split(",", 1)[0]
                 continue
             if feature != "exon":
                 continue
-            tid = attrs.get("transcript_id") or attrs.get("Parent", "").split(",", 1)[0]
-            gid = attrs.get("gene_id") or attrs.get("gene", "")
+            tid = _transcript_id_from_attrs(attrs, feature)
             if not tid:
                 continue
+            gid = _gene_id_from_attrs(attrs, feature)
             tx_exons[tid].append((chrom, start, end, strand))
             if gid:
                 tx_gene[tid] = gid
@@ -221,12 +282,13 @@ def parse_gtf(path: str | Path) -> List[dict]:
         for i in range(len(exons) - 1):
             juncs.append((exons[i][2], exons[i + 1][1]))
         gid = tx_gene.get(tid, "")
-        name = f"{tid}_{gid}" if gid else tid
         tx_tss, tx_tts = tss_tts(tx_start, tx_end, strand)
+        spliced_len = sum(e - s for _, s, e, _ in exons)
         isoforms.append(dict(
-            chrom=chrom, start=tx_start, end=tx_end, name=name,
-            score=0, strand=strand, tss=tx_tss, tts=tx_tts,
+            chrom=chrom, start=tx_start, end=tx_end, name=tid,
+            score=0, strand=strand, gene_id=gid, tss=tx_tss, tts=tx_tts,
             junctions=tuple(juncs), n_exons=len(exons),
+            spliced_len=spliced_len,
         ))
     return isoforms
 
@@ -422,11 +484,7 @@ def load_read_map(path: str | Path) -> Dict[str, int]:
 
 
 def lookup_read_count(name: str, counts: Dict[str, int]) -> int:
-    """Look up read count for an isoform name with tid_gid fallback.
-
-    Handles GENCODE-style "tid_ENSGxxx" names produced by parse_gtf()
-    by stripping the gene-ID suffix before lookup.  Returns 0 when not found.
-    """
+    """Look up read count for an isoform name with historical tid_gid fallback."""
     if name in counts:
         return counts[name]
     # Try stripping at _ENSG prefix (covers GENCODE gene IDs)

@@ -31,6 +31,7 @@ include { SignalSupportDashboard    } from '../modules/visualization/summary/mai
 include { IsoformDiversity          } from '../modules/visualization/summary/main'
 include { TpOverlapPlot             } from '../modules/visualization/summary/main'
 include { IsoformsPerGeneHist       } from '../modules/visualization/summary/main'
+include { ExonLengthDistributionPlot } from '../modules/visualization/summary/main'
 include { JaccardHeatmapPlot       } from '../modules/visualization/summary/main'
 include { GeneVariationPlot        } from '../modules/visualization/summary/main'
 include { SjcEndDistancePlot       } from '../modules/visualization/summary/main'
@@ -147,6 +148,19 @@ workflow SUMMARY_AND_VIZ {
             }
 
         IsoformsPerGeneHist(isoforms_per_gene_ch)
+
+        // --- Read vs isoform exon-length distributions ---
+        reads_bed_by_test = all_eval_inputs
+            .map { items -> [items[0], items[11]] }
+            .unique { it[0] }
+
+        exon_length_inputs = isoforms_per_gene_ch
+            .join(reads_bed_by_test)
+            .map { test_name, labels, files, reads_bed ->
+                [test_name, labels, files, reads_bed]
+            }
+
+        ExonLengthDistributionPlot(exon_length_inputs)
 
         // --- Jaccard heatmaps: splice-junction + transcript-end Jaccard ---
         // Reuses the same BED12 channel as isoforms_per_gene_ch

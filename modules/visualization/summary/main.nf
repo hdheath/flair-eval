@@ -292,7 +292,7 @@ process TpOverlapPlot {
 
 // -----------------------------------------------------------------
 // Isoforms-per-gene frequency histogram
-// Requires BED12 isoform files with label:path pairs.
+// Requires BED12/GTF/GFF isoform files with label:path pairs.
 // -----------------------------------------------------------------
 process IsoformsPerGeneHist {
     publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/isoform_structure", mode: 'copy'
@@ -303,7 +303,7 @@ process IsoformsPerGeneHist {
     tuple val(test_name), val(bed_labels), path(bed_files)
 
     output:
-    path "isoforms_per_gene/*.png", optional: true
+    path "isoforms_per_gene/*", optional: true
 
     script:
     def bed_args = []
@@ -320,8 +320,37 @@ process IsoformsPerGeneHist {
 }
 
 // -----------------------------------------------------------------
+// Read vs isoform exon-length distributions.
+// Compares the spliced read length distribution with assembler outputs.
+// -----------------------------------------------------------------
+process ExonLengthDistributionPlot {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/isoform_structure", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(bed_labels), path(bed_files), path(reads_bed)
+
+    output:
+    path "exon_length_distributions/*", optional: true
+
+    script:
+    def bed_args = []
+    for (int i = 0; i < bed_labels.size(); i++) {
+        bed_args << "${bed_labels[i]}:${bed_files[i]}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/exon_length_distribution_plot.py \\
+        --reads-bed ${reads_bed} \\
+        --bed ${bed_args.join(' ')} \\
+        --output exon_length_distributions \\
+        --verbose || true
+    """
+}
+
+// -----------------------------------------------------------------
 // Jaccard heatmaps: splice-junction + transcript-end Jaccard
-// Requires BED12 isoform files with label:path pairs.
+// Requires BED12/GTF/GFF isoform files with label:path pairs.
 // -----------------------------------------------------------------
 process JaccardHeatmapPlot {
     publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/isoform_structure", mode: 'copy'
@@ -350,7 +379,7 @@ process JaccardHeatmapPlot {
 // -----------------------------------------------------------------
 // Gene-level isoform variation proportions.
 // Classifies genes by variation type (alt ends, alt splicing, both).
-// Requires BED12 isoform files with label:path pairs.
+// Requires BED12/GTF/GFF isoform files with label:path pairs.
 // -----------------------------------------------------------------
 process GeneVariationPlot {
     publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/isoform_structure", mode: 'copy'
@@ -361,7 +390,7 @@ process GeneVariationPlot {
     tuple val(test_name), val(bed_labels), path(bed_files)
 
     output:
-    path "gene_variation/*.png", optional: true
+    path "gene_variation/*", optional: true
 
     script:
     def bed_args = []
@@ -442,7 +471,7 @@ process EndSignalScatterPlot {
           val(drna_signal_plus), val(drna_signal_minus)
 
     output:
-    path "end_signal_scatter/*.png", optional: true
+    path "end_signal_scatter/*", optional: true
 
     script:
     def bed_args = []
@@ -644,7 +673,7 @@ process ReadEndSignalScatter {
           val(drna_signal_plus), val(drna_signal_minus)
 
     output:
-    path "read_end_signal/*.png", optional: true
+    path "read_end_signal/*", optional: true
 
     script:
     def bed_args = []

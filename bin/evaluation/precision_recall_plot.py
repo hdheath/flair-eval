@@ -130,7 +130,8 @@ def _plot_pr_scatter(df, output_path, mode_order, styler, baseline_mode,
 def _plot_paired_summary(df, output_dir, mode_order, styler, baseline_mode, title_prefix=""):
     """Three paired-end plots: paired precision, paired recall (geom mean), paired F1.
 
-    Paired precision  = paired_dedup_precision (both ends hit orthogonal peaks / unique pairs)
+    Paired precision  = paired_dedup_precision (JC-unique (TSS-peak, TTS-peak) pairs where
+                        both ends hit a peak / total isoforms emitted by the method)
     Paired recall     = sqrt(5prime_recall * 3prime_recall)  [geometric mean]
     Paired F1         = harmonic mean of paired precision and paired recall
     """

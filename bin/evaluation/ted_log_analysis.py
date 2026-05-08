@@ -70,17 +70,18 @@ MATCH_WINDOW  = 100   # bp to search for a CAGE peak near TSS centroid
 # ── Loading ────────────────────────────────────────────────────────────────────
 
 def load_ted_log(path: str | Path) -> pd.DataFrame:
-    df = pd.read_csv(path, sep="\t")
-    num_cols = [
-        "n_reads", "jc_n_reads_total",
-        "tss_spread_iqr", "tts_spread_iqr",
-        "TED_tss_reality", "TED_tts_reality",
-        "TED_confidence", "threshold_tss", "threshold_tts",
-        "tss_pos", "tts_pos",
-    ]
-    for col in num_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    """Load a flair_ted.ted_log.tsv restricted to per-isoform pass/reject rows.
+
+    Delegates the schema-aware filtering (drop --ted_global partition-summary
+    rows, drop sentinel-coordinate rows on either axis) to
+    ted_log_loader.load_ted_log. The previous local loader did NOT filter
+    out global-mode `global_peak` rows or sentinel `-1` positions, so violins
+    of `tss_spread_iqr` / `tts_spread_iqr` and CAGE-width comparisons were
+    contaminated with NaN and -1 values from partition-level metadata rows.
+    """
+    from ted_log_loader import load_ted_log as _shared_load_ted_log
+
+    df = _shared_load_ted_log(path)
     if "status" in df.columns:
         df = df[df["status"].isin(["pass", "reject"])].copy()
     return df
