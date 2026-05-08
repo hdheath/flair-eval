@@ -19,8 +19,18 @@ Classification per isoform (relative to all others in its SJC group):
   Fully unique        : (5p, 3p) pair not shared with any other group member
   5p-only unique      : 5p peak distinct, 3p peak shared with another member
   3p-only unique      : 3p peak distinct, 5p peak shared with another member
-  Fully redundant     : both ends shared with the same other group member
-  Fully unsupported   : no peak on either end
+  Fully redundant     : both ends share the same ORTHO-VALIDATED peak with
+                        another member (both p5 and p3 are non-None peaks).
+                        This is the precision-relevant duplicate case.
+  Unsupported         : at least one end lacks an ortho peak (p5 is None
+                        or p3 is None). Includes (a) "no peak on either
+                        end" and (b) "shares a (peak, None) or (None, peak)
+                        signature with sibling on the missing axis." The
+                        latter previously got counted as Fully redundant
+                        even though no validated coordinate was being
+                        duplicated — those isoforms are ortho-unsupported
+                        on at least one axis, not redundant on validated
+                        coordinates.
 
 Three panels:
 
@@ -96,14 +106,28 @@ def _analyse_assembler(
     For each multi-isoform SJC group, assigns every isoform a
     (5prime_peak_iv, 3prime_peak_iv) tuple and classifies it as:
 
-      fully_unique   : peak-pair not shared with any other group member
-      unique_5p_only : 5p peak is unique in the group; 3p is shared
-      unique_3p_only : 3p peak is unique in the group; 5p is shared
-      fully_redundant: both ends shared with at least one other member
-      fully_unsupported: no peak on either end
+      fully_unique     : peak-pair not shared with any other group member
+      unique_5p_only   : 5p peak is unique in the group; 3p is shared
+      unique_3p_only   : 3p peak is unique in the group; 5p is shared
+      fully_redundant  : BOTH ends are non-None peaks AND shared with at
+                         least one other member — i.e. two isoforms
+                         duplicating the same ortho-validated CAGE+dRNA
+                         end pair. This is the precision-relevant case.
+      fully_unsupported: at least one end has no ortho peak (p5 is None
+                         or p3 is None). Includes both (a) the
+                         "no peak on either end" case and (b) the
+                         "shares a (peak, None) signature with a
+                         sibling on the ortho-blank axis" case — those
+                         previously counted as fully_redundant but
+                         neither isoform was duplicating an
+                         ortho-validated coordinate, so they belong
+                         here.
 
     Also records per-group (n_isoforms, n_fully_unique) for Panel B and
-    pairwise distances split by redundancy class for Panel C.
+    pairwise distances split by redundancy class for Panel C. Panel C's
+    redundant class already gates on "both ortho peaks non-None and
+    shared" (see same_5p / same_3p below) so its counts are unchanged
+    by this re-classification.
     """
     groups = group_by_junction_chain(isoforms)
 
@@ -180,8 +204,22 @@ def _analyse_assembler(
             elif p3_unique and not p5_unique:
                 n_unique_3p_only += 1
             else:
-                # Neither end is unique in this group → fully redundant
-                n_fully_redundant += 1
+                # Neither end is "unique" within the group, but only count
+                # this as ortho-validated redundancy when BOTH (p5, p3)
+                # are non-None peaks — i.e. two isoforms genuinely
+                # duplicating the same CAGE+dRNA-validated end pair.
+                #
+                # If either axis is None, the apparent "redundancy" is
+                # really "this isoform shares a (peak, None) or
+                # (None, peak) signature with a sibling on the
+                # ortho-blank axis" — neither isoform is being
+                # duplicated on validated coordinates, so route these
+                # into the unsupported bucket alongside the
+                # both-axes-None cases above.
+                if no_5p or no_3p:
+                    n_fully_unsup += 1
+                else:
+                    n_fully_redundant += 1
 
         group_stats.append((len(enriched), n_fu_this_group))
 
@@ -254,8 +292,8 @@ def plot_panel_a(results: dict, outdir: Path) -> None:
         ("n_fully_unique",    c_fu,    "Fully unique (distinct 5p AND 3p peak)"),
         ("n_unique_5p_only",  c_5p,    "5p unique, 3p shared"),
         ("n_unique_3p_only",  c_3p,    "3p unique, 5p shared"),
-        ("n_fully_redundant", c_red,   "Fully redundant (same 5p AND 3p peak)"),
-        ("n_fully_unsup",     c_unsup, "Fully unsupported (no peak on either end)"),
+        ("n_fully_redundant", c_red,   "Fully redundant (same ortho-validated 5p+3p)"),
+        ("n_fully_unsup",     c_unsup, "Unsupported (≥1 end lacks ortho peak)"),
     ]
 
     left = np.zeros(len(labels))

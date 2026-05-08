@@ -29,7 +29,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from pub_style import style_ax, savefig, W1, PALETTE, MODE_COLORS
-from signal_utils import parse_isoforms, gene_from_name
+from signal_utils import parse_isoforms, gene_from_name, parse_transcript_gene_map
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -40,13 +40,41 @@ def _mode_color(mode: str) -> str:
     return PALETTE[hash(mode) % len(PALETTE)]
 
 
-def _count_isoforms_per_gene(bed_path: str) -> Counter:
-    """Parse BED12 or GTF, extract gene ID, return isoforms-per-gene counts."""
+def _parse_label_path_pairs(entries) -> dict:
+    pairs = {}
+    for entry in entries or []:
+        if ":" not in entry:
+            print(f"WARNING: skipping malformed entry '{entry}' (expected label:path)",
+                  file=sys.stderr)
+            continue
+        label, path = entry.split(":", 1)
+        pairs[label] = path
+    return pairs
+
+
+def _gene_for_isoform(iso: dict, tx_to_gene: dict | None = None) -> str:
+    name = iso.get("name", "")
+    gid = None
+    if tx_to_gene is not None:
+        gid = tx_to_gene.get(name)
+    if not gid:
+        gid = iso.get("gene_id")
+    if not gid and name:
+        gid = gene_from_name(name)
+    return gid or ""
+
+
+def _count_isoforms_per_gene(path: str, source_path: str | None = None) -> Counter:
+    """Parse BED12/GTF/GFF and return isoforms-per-gene counts."""
     gene_counts: Counter = Counter()
-    isoforms = parse_isoforms(bed_path)
+    tx_to_gene = None
+    if source_path and Path(source_path).suffix in (".gtf", ".gff", ".gff3"):
+        tx_to_gene = parse_transcript_gene_map(source_path)
+    isoforms = parse_isoforms(path)
     for iso in isoforms:
-        gid = gene_from_name(iso["name"])
-        gene_counts[gid] += 1
+        gid = _gene_for_isoform(iso, tx_to_gene=tx_to_gene)
+        if gid:
+            gene_counts[gid] += 1
     return gene_counts
 
 
@@ -161,6 +189,55 @@ def plot_total_genes_bar(
     savefig(fig, output_dir / "total_genes_bar.png", dpi=300)
 
 
+def plot_gene_detection_summary(
+    method_gene_counts: dict,
+    output_dir: str,
+):
+    """Two-row summary: total genes and isoforms per gene."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    methods = list(method_gene_counts.keys())
+    n_genes = np.array([len(method_gene_counts[m]) for m in methods], dtype=float)
+    n_isoforms = np.array([sum(method_gene_counts[m].values()) for m in methods], dtype=float)
+    iso_per_gene = np.divide(
+        n_isoforms,
+        np.maximum(n_genes, 1),
+        out=np.zeros_like(n_isoforms, dtype=float),
+        where=n_genes > 0,
+    )
+    colors = [_mode_color(m) for m in methods]
+    x = np.arange(len(methods))
+
+    fig, axes = plt.subplots(
+        2, 1, figsize=(W1, W1 * 1.05), sharex=True,
+        gridspec_kw=dict(hspace=0.18),
+    )
+
+    axes[0].bar(x, n_genes, color=colors, edgecolor="white", linewidth=0.4, width=0.74)
+    if n_genes.size:
+        axes[0].set_ylim(0, max(n_genes.max() * 1.18, 1))
+    for xi, value in zip(x, n_genes):
+        axes[0].text(xi, value, f"{int(value):,}", ha="center", va="bottom", fontsize=6)
+    style_ax(axes[0], ylabel="Genes", faint_y_grid=True)
+
+    axes[1].bar(x, iso_per_gene, color=colors, edgecolor="white", linewidth=0.4, width=0.74)
+    if iso_per_gene.size and iso_per_gene.max() > 10:
+        axes[1].set_yscale("log")
+        axes[1].set_ylim(1.0, max(100.0, iso_per_gene.max() * 1.35))
+    else:
+        axes[1].set_ylim(0, max(iso_per_gene.max() * 1.30, 1.0))
+    for xi, value in zip(x, iso_per_gene):
+        y = value * (1.08 if axes[1].get_yscale() == "log" else 1.0)
+        axes[1].text(xi, y, f"{value:.1f}", ha="center", va="bottom", fontsize=6)
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(methods, rotation=38, ha="right", rotation_mode="anchor")
+    style_ax(axes[1], ylabel="Isoforms / gene", faint_y_grid=True)
+
+    fig.subplots_adjust(left=0.16, right=0.98, bottom=0.24, top=0.96, hspace=0.18)
+    savefig(fig, output_dir / "gene_detection_isoforms_per_gene.png", dpi=300)
+
+
 def plot_isoforms_per_gene_box(
     method_gene_counts: dict,
     output_dir: str,
@@ -223,6 +300,10 @@ def main():
         help="label:path pairs, e.g. baseline:path/to/baseline.isoforms.bed",
     )
     parser.add_argument(
+        "--source", nargs="*", default=[],
+        help="Optional label:path pairs for source GTF/GFF files carrying gene_id attributes",
+    )
+    parser.add_argument(
         "--output", required=True,
         help="Output directory for the histogram plot",
     )
@@ -233,17 +314,14 @@ def main():
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
+    source_by_label = _parse_label_path_pairs(args.source)
     method_gene_counts = {}
-    for entry in args.bed:
-        if ":" not in entry:
-            print(f"WARNING: skipping malformed entry '{entry}' (expected label:path)",
-                  file=sys.stderr)
-            continue
-        label, path = entry.split(":", 1)
+    for label, path in _parse_label_path_pairs(args.bed).items():
         if not Path(path).exists():
             print(f"WARNING: file not found: {path}", file=sys.stderr)
             continue
-        counts = _count_isoforms_per_gene(path)
+        source_path = source_by_label.get(label)
+        counts = _count_isoforms_per_gene(path, source_path=source_path)
         method_gene_counts[label] = counts
         if args.verbose:
             print(f"  {label}: {sum(counts.values())} isoforms across "
@@ -255,6 +333,7 @@ def main():
 
     plot_isoforms_per_gene_hist(method_gene_counts, args.output)
     plot_total_genes_bar(method_gene_counts, args.output)
+    plot_gene_detection_summary(method_gene_counts, args.output)
 
     if args.box:
         plot_isoforms_per_gene_box(method_gene_counts, args.output)

@@ -313,8 +313,16 @@ def compute_jc_deduplicated_precision_recall(
       Then:
         5' dedup TP = unique pairs with tss_peak matched
         3' dedup TP = unique pairs with tts_peak matched
+        paired dedup TP = unique pairs with BOTH peaks matched
       This means same-TSS-different-TTS isoforms both count as 5' TPs,
       and same-TTS-different-TSS both count as 3' TPs.
+
+      Denominator for ALL dedup precisions = total isoforms emitted by the
+      method (n_isoforms_total).  An isoform that fails (off-peak end, or
+      same-peak-pair as a JC sibling) shows up in the denominator but not
+      the numerator.  This rewards methods for emitting many distinct
+      peak-pair hits while penalizing both off-peak emissions and same-pair
+      duplicates within a JC.
 
     Recall:
       When peaks are provided: fraction of peaks matched by any isoform.
@@ -531,11 +539,19 @@ def compute_jc_deduplicated_precision_recall(
     results["paired_unique_pairs"] = total_paired_unique
     results["paired_both_hit"] = total_paired_both_hit
     results["paired_both_hit_raw"] = total_paired_both_hit_raw
-    # paired_dedup_precision: both-hit unique pairs / total unique pairs
+    # paired_dedup_precision:
+    #   numerator   = JC-unique (TSS-peak, TTS-peak) pairs where BOTH ends hit
+    #                 a peak within tolerance.  An isoform is "redundant" with
+    #                 a JC sibling only when it lands on the SAME (TSS-peak,
+    #                 TTS-peak) combination — single-end peak collisions or
+    #                 off-peak emissions do not collapse.
+    #   denominator = total isoforms emitted by the method.
+    # This penalizes both genuinely-wrong calls (off-peak) AND same-peak-pair
+    # JC sibling duplicates, while crediting every distinct peak-pair hit.
     # paired_naive_precision: both-hit isoforms (raw, no dedup) / total isoforms
     results["paired_dedup_precision"] = (
-        total_paired_both_hit / total_paired_unique
-        if total_paired_unique > 0 else None
+        total_paired_both_hit / total_paired_isoforms
+        if total_paired_isoforms > 0 else None
     )
     results["paired_naive_precision"] = (
         total_paired_both_hit_raw / total_paired_isoforms

@@ -24,6 +24,8 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 
 from pub_style import style_ax, savefig, W1, W2, MODE_COLORS, PALETTE
 from signal_utils import parse_isoforms, END_BIN
@@ -83,6 +85,61 @@ def _jaccard_matrix(sets_by_method, methods):
                 union = len(sets_by_method[mi] | sets_by_method[mj])
                 mat[i, j] = inter / union if union else 0.0
     return mat
+
+
+def _jaccard_display_label(label: str) -> str:
+    """Compact method labels for heatmap axes."""
+    replacements = {
+        "TED-low-3-high-5": "TED-low-3\nhigh-5",
+    }
+    return replacements.get(label, label)
+
+
+def _offdiag_values(*mats):
+    vals = []
+    for mat in mats:
+        n = mat.shape[0]
+        vals.extend(mat[~np.eye(n, dtype=bool)])
+    return np.asarray(vals, dtype=float)
+
+
+def _draw_jaccard_triangle(ax, mat, labels, title, *, norm, show_ylabels=True):
+    """Lower-triangle Jaccard heatmap with compact annotations."""
+    n = len(labels)
+    mask = np.triu(np.ones((n, n), dtype=bool), k=0)
+    masked = np.ma.array(mat, mask=mask)
+    im = ax.imshow(masked, cmap="cividis", norm=norm, aspect="equal")
+
+    display_labels = [_jaccard_display_label(m) for m in labels]
+    ax.set_xlim(-0.5, n - 1.5)
+    ax.set_ylim(n - 0.5, 0.5)
+    ax.set_xticks(np.arange(n - 1))
+    ax.set_yticks(np.arange(1, n))
+    ax.set_xticklabels(display_labels[:-1], rotation=45, ha="right",
+                       rotation_mode="anchor")
+    ax.set_yticklabels(display_labels[1:] if show_ylabels else [])
+    ax.tick_params(axis="both", which="major", direction="out", length=2.5,
+                   width=0.45, labelsize=6, pad=1)
+    if not show_ylabels:
+        ax.tick_params(axis="y", which="major", left=False)
+    ax.set_title(title, fontsize=7, pad=3, fontweight="normal")
+
+    ax.set_xticks(np.arange(-0.5, n - 0.5, 1), minor=True)
+    ax.set_yticks(np.arange(0.5, n + 0.5, 1), minor=True)
+    ax.grid(which="minor", color="white", linewidth=0.65)
+    ax.tick_params(which="minor", bottom=False, left=False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    midpoint = norm.vmin + 0.55 * (norm.vmax - norm.vmin)
+    for i in range(n):
+        for j in range(i):
+            val = float(mat[i, j])
+            color = "white" if val < midpoint else "black"
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center",
+                    fontsize=5.4, color=color)
+    ax.set_facecolor("white")
+    return im
 
 
 # ── Plot functions ──────────────────────────────────────────────────────────
@@ -145,6 +202,49 @@ def plot_end_jaccard(beds_by_method, output_dir, vmin=None):
     fig.tight_layout(w_pad=2, pad=0.3)
     savefig(fig, Path(output_dir) / "end_jaccard_heatmap.png")
     return tss_mat, tts_mat
+
+
+def plot_jaccard_summary(beds_by_method, output_dir):
+    """Three-panel lower-triangle SJ/TSS/TTS Jaccard figure."""
+    methods = list(beds_by_method.keys())
+    if len(methods) < 2:
+        print("  Skipping Jaccard summary: need >=2 methods", file=sys.stderr)
+        return None
+
+    junc_sets = {}
+    for m, isos in beds_by_method.items():
+        junc_sets[m] = {
+            (iso["chrom"], iso["strand"]) + j
+            for iso in isos
+            for j in iso["junctions"]
+        }
+    sj_mat = _jaccard_matrix(junc_sets, methods)
+    tss_map, tts_map = _compute_end_sets(beds_by_method)
+    tss_mat = _jaccard_matrix(tss_map, methods)
+    tts_mat = _jaccard_matrix(tts_map, methods)
+
+    vals = _offdiag_values(sj_mat, tss_mat, tts_mat)
+    vmin = max(0.0, np.floor((float(vals.min()) - 0.01) * 20.0) / 20.0) if vals.size else 0.0
+    norm = Normalize(vmin=vmin, vmax=1.0)
+
+    fig, axes = plt.subplots(1, 3, figsize=(W2, W2 * 0.34))
+    fig.subplots_adjust(left=0.11, right=0.89, bottom=0.31, top=0.84, wspace=0.16)
+    for idx, (ax, mat, title) in enumerate(zip(
+        axes,
+        (sj_mat, tss_mat, tts_mat),
+        ("Splice junctions", "TSS", "TTS"),
+    )):
+        _draw_jaccard_triangle(ax, mat, methods, title, norm=norm,
+                               show_ylabels=(idx == 0))
+
+    sm = ScalarMappable(norm=norm, cmap="cividis")
+    sm.set_array([])
+    cax = fig.add_axes([0.915, 0.33, 0.014, 0.49])
+    cbar = fig.colorbar(sm, cax=cax)
+    cbar.set_label("Jaccard index", fontsize=7)
+    cbar.ax.tick_params(direction="out", labelsize=6, length=2, width=0.4, pad=1)
+    savefig(fig, Path(output_dir) / "jaccard_summary_heatmap.png")
+    return sj_mat, tss_mat, tts_mat
 
 
 def compute_global_vmin(beds_by_method):
@@ -232,6 +332,7 @@ def main():
     if args.verbose:
         print(f"  Global Jaccard vmin={global_vmin:.3f}")
 
+    plot_jaccard_summary(beds_by_method, output_dir)
     plot_sj_jaccard(beds_by_method, output_dir, vmin=global_vmin)
     plot_end_jaccard(beds_by_method, output_dir, vmin=global_vmin)
     print(f"Saved Jaccard heatmaps to {output_dir}")

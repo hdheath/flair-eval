@@ -61,6 +61,13 @@ from .plots import (
 logger = get_logger()
 
 
+# Re-export the schema-aware ted_log loader so package consumers can
+# `from .ted_core import load_ted_log` and standalone diagnostic scripts
+# can sibling-import the shim directly. See ted_log_loader.py for the
+# canonical docstring.
+from .ted_log_loader import is_global_mode, load_ted_log  # noqa: F401
+
+
 def _parse_feature_attributes(attr_string: str) -> dict:
     """Parse GTF key "value" and GFF3 key=value attributes."""
     attrs = {}

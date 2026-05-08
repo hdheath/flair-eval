@@ -96,6 +96,14 @@ from .ted_core import (
     calculate_ted_metrics,
 )
 
+# Schema-aware ted_log loader — every diagnostic that reads
+# flair_ted.ted_log.tsv should go through this rather than rolling its
+# own pd.read_csv() (which silently mishandles --ted_global rows).
+from .ted_log_loader import (
+    is_global_mode,
+    load_ted_log,
+)
+
 from .flair_structural import (
     get_chromtoint,
     get_regions,

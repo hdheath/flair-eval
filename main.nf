@@ -274,3 +274,57 @@ workflow {
     // plot_inputs = ASSEMBLE_AND_EVAL.out.flair_transcriptome ...
     // PlotIsoforms(plot_inputs)
 }
+
+// =============================================================================
+// EMAIL NOTIFICATIONS
+// Fires once the workflow finishes (success OR failure). Uses the system
+// `sendmail` binary when no `mail {}` SMTP block is configured.
+// See: https://docs.seqera.io/nextflow/notifications
+// =============================================================================
+workflow.onComplete {
+    def status     = workflow.success ? 'SUCCESS' : 'FAILED'
+    def emoji      = workflow.success ? '✅' : '❌'
+    def recipient  = 'hdheath@ucsc.edu'
+
+    def body = """\
+        ${emoji} FLAIR Evaluation Pipeline — ${status}
+
+        Test name      : ${params.test_name}
+        Started        : ${workflow.start}
+        Completed      : ${workflow.complete}
+        Duration       : ${workflow.duration}
+        Exit status    : ${workflow.exitStatus}
+        Command line   : ${workflow.commandLine}
+        Work dir       : ${workflow.workDir}
+        Output dir     : ${params.outdir}
+        Project dir    : ${workflow.projectDir}
+        Launch dir     : ${workflow.launchDir}
+        Nextflow ver   : ${workflow.nextflow.version}
+        Run name       : ${workflow.runName}
+        Session ID     : ${workflow.sessionId}
+
+        ${workflow.success ? '' : 'Error message : ' + (workflow.errorMessage ?: 'n/a')}
+        ${workflow.success ? '' : 'Error report  : ' + (workflow.errorReport  ?: 'n/a')}
+        """.stripIndent()
+
+    // Attach the HTML execution report if it was generated (it usually is,
+    // but very-early failures may abort before `report{}` writes the file).
+    def report_html = file("${params.outdir}/reports/execution_report.html")
+    def attachments = report_html.exists() ? [report_html] : []
+
+    try {
+        sendMail(
+            to:      recipient,
+            from:    'hdheath@ucsc.edu',
+            subject: "[Nextflow] flair4_ted ${status}: ${params.test_name} (${workflow.runName})",
+            body:    body,
+            attach:  attachments
+        )
+    } catch (Exception e) {
+        log.warn "Could not send completion email to ${recipient}: ${e.message}"
+    }
+}
+
+workflow.onError {
+    log.error "Pipeline execution stopped with message: ${workflow.errorMessage}"
+}
