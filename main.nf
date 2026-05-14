@@ -264,7 +264,8 @@ workflow {
         dataset_signal_ch,
         ASSEMBLE_AND_EVAL.out.ted_precision_metrics,
         ASSEMBLE_AND_EVAL.out.ted_gtf_precision,
-        ASSEMBLE_AND_EVAL.out.flair_firstpass
+        ASSEMBLE_AND_EVAL.out.flair_firstpass,
+        ASSEMBLE_AND_EVAL.out.flair_cds_bed
     )
 
     // =========================================================================

@@ -57,6 +57,17 @@ include { EndSignalHeatmap         } from '../modules/visualization/summary/main
 include { ReadEndHeatmap           } from '../modules/visualization/summary/main'
 include { IsoformEndRoc            } from '../modules/visualization/summary/main'
 
+// Per-sample CDS-aware downstream analyses.
+// GeneRecoveryAnalysis only reads BED12 name fields (no CDS data
+// required), so it can run on pipelines without --predict_cds.
+// AltEndCDSAnalysis and CDSCoverageRecovery require predictProductivity
+// to have populated thickStart/thickEnd in the *.isoforms.CDS.bed files
+// (a separate file from *.isoforms.bed; the original BED is unmodified).
+include { GeneRecoveryAnalysis           } from '../modules/divergence/gene_recovery/main'
+include { AltEndCDSAnalysis              } from '../modules/divergence/alt_end_cds/main'
+include { CDSCoverageRecovery            } from '../modules/divergence/cds_coverage_recovery/main'
+include { DroppedGeneCharacterization    } from '../modules/divergence/dropped_gene_characterization/main'
+
 include { CrossSamplePrecisionRecall} from '../modules/visualization/cross_sample/main'
 include { CrossSamplePeakRoc        } from '../modules/visualization/cross_sample/main'
 include { CrossSampleConcordance    } from '../modules/visualization/cross_sample/main'
@@ -76,6 +87,7 @@ workflow SUMMARY_AND_VIZ {
         ted_precision_metrics      // tuple [test_name, dataset_name, transcriptome_mode, precision_recall_summary.tsv, per_junction_chain.tsv]
         ted_gtf_precision          // tuple [test_name, dataset_name, transcriptome_mode, gtf_precision_recall_summary.tsv]
         flair_firstpass            // tuple [test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode, firstpass_bed]
+        flair_cds_bed              // tuple [test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode, isoforms.CDS.bed, isoforms.CDS.info.tsv]
 
     main:
 
@@ -148,6 +160,54 @@ workflow SUMMARY_AND_VIZ {
             }
 
         IsoformsPerGeneHist(isoforms_per_gene_ch)
+
+        // --- Gene recovery: per-mode diff vs FLAIR baseline ---
+        // Surfaces genes dropped entirely or collapsed (N>=2 -> 1) by
+        // each TED mode. Reuses the same (test_name, labels, files)
+        // channel because the analysis only needs BED12 name fields
+        // (gene_id encoded as <iso_id>_<gene_id>).
+        GeneRecoveryAnalysis(isoforms_per_gene_ch)
+
+        // --- Dropped-gene characterization: WHAT KIND of genes is TED dropping? ---
+        // For each non-baseline mode, breaks down its dropped genes by
+        // gene biotype (protein_coding vs lncRNA vs pseudogene vs unknown),
+        // annotated transcript length, and annotated isoform count. The
+        // companion to GeneRecoveryAnalysis: that one says "how many",
+        // this one says "what kind". Joins the per-test GTF onto
+        // isoforms_per_gene_ch so we can pull biotype + tx-length stats.
+        gtf_per_test = all_eval_inputs
+            .map { items -> [items[0], items[13]] }   // test_name, gtf
+            .unique { it[0] }
+        dropped_gene_inputs = isoforms_per_gene_ch
+            .join(gtf_per_test)
+            .map { test_name, labels, files, gtf ->
+                [test_name, labels, files, gtf]
+            }
+        DroppedGeneCharacterization(dropped_gene_inputs)
+
+        // --- Alt-end CDS analysis: UTR / productivity deltas ---
+        // For SJC groups with >=2 isoforms, computes UTR length deltas
+        // and productivity-class transitions (PRO->PTC, etc.) between
+        // sibling isoforms. Consumes the *.isoforms.CDS.bed files
+        // produced by --predict_cds (predictProductivity).
+        cds_bed_ch = flair_cds_bed
+            .filter { it[6] != null }      // skip modes without CDS BED
+            .map { test_name, dataset_name, align_mode, partition_mode,
+                   partition_args, transcriptome_mode, cds_bed, cds_info ->
+                [test_name, transcriptome_mode, cds_bed]
+            }
+            .groupTuple(by: [0])
+            .map { test_name, labels, files ->
+                [test_name, labels, files.flatten()]
+            }
+        AltEndCDSAnalysis(cds_bed_ch)
+
+        // --- CDS coverage recovery: per-mode productivity diff vs FLAIR baseline ---
+        // Tracks PRO/PTC/NGO/NST class transitions per gene: how many
+        // productive ORFs survive after TED's TSS/TTS choices, and
+        // how many flip to PTC (NMD) or NGO (no-good-ORF). Reuses the
+        // same CDS-BED channel as AltEndCDSAnalysis.
+        CDSCoverageRecovery(cds_bed_ch)
 
         // --- Read vs isoform exon-length distributions ---
         reads_bed_by_test = all_eval_inputs

@@ -23,6 +23,13 @@ process FlairTranscriptome {
           path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.ted_log.tsv", optional: true), emit: transcriptome
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), val(partition_args), val(transcriptome_mode),
           path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.firstpass.bed", optional: true), emit: firstpass
+    // CDS-aware BED produced by --predict_cds (predictProductivity).
+    // File path: <out_prefix>.isoforms.CDS.bed; the original .isoforms.bed
+    // is left untouched. Optional because some pipeline modes might not
+    // run predict_cds (e.g. FLAMES, IsoSeq don't generate this file).
+    tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), val(partition_args), val(transcriptome_mode),
+          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.isoforms.CDS.bed", optional: true),
+          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.isoforms.CDS.info.tsv", optional: true), emit: cds_bed
 
     script:
     // Auto-detect junction file format: .bed → --junction_bed, .tab → --junction_tab
@@ -33,6 +40,13 @@ process FlairTranscriptome {
     def is_ted = (transcriptome_args =~ /(?:^|\s)--ted(?:\s|$)/).find()
     def ted_log_flag = is_ted ? '--ted_log' : ''
     def ted_log_file = "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.ted_log.tsv"
+    // Always run predictProductivity so downstream CDS/UTR/uORF analyses
+    // (GeneRecoveryAnalysis, AltEndCDSAnalysis, CDSCoverageRecovery)
+    // have CDS coordinates + productivity annotation in the final BED.
+    // Skip if a mode's transcriptome_args already passes --predict_cds
+    // (no-op then; flair just sees the same flag once).
+    def has_predict_cds = (transcriptome_args =~ /(?:^|\s)--predict_cds(?:\s|$)/).find()
+    def predict_cds_flag = has_predict_cds ? '' : '--predict_cds'
 
     """
     flair transcriptome \\
@@ -43,6 +57,7 @@ process FlairTranscriptome {
         --keep_intermediate \\
         ${junction_tab_arg} \\
         ${ted_log_flag} \\
+        ${predict_cds_flag} \\
         ${cleaned_args} \\
         -o ${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome
     touch ${ted_log_file}
