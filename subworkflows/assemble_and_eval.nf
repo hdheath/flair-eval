@@ -43,12 +43,67 @@ workflow ASSEMBLE_AND_EVAL {
         partitioned_with_modes = partitioned_ch.combine(datasets_ch, by: 0)
 
         // --- FLAIR ---
+        // Filter transcriptome modes by library_type, mirroring the
+        // isoquant pattern below. Modes whose names start with
+        // "lib_<library_prefix>_" run only on samples with the matching
+        // library_type prefix:
+        //   "lib_pacbio_cDNA_*"  → only pacbio_cDNA samples
+        //   "lib_ont_cDNA_*"     → only ont_cDNA samples
+        //   "lib_ont_dRNA_*"     → only ont_dRNA samples
+        //   "lib_pacbio_dRNA_*"  → only pacbio_dRNA samples
+        //   "lib_dRNA_*"         → any *_dRNA library
+        //   "lib_cDNA_*"         → any *_cDNA library
+        // All other mode names run unconditionally (back-compat with
+        // older configs that don't use the prefix convention).
         transcriptome_inputs = partitioned_with_modes.flatMap {
             test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks,
             dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
             def partition_args = ds_partition_modes[partition_mode] ?: ''
             def junction_tab_file = dataset.junction_tab ? file(dataset.junction_tab) : placeholders.NO_JUNCTION_TAB
-            ds_transcriptome_modes.collect { transcriptome_mode, transcriptome_args ->
+            def lib = dataset.library_type ?: 'unknown'
+            // List of recognized exact library_type prefixes — used to
+            // detect when a mode tag is targeting a SPECIFIC library
+            // and shouldn't fall through to broader wildcards.
+            //
+            // IMPORTANT: Utils.sanitizeModeName (lib/Utils.groovy) replaces
+            // underscores with dashes BEFORE these mode names land in
+            // ds_transcriptome_modes. So a JSON key like
+            // "lib_pacbio_cDNA_TED_global_M85_..." becomes
+            // "lib-pacbio-cDNA-TED-global-M85-...". The filter must match
+            // on the dash-prefixed form. We also dash-ify the library_type
+            // so prefix matching works (e.g. "pacbio-cDNA-").
+            def known_libs = ['pacbio-cDNA', 'pacbio-dRNA', 'ont-cDNA', 'ont-dRNA']
+            def lib_dashed = lib.replace('_', '-')
+            ds_transcriptome_modes.findAll { transcriptome_mode, transcriptome_args ->
+                // Single keep boolean — one assignment per branch — so the
+                // closure has a single explicit return point at the bottom.
+                def keep
+                if (!transcriptome_mode.startsWith('lib-')) {
+                    keep = true                                  // unrestricted
+                } else if (lib == 'unknown') {
+                    keep = true                                  // can't filter
+                } else {
+                    def tag = transcriptome_mode.substring(4)    // drop "lib-"
+                    // Exact-match library_type wins.
+                    if (tag.startsWith("${lib_dashed}-")) {
+                        keep = true
+                    } else if (known_libs.any { it != lib_dashed && tag.startsWith("${it}-") }) {
+                        // Tag targets a DIFFERENT specific library: reject.
+                        keep = false
+                    } else if (lib.endsWith('_dRNA') && tag.startsWith('dRNA-')) {
+                        keep = true                              // dRNA-family wildcard
+                    } else if (lib.endsWith('_cDNA') && tag.startsWith('cDNA-')) {
+                        keep = true                              // cDNA-family wildcard
+                    } else if (lib.startsWith('pacbio') && tag.startsWith('pacbio-')) {
+                        keep = true                              // pacbio-platform wildcard
+                    } else if (lib.startsWith('ont') && tag.startsWith('ont-')) {
+                        keep = true                              // ont-platform wildcard
+                    } else {
+                        keep = false
+                    }
+                }
+                return keep
+            }.collect { transcriptome_mode, transcriptome_args ->
                 [test_name, dataset_name, align_mode, partition_mode, partition_args, bam, bai, genome, gtf,
                  transcriptome_mode, transcriptome_args, junction_tab_file]
             }
@@ -299,4 +354,10 @@ workflow ASSEMBLE_AND_EVAL {
         all_eval_inputs         = all_eval_inputs
         flair_transcriptome     = FlairTranscriptome.out.transcriptome
         flair_firstpass         = FlairTranscriptome.out.firstpass
+        // CDS-aware BEDs from --predict_cds (predictProductivity output).
+        // Consumed by AltEndCDSAnalysis / CDSCoverageRecovery in
+        // SUMMARY_AND_VIZ. Tuple shape:
+        //   [test_name, dataset_name, align_mode, partition_mode,
+        //    partition_args, transcriptome_mode, isoforms_CDS.bed, isoforms_CDS.info.tsv]
+        flair_cds_bed           = FlairTranscriptome.out.cds_bed
 }
