@@ -30,6 +30,7 @@ process Evaluation {
           val(transcriptome_mode),
           path(isoforms_bed), path(isoforms_gtf), path(isoform_read_map),
           path(ted_log),
+          path(isoform_counts),
           path(bam), path(bai), path(reads_bed), path(genome), path(gtf),
           path(cage_peaks), path(drna_peaks),
           path(ref_tss), path(ref_tts),
@@ -77,6 +78,11 @@ process Evaluation {
     def supports_read_metrics = !transcriptome_mode.toLowerCase().startsWith('stringtie2')
     // TED internal decision log (only exists for FLAIR --ted runs)
     def ted_log_arg = (ted_log.name != 'NO_TED_LOG' && ted_log.size() > 0) ? "--ted-log ${ted_log}" : ""
+    // Per-transcript counts file (FLAIR / IsoQuant / Bambu emit one; others pass NO_COUNTS).
+    // When present, ted.py filters isoforms_observed to transcripts with count >= 1,
+    // preventing zero-support reference carry-throughs from inflating the count
+    // (notably IsoQuant: ~30% of GTF transcripts have zero supporting reads).
+    def counts_arg = (isoform_counts.name != 'NO_COUNTS' && isoform_counts.size() > 0) ? "--counts ${isoform_counts}" : ""
     def output_prefix = "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}"
 
     if (is_simplified)
@@ -130,6 +136,7 @@ process Evaluation {
         --timing-output ${output_prefix}_ted_timing.txt \\
         --output ${output_prefix}_ted.tsv \\
         ${ted_log_arg} \\
+        ${counts_arg} \\
         --verbose
 
     python ${projectDir}/bin/flair_eval.py \\
@@ -147,6 +154,7 @@ process Evaluation {
         --plot-prefix ${output_prefix} \\
         --categories-output ${output_prefix}_isoform_categories.tsv \\
         --output ${output_prefix}_flair_eval.tsv \\
+        ${counts_arg} \\
         --verbose
 
     python ${projectDir}/bin/synthesize_evaluations.py \\
@@ -196,6 +204,7 @@ process Evaluation {
         --timing-output ${output_prefix}_ted_timing.txt \\
         --output ${output_prefix}_ted.tsv \\
         ${ted_log_arg} \\
+        ${counts_arg} \\
         --verbose
 
     python ${projectDir}/bin/flair_eval.py \\
@@ -213,6 +222,7 @@ process Evaluation {
         --plot-prefix ${output_prefix} \\
         --categories-output ${output_prefix}_isoform_categories.tsv \\
         --output ${output_prefix}_flair_eval.tsv \\
+        ${counts_arg} \\
         --verbose
 
     python ${projectDir}/bin/synthesize_evaluations.py \\
@@ -254,6 +264,7 @@ process TedEndPrecision {
     // isoforms_gtf is NO_ISOFORMS_GTF for FLAIR (BED-only assembler)
     tuple val(test_name), val(dataset_name), val(transcriptome_mode),
           path(isoforms_bed), path(isoforms_gtf), path(annotation_gtf),
+          path(isoform_counts),
           path(cage_peaks), path(drna_peaks),
           val(partition_args)
 
@@ -272,6 +283,7 @@ process TedEndPrecision {
     def region_match = (partition_args =~ /--region\s+(.+?)(?:\s+--|$)/)
     def region_arg = region_match ? "--region ${region_match[0][1].trim()}" : ""
     def isoforms_arg = (isoforms_bed.name != 'NO_ISOFORMS_BED') ? "--isoforms-bed ${isoforms_bed}" : "--isoforms-gtf ${isoforms_gtf}"
+    def counts_arg = (isoform_counts.name != 'NO_COUNTS' && isoform_counts.size() > 0) ? "--counts ${isoform_counts} --min-support 1" : ""
     """
     # v3: GTF-based recall now uses every distinct annotated TSS/TTS as the
     # denominator (was JC-filtered, which made annotation-passthrough tools
@@ -283,6 +295,7 @@ process TedEndPrecision {
         ${cage_arg} \\
         ${drna_arg} \\
         ${region_arg} \\
+        ${counts_arg} \\
         --mode ${transcriptome_mode} \\
         --window 50 \\
         --outdir .
@@ -295,6 +308,7 @@ process TedEndPrecision {
         ${isoforms_arg} \\
         --gtf ${annotation_gtf} \\
         ${region_arg} \\
+        ${counts_arg} \\
         --mode ${transcriptome_mode} \\
         --window 50 \\
         --outdir gtf_only

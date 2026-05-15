@@ -16,6 +16,7 @@ import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import LogNorm
+from matplotlib.patches import Rectangle
 
 from pub_style import W1, style_ax
 
@@ -186,9 +187,14 @@ def signal_hexbin_with_marginals(
     x_clipped_high = int(np.count_nonzero(x_raw > xmax_raw))
     y_clipped_high = int(np.count_nonzero(y_raw > ymax_raw))
     visible = (x_raw <= xmax_raw) & (y_raw <= ymax_raw)
-    x_vis = x_raw[visible]
-    y_vis = y_raw[visible]
     n_visible = int(np.count_nonzero(visible))
+    positive_pair = visible & (x_raw > 0.0) & (y_raw > 0.0)
+    x_zero_y_positive = visible & (x_raw == 0.0) & (y_raw > 0.0)
+    y_zero_x_positive = visible & (y_raw == 0.0) & (x_raw > 0.0)
+    both_zero = visible & (x_raw == 0.0) & (y_raw == 0.0)
+    x_pos = x_raw[positive_pair]
+    y_pos = y_raw[positive_pair]
+    n_positive_pair = int(np.count_nonzero(positive_pair))
 
     standalone = gs is None
     if standalone:
@@ -222,10 +228,10 @@ def signal_hexbin_with_marginals(
     hex_artist = None
     hex_count_max = 0
     hex_color_vmax = 1.0
-    if n_visible:
+    if n_positive_pair:
         hex_artist = ax_sc.hexbin(
-            signal_to_axis(x_vis),
-            signal_to_axis(y_vis),
+            signal_to_axis(x_pos),
+            signal_to_axis(y_pos),
             gridsize=hex_gridsize,
             extent=(0.0, xmax_axis, 0.0, ymax_axis),
             mincnt=1,
@@ -242,14 +248,94 @@ def signal_hexbin_with_marginals(
                 hex_color_vmax = float(hex_count_max)
             hex_artist.set_norm(LogNorm(vmin=1.0, vmax=hex_color_vmax))
             hex_artist.set_clim(1.0, hex_color_vmax)
-    else:
+    elif not n_visible:
         ax_sc.text(
             0.5, 0.5, "No points within range", transform=ax_sc.transAxes,
             ha="center", va="center", fontsize=7, color="#555555",
         )
 
-    ax_sc.set_xlim(0.0, xmax_axis)
-    ax_sc.set_ylim(0.0, ymax_axis)
+    bins_x = np.linspace(0.0, xmax_axis, hist_bins)
+    bins_y = np.linspace(0.0, ymax_axis, hist_bins)
+    bin_w_x = xmax_axis / max(hist_bins - 1, 1)
+    bin_w_y = ymax_axis / max(hist_bins - 1, 1)
+    zero_rail_w_x = max(0.055 * xmax_axis, 2.2 * bin_w_x)
+    zero_rail_w_y = max(0.055 * ymax_axis, 2.2 * bin_w_y)
+    zero_rail_gap_x = max(0.015 * xmax_axis, 0.35 * bin_w_x)
+    zero_rail_gap_y = max(0.015 * ymax_axis, 0.35 * bin_w_y)
+    x_min_axis = -(zero_rail_w_x + zero_rail_gap_x)
+    y_min_axis = -(zero_rail_w_y + zero_rail_gap_y)
+
+    def _scaled_rail(values: np.ndarray, max_width: float) -> np.ndarray:
+        if values.size == 0 or values.max() <= 0:
+            return np.zeros_like(values, dtype=float)
+        denom = float(np.log10(values.max() + 1.0))
+        return max_width * np.log10(values + 1.0) / denom
+
+    y_axis_for_x_zero = signal_to_axis(y_raw[x_zero_y_positive])
+    x_zero_counts_by_y, _ = np.histogram(y_axis_for_x_zero, bins=bins_y)
+    x_axis_for_y_zero = signal_to_axis(x_raw[y_zero_x_positive])
+    y_zero_counts_by_x, _ = np.histogram(x_axis_for_y_zero, bins=bins_x)
+    x_zero_y_positive_count = int(np.count_nonzero(x_zero_y_positive))
+    y_zero_x_positive_count = int(np.count_nonzero(y_zero_x_positive))
+    both_zero_count = int(np.count_nonzero(both_zero))
+
+    if x_zero_y_positive_count or both_zero_count:
+        ax_sc.axvspan(
+            x_min_axis, -zero_rail_gap_x,
+            color=ZERO_HIST_COLOR, alpha=0.055, linewidth=0, zorder=0,
+        )
+    if y_zero_x_positive_count or both_zero_count:
+        ax_sc.axhspan(
+            y_min_axis, -zero_rail_gap_y,
+            color=ZERO_HIST_COLOR, alpha=0.055, linewidth=0, zorder=0,
+        )
+    if x_zero_y_positive_count:
+        rail_widths = _scaled_rail(x_zero_counts_by_y.astype(float), zero_rail_w_x * 0.92)
+        centers_y = 0.5 * (bins_y[:-1] + bins_y[1:])
+        heights_y = np.diff(bins_y) * 0.86
+        keep = rail_widths > 0
+        ax_sc.barh(
+            centers_y[keep],
+            rail_widths[keep],
+            left=-zero_rail_gap_x - rail_widths[keep],
+            height=heights_y[keep],
+            color=ZERO_HIST_COLOR,
+            alpha=0.70,
+            linewidth=0,
+            align="center",
+            zorder=2.2,
+        )
+    if y_zero_x_positive_count:
+        rail_heights = _scaled_rail(y_zero_counts_by_x.astype(float), zero_rail_w_y * 0.92)
+        centers_x = 0.5 * (bins_x[:-1] + bins_x[1:])
+        widths_x = np.diff(bins_x) * 0.86
+        keep = rail_heights > 0
+        ax_sc.bar(
+            centers_x[keep],
+            rail_heights[keep],
+            bottom=-zero_rail_gap_y - rail_heights[keep],
+            width=widths_x[keep],
+            color=ZERO_HIST_COLOR,
+            alpha=0.70,
+            linewidth=0,
+            align="center",
+            zorder=2.2,
+        )
+    if both_zero_count:
+        ax_sc.add_patch(Rectangle(
+            (x_min_axis, y_min_axis),
+            zero_rail_w_x,
+            zero_rail_w_y,
+            facecolor=ZERO_HIST_COLOR,
+            edgecolor="none",
+            alpha=0.80,
+            zorder=2.4,
+        ))
+
+    ax_sc.axvline(0.0, color="#555555", linewidth=0.45, alpha=0.70, zorder=2.6)
+    ax_sc.axhline(0.0, color="#555555", linewidth=0.45, alpha=0.70, zorder=2.6)
+    ax_sc.set_xlim(x_min_axis, xmax_axis)
+    ax_sc.set_ylim(y_min_axis, ymax_axis)
     _apply_raw_tpm_ticks(ax_sc, "x", xmax_raw)
     _apply_raw_tpm_ticks(ax_sc, "y", ymax_raw)
     style_ax(ax_sc, xlabel=xlabel, ylabel=ylabel)
@@ -269,8 +355,6 @@ def signal_hexbin_with_marginals(
     y_zero_count = int(np.sum(y_raw == 0.0))
     x_hist_axis = signal_to_axis(x_raw[(x_raw > 0.0) & (x_raw <= xmax_raw)])
     y_hist_axis = signal_to_axis(y_raw[(y_raw > 0.0) & (y_raw <= ymax_raw)])
-    bins_x = np.linspace(0.0, xmax_axis, hist_bins)
-    bins_y = np.linspace(0.0, ymax_axis, hist_bins)
     counts_x, edges_x = np.histogram(x_hist_axis, bins=bins_x)
     counts_y, edges_y = np.histogram(y_hist_axis, bins=bins_y)
     hist_x = np.log10(counts_x + 1.0)
@@ -280,8 +364,6 @@ def signal_hexbin_with_marginals(
     # marginal) and below axis 0 (right marginal), separated by a small gap
     # from the regular histogram.  Heights use the same log10(count + 1)
     # mapping as the regular bars so they're directly comparable.
-    bin_w_x = xmax_axis / (hist_bins - 1)
-    bin_w_y = ymax_axis / (hist_bins - 1)
     zero_bar_w_x = 0.40 * bin_w_x
     zero_bar_w_y = 0.40 * bin_w_y
     zero_bar_gap_x = 0.20 * bin_w_x
@@ -300,7 +382,7 @@ def signal_hexbin_with_marginals(
             color=ZERO_HIST_COLOR, alpha=0.85, linewidth=0.0, align="center",
         )
     # Decouple top x-axis from scatter to make room for the zero bar on the left.
-    ax_top.set_xlim(-(zero_bar_gap_x + zero_bar_w_x + 0.10 * bin_w_x), xmax_axis)
+    ax_top.set_xlim(x_min_axis, xmax_axis)
     y_top_max = max(float(hist_x.max()) if hist_x.size else 0.0, zero_h_x)
     ax_top.set_ylim(0.0, max(1.0, y_top_max * 1.08))
     ax_top.tick_params(axis="x", bottom=False, labelbottom=False, direction="out")
@@ -325,7 +407,7 @@ def signal_hexbin_with_marginals(
             color=ZERO_HIST_COLOR, alpha=0.85, linewidth=0.0, align="center",
         )
     # Decouple right y-axis from scatter to make room for the zero bar at the bottom.
-    ax_right.set_ylim(-(zero_bar_gap_y + zero_bar_w_y + 0.10 * bin_w_y), ymax_axis)
+    ax_right.set_ylim(y_min_axis, ymax_axis)
     x_right_max = max(float(hist_y.max()) if hist_y.size else 0.0, zero_h_y)
     ax_right.set_xlim(0.0, max(1.0, x_right_max * 1.08))
     ax_right.tick_params(axis="y", left=False, labelleft=False, direction="out")
@@ -349,16 +431,20 @@ def signal_hexbin_with_marginals(
         "n": int(len(x_raw)),
         "dropped": dropped,
         "n_visible": n_visible,
+        "n_positive_pair": n_positive_pair,
         "x_clipped_high": x_clipped_high,
         "y_clipped_high": y_clipped_high,
         "x_hist_max": int(counts_x.max()) if len(counts_x) else 0,
         "y_hist_max": int(counts_y.max()) if len(counts_y) else 0,
         "x_zero_count": x_zero_count,
         "y_zero_count": y_zero_count,
+        "x_zero_y_positive_count": x_zero_y_positive_count,
+        "y_zero_x_positive_count": y_zero_x_positive_count,
+        "both_zero_count": both_zero_count,
         "hex_count_max": hex_count_max,
         "hex_color_vmax": hex_color_vmax,
         "transform": "log10((TPM + 0.1) / 0.1)",
-        "density_norm": "hexbin-log-count",
+        "density_norm": "positive-positive hexbin-log-count; exact-zero axes as red rails",
     }
 
 

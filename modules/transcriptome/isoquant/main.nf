@@ -17,17 +17,28 @@ process IsoQuantAssembly {
           val(isoquant_mode), val(isoquant_args)
 
     output:
+    // transcript_counts is included in the main isoquant_gtf tuple (alongside
+    // gtf + read_map) so the evaluation subworkflow can forward it to ted.py's
+    // --counts arg. Without this filter, every GTF transcript gets counted —
+    // including ~30% IsoQuant carries forward from reference with zero reads.
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           val(isoquant_mode), path("${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}.gtf"),
           path("${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}_read_map.txt"),
+          path("${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}_transcript_counts.tsv", optional: true),
           emit: isoquant_gtf
     path "${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}_read_assignments.tsv", optional: true, emit: read_assignments
     path "${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}_transcript_counts.tsv", optional: true, emit: transcript_counts
 
     script:
     def output_prefix = "${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}"
+    // Absolute path to the isoquant env's python (2026-05-14): the conda
+    // activate emitted by Nextflow's process directive works on the login
+    // node but on some SLURM compute nodes does NOT prepend the env bin to
+    // PATH, so `isoquant.py` runs under the system python (which lacks
+    // gffutils). Pinning to the env's python bypasses the activation.
+    def isoquant_py = '/private/home/hdheath/miniforge3/envs/isoquant/bin/python3.8 /private/home/hdheath/miniforge3/envs/isoquant/bin/isoquant.py'
     """
-    isoquant.py \\
+    ${isoquant_py} \\
         --reference ${genome} \\
         --genedb ${gtf} \\
         --bam ${bam} \\

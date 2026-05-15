@@ -361,14 +361,18 @@ class BedGraphTrack:
             )
         return track
 
-    def query(self, chrom: str, start: int, end: int) -> float:
-        """Return the mean signal value over *[start, end)*.
+    def query(self, chrom: str, start: int, end: int, stat: str = "mean") -> float:
+        """Return signal over *[start, end)*.
 
-        Computes a coverage-weighted average.  Returns 0.0 when no
-        intervals overlap the query region.
+        ``stat="mean"`` computes a coverage-weighted average with uncovered
+        bases contributing zero. ``stat="max"`` returns the maximum overlapping
+        bedGraph value. ``stat="sum"`` returns the area under the signal track
+        across the window. All modes return 0.0 when no intervals overlap.
         """
         if end <= start or chrom not in self.data:
             return 0.0
+        if stat not in {"mean", "max", "sum"}:
+            raise ValueError(f"unknown signal stat: {stat!r}")
         starts, ends, vals = self.data[chrom]
         n = len(starts)
         if n == 0:
@@ -379,12 +383,19 @@ class BedGraphTrack:
         while idx < n and ends[idx] <= start:
             idx += 1
         total = 0.0
+        max_val = 0.0
         while idx < n and starts[idx] < end:
             ov_s = max(start, int(starts[idx]))
             ov_e = min(end, int(ends[idx]))
             if ov_s < ov_e:
                 total += vals[idx] * (ov_e - ov_s)
+                if vals[idx] > max_val:
+                    max_val = float(vals[idx])
             idx += 1
+        if stat == "max":
+            return max_val
+        if stat == "sum":
+            return total
         span = end - start
         return total / span if span > 0 else 0.0
 
@@ -423,6 +434,7 @@ def isoform_signal(
     qs_p: BedGraphTrack,
     qs_m: BedGraphTrack,
     window: int = SIG_WINDOW,
+    stat: str = "mean",
 ) -> Tuple[float, float]:
     """Return (TSS_signal, TTS_signal) for one isoform.
 
@@ -431,11 +443,11 @@ def isoform_signal(
     """
     ch = iso["chrom"]
     if iso["strand"] == "+":
-        tss = cage_p.query(ch, iso["start"] - window, iso["start"] + window)
-        tts = qs_p.query(ch,   iso["end"]   - window, iso["end"]   + window)
+        tss = cage_p.query(ch, iso["start"] - window, iso["start"] + window, stat=stat)
+        tts = qs_p.query(ch,   iso["end"]   - window, iso["end"]   + window, stat=stat)
     else:
-        tss = cage_m.query(ch, iso["end"]   - window, iso["end"]   + window)
-        tts = qs_m.query(ch,   iso["start"] - window, iso["start"] + window)
+        tss = cage_m.query(ch, iso["end"]   - window, iso["end"]   + window, stat=stat)
+        tts = qs_m.query(ch,   iso["start"] - window, iso["start"] + window, stat=stat)
     return tss, tts
 
 

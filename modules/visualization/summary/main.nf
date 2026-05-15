@@ -1,7 +1,7 @@
 // Module: SummaryPlots + PeakReasonHeatmap + TpOverlap + IsoformsPerGeneHist
 //         + JaccardHeatmap + TotalIsoforms + EndSignalScatter + CumulativeSignal
 //         + CombineEvaluationTSVs + InternalPrimingAnalysis + SignalReadSupport + PrSignalBalance
-//         + SqantiPrecision + DepthCalibration
+//         + SqantiPrecision + TedGlobalPileupPrecisionRecall
 // Cross-assembler comparison plots generated after all evaluations complete.
 
 /*
@@ -484,6 +484,7 @@ process EndSignalScatterPlot {
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
         --output end_signal_scatter \\
+        --signal-stat max \\
         --verbose || true
     """
 }
@@ -686,6 +687,7 @@ process ReadEndSignalScatter {
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
         --output read_end_signal \\
+        --signal-stat max \\
         --verbose || true
     """
 }
@@ -1052,8 +1054,8 @@ process TedRejectionAnalysis {
     for (int i = 0; i < labels.size(); i++) {
         log_args << "${labels[i]}:${ted_log_files[i]}:${firstpass_bed_files[i]}"
     }
-    def cage_arg = (cage_peaks && cage_peaks != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
-    def drna_arg = (drna_peaks && drna_peaks != 'NO_DRNA') ? "--drna-peaks ${drna_peaks}" : ""
+    def cage_arg = (cage_peaks && cage_peaks.name != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
+    def drna_arg = (drna_peaks && drna_peaks.name != 'NO_DRNA') ? "--drna-peaks ${drna_peaks}" : ""
     """
     # v2: use genomic span as length proxy (exact coord merge fails — centroids != endpoints)
     if [ -n "${cage_arg}" ] && [ -n "${drna_arg}" ]; then
@@ -1070,9 +1072,10 @@ process TedRejectionAnalysis {
 }
 
 // -----------------------------------------------------------------
-// TED confusion matrix: per-config 2x2 matrix of pass/reject × joint TP/FP
-// using TED log + orthogonal CAGE/dRNA peaks.  Outputs one PNG per config,
-// a multi-config comparison panel, and a summary TSV.
+// TED confusion matrix: per-config pass/reject matrix using TED log +
+// orthogonal CAGE/dRNA peaks. Per-SJC logs use joint TP/FP; --ted_global
+// logs use per-end global_peak hit/miss because global_assign has no
+// rejected candidate rows.
 // -----------------------------------------------------------------
 process TedConfusionMatrix {
     publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/ted_diagnostics/confusion_matrix", mode: 'copy'
@@ -1094,8 +1097,8 @@ process TedConfusionMatrix {
     for (int i = 0; i < labels.size(); i++) {
         log_args << "${labels[i]}:${ted_log_files[i]}"
     }
-    def cage_arg = (cage_peaks && cage_peaks != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
-    def drna_arg = (drna_peaks && drna_peaks != 'NO_DRNA') ? "--drna-peaks ${drna_peaks}" : ""
+    def cage_arg = (cage_peaks && cage_peaks.name != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
+    def drna_arg = (drna_peaks && drna_peaks.name != 'NO_DRNA') ? "--drna-peaks ${drna_peaks}" : ""
     """
     # v1: per-cluster confusion matrix from TED log + orthogonal peaks
     if [ -n "${cage_arg}" ] && [ -n "${drna_arg}" ]; then
@@ -1107,6 +1110,47 @@ process TedConfusionMatrix {
             --verbose || true
     else
         echo "Skipping TED confusion matrix: CAGE and dRNA peaks are both required." > ted_confusion_matrix_skipped.txt
+    fi
+    """
+}
+
+// -----------------------------------------------------------------
+// Global TED pileup precision/recall: compares --ted_global pileup
+// peaks and assigned snapped-end groups to orthogonal CAGE/dRNA peaks.
+// This is the stage-aware companion to final isoform end P/R.
+// -----------------------------------------------------------------
+process TedGlobalPileupPrecisionRecall {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/ted_diagnostics/global_pileup", mode: 'copy'
+    tag "${test_name}"
+    errorStrategy 'ignore'
+    memory '8 GB'
+    time '30m'
+    clusterOptions '--partition=short'
+
+    input:
+    tuple val(test_name), val(labels), path(ted_log_files),
+          val(cage_peaks), val(drna_peaks)
+
+    output:
+    path "*.{png,tsv}", optional: true
+
+    script:
+    def log_args = []
+    for (int i = 0; i < labels.size(); i++) {
+        log_args << "${labels[i]}:${ted_log_files[i]}"
+    }
+    def cage_arg = (cage_peaks && cage_peaks.name != 'NO_CAGE') ? "--cage-peaks ${cage_peaks}" : ""
+    def drna_arg = (drna_peaks && drna_peaks.name != 'NO_DRNA') ? "--drna-peaks ${drna_peaks}" : ""
+    """
+    if [ -n "${cage_arg}" ] && [ -n "${drna_arg}" ]; then
+        python ${projectDir}/bin/evaluation/ted_global_pileup_pr.py \\
+            --ted-log ${log_args.join(' ')} \\
+            ${cage_arg} \\
+            ${drna_arg} \\
+            --output . \\
+            --verbose || true
+    else
+        echo "Skipping global TED pileup P/R: CAGE and dRNA peaks are both required." > global_pileup_skipped.txt
     fi
     """
 }

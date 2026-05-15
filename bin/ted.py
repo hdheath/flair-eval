@@ -70,6 +70,13 @@ def main():
     parser.add_argument("--drna-signal-plus", type=Path, help="3' signal plus-strand bedGraph")
     parser.add_argument("--drna-signal-minus", type=Path, help="3' signal minus-strand bedGraph")
     parser.add_argument("--ted-log", type=Path, help="Path to FLAIR's per-locus TED decision log (produced by --ted --ted_log). Aggregated into run-level ted_internal_* metrics.")
+    parser.add_argument("--counts", type=Path, default=None,
+                        help="Optional per-transcript counts file (e.g. IsoQuant *_transcript_counts.tsv, "
+                             "FLAIR *.isoform.counts.txt). When provided, isoforms with count < --min-support are "
+                             "filtered out before evaluation. Use this to avoid counting zero-read reference "
+                             "transcripts that GTF-based assemblers like IsoQuant carry forward.")
+    parser.add_argument("--min-support", type=int, default=1,
+                        help="Minimum read count to consider an isoform supported (default 1; only used when --counts is given).")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
     # Metadata arguments for result tracking
     parser.add_argument("--test-name", type=str, help="Test set name")
@@ -156,6 +163,8 @@ def main():
         cage_signal_minus=args.cage_signal_minus,
         drna_signal_plus=args.drna_signal_plus,
         drna_signal_minus=args.drna_signal_minus,
+        counts_file=args.counts,
+        min_support=args.min_support,
     )
 
     # Clean up temp file if we created one

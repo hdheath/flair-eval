@@ -48,6 +48,7 @@ def plot_end_signal_scatter(
     signal_max: float = 100.0,
     auto_range: bool = False,
     hex_gridsize: int = 46,
+    signal_stat: str = "mean",
 ):
     """Multi-panel count-coloured hexbin scatter of TSS vs TTS signal.
 
@@ -81,18 +82,28 @@ def plot_end_signal_scatter(
         ss = outer[idx // ncols, idx % ncols]
         isoforms = beds_by_method[m]
 
-        sigs = [isoform_signal(iso, cage_p, cage_m, qs_p, qs_m) for iso in isoforms]
+        sigs = [
+            isoform_signal(iso, cage_p, cage_m, qs_p, qs_m, stat=signal_stat)
+            for iso in isoforms
+        ]
         tss = np.array([s[0] for s in sigs], dtype=float)
         tts = np.array([s[1] for s in sigs], dtype=float)
 
         fixed_range = None if auto_range else (signal_max, signal_max)
+        stat_label = {
+            "mean": "mean TPM",
+            "max": "max TPM",
+            "sum": "sum TPM-bp",
+        }[signal_stat]
+        xlabel = f"TTS signal (dRNA {stat_label})" if idx // ncols == nrows - 1 else ""
+        ylabel = f"TSS signal (CAGE {stat_label})" if idx % ncols == 0 else ""
         _, info = signal_hexbin_with_marginals(
             tts,
             tss,
             fig=fig,
             gs=ss,
-            xlabel="TTS signal (dRNA TPM)",
-            ylabel="TSS signal (CAGE TPM)",
+            xlabel=xlabel,
+            ylabel=ylabel,
             title=m,
             fixed_range=fixed_range,
             auto_range=auto_range,
@@ -102,7 +113,7 @@ def plot_end_signal_scatter(
             k: v for k, v in info.items()
             if k not in {"ax_sc", "ax_top", "ax_right", "cax"}
         }
-        row.update(method=m, n_isoforms=len(isoforms))
+        row.update(method=m, n_isoforms=len(isoforms), signal_stat=signal_stat)
         rows.append(row)
 
     savefig(fig, output_dir / "end_signal_scatter.png")
@@ -136,6 +147,13 @@ def main():
     parser.add_argument(
         "--hex-gridsize", type=int, default=46,
         help="Number of hexagons along the x-axis",
+    )
+    parser.add_argument(
+        "--signal-stat", choices=("mean", "max", "sum"), default="mean",
+        help=(
+            "Signal statistic over the +/-50 bp end window. Use max for "
+            "any-support diagnostics; mean preserves the historical averaging."
+        ),
     )
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()
@@ -173,6 +191,7 @@ def main():
         signal_max=args.signal_max,
         auto_range=args.auto_range,
         hex_gridsize=args.hex_gridsize,
+        signal_stat=args.signal_stat,
     )
     print(f"Saved end-signal scatter to {args.output}")
 

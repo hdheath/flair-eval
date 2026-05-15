@@ -24,6 +24,49 @@ process CrossSamplePrecisionRecall {
     """
 }
 
+process CrossSampleCellLinePrecisionPanel {
+    publishDir "${params.outdir}/summary/${params.test_name}/end_accuracy/precision_recall", mode: 'copy'
+    tag "cell_line_precision_support"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), path(ortho_pr_tsvs), path(gtf_pr_tsvs),
+          val(isoform_samples), val(isoform_modes), val(isoform_files),
+          val(gtf_samples), val(gtf_paths)
+
+    output:
+    path "cell_line_precision_support/*", emit: cell_line_precision_panel, optional: true
+
+    script:
+    def isoform_args = []
+    for (int i = 0; i < isoform_samples.size(); i++) {
+        isoform_args << "${isoform_samples[i]}:${isoform_modes[i]}:${isoform_files[i]}"
+    }
+    def gtf_args = []
+    for (int i = 0; i < gtf_samples.size(); i++) {
+        gtf_args << "${gtf_samples[i]}:${gtf_paths[i]}"
+    }
+    def star_args = []
+    if (params.a549_star_sj) {
+        star_args << "A549:${params.a549_star_sj}"
+    }
+    if (params.wtc11_star_sj) {
+        star_args << "WTC11:${params.wtc11_star_sj}"
+    }
+    """
+    python ${projectDir}/bin/evaluation/cell_line_precision_support_panel.py \\
+        --test-name ${test_name} \\
+        --ortho-pr ${ortho_pr_tsvs} \\
+        --gtf-pr ${gtf_pr_tsvs} \\
+        --isoform ${isoform_args.join(' ')} \\
+        --gtf ${gtf_args.join(' ')} \\
+        --star-sj ${star_args.join(' ')} \\
+        --min-star-unique 1 \\
+        --output cell_line_precision_support \\
+        --verbose || true
+    """
+}
+
 process CrossSampleConcordance {
     publishDir "${params.outdir}/summary/${params.test_name}/comparison/concordance", mode: 'copy'
     tag "cross_sample_concordance"
@@ -131,4 +174,3 @@ process CrossSamplePeakRoc {
         --verbose || true
     """
 }
-

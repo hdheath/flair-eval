@@ -52,6 +52,7 @@ def plot_read_end_signal_scatter(
     max_reads: int = 0,
     signal_max: float = 100.0,
     auto_range: bool = False,
+    signal_stat: str = "mean",
 ):
     """Multi-panel count-coloured hexbin scatter of TSS vs TTS signal per read."""
     output_dir = Path(output_dir)
@@ -78,18 +79,28 @@ def plot_read_end_signal_scatter(
         total = len(reads)
         reads = subsample(reads, max_n=max_reads)
 
-        sigs = [isoform_signal(r, cage_p, cage_m, qs_p, qs_m) for r in reads]
+        sigs = [
+            isoform_signal(r, cage_p, cage_m, qs_p, qs_m, stat=signal_stat)
+            for r in reads
+        ]
         tss = np.array([s[0] for s in sigs], dtype=float)
         tts = np.array([s[1] for s in sigs], dtype=float)
 
         fixed_range = None if auto_range else (signal_max, signal_max)
+        stat_label = {
+            "mean": "mean TPM",
+            "max": "max TPM",
+            "sum": "sum TPM-bp",
+        }[signal_stat]
+        xlabel = f"TTS signal (dRNA {stat_label})" if idx // ncols == nrows - 1 else ""
+        ylabel = f"TSS signal (CAGE {stat_label})" if idx % ncols == 0 else ""
         _, info = signal_hexbin_with_marginals(
             tts,
             tss,
             fig=fig,
             gs=ss,
-            xlabel="TTS signal (dRNA TPM)",
-            ylabel="TSS signal (CAGE TPM)",
+            xlabel=xlabel,
+            ylabel=ylabel,
             title=sample,
             fixed_range=fixed_range,
             auto_range=auto_range,
@@ -103,6 +114,7 @@ def plot_read_end_signal_scatter(
             sample=sample,
             total_reads=total,
             plotted_reads=len(reads),
+            signal_stat=signal_stat,
         )
         rows.append(row)
 
@@ -135,6 +147,13 @@ def main():
     parser.add_argument(
         "--auto-range", action="store_true",
         help="Use per-panel data-driven signal axis limits instead of --signal-max",
+    )
+    parser.add_argument(
+        "--signal-stat", choices=("mean", "max", "sum"), default="mean",
+        help=(
+            "Signal statistic over the +/-50 bp read-end window. Use max for "
+            "any-support diagnostics; mean preserves the historical averaging."
+        ),
     )
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()
@@ -171,6 +190,7 @@ def main():
         max_reads=args.max_reads,
         signal_max=args.signal_max,
         auto_range=args.auto_range,
+        signal_stat=args.signal_stat,
     )
     print(f"Saved read end-signal scatter to {args.output}")
 

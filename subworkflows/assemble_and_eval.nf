@@ -215,45 +215,65 @@ workflow ASSEMBLE_AND_EVAL {
             }
 
         // --- Normalize assembler outputs to common shape ---
+        // Common shape: [test_name, dataset_name, align_mode, partition_mode,
+        //   transcriptome_mode, isoforms_bed, isoforms_gtf, isoform_read_map,
+        //   ted_log, isoform_counts]
+        //
+        // The trailing isoform_counts (added 2026-05-14) is passed to ted.py
+        // --counts so isoforms_observed reflects transcripts with read
+        // support >= 1, not every model emitted in the GTF. Assemblers that
+        // don't track per-transcript counts (IsoSeq, FLAMES, StringTie2)
+        // get the NO_COUNTS placeholder, which ted.py treats as "no filter,
+        // count all bed lines" — preserving today's behavior for those.
+
+        // NO_TED_LOG / NO_COUNTS placeholders for assemblers that don't
+        // emit those files.
+        def NO_TED_LOG = file("${workflow.workDir}/NO_TED_LOG")
+        if (!NO_TED_LOG.exists()) { NO_TED_LOG.text = '' }
+        def NO_COUNTS = file("${workflow.workDir}/NO_COUNTS")
+        if (!NO_COUNTS.exists()) { NO_COUNTS.text = '' }
+
         flair_isoform_ch = FlairTranscriptome.out.transcriptome.map {
             test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode,
             isoforms_bed, isoforms_gtf, isoforms_fa, isoform_counts, isoform_read_map, ted_log ->
             [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode,
-             isoforms_bed, placeholders.NO_ISOFORMS_GTF, isoform_read_map, ted_log]
+             isoforms_bed, placeholders.NO_ISOFORMS_GTF, isoform_read_map, ted_log,
+             isoform_counts ?: NO_COUNTS]
         }
 
-        // NO_TED_LOG placeholder for non-FLAIR assemblers
-        def NO_TED_LOG = file("${workflow.workDir}/NO_TED_LOG")
-        if (!NO_TED_LOG.exists()) { NO_TED_LOG.text = '' }
-
         bambu_isoform_ch = BambuAssembly.out.bambu_gtf.map {
-            test_name, dataset_name, align_mode, partition_mode, bambu_mode, isoforms_gtf, isoform_read_map ->
+            test_name, dataset_name, align_mode, partition_mode, bambu_mode, isoforms_gtf, isoform_read_map, isoform_counts ->
             [test_name, dataset_name, align_mode, partition_mode, "bambu_${bambu_mode}",
-             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG]
+             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG,
+             isoform_counts ?: NO_COUNTS]
         }
 
         isoquant_isoform_ch = IsoQuantAssembly.out.isoquant_gtf.map {
-            test_name, dataset_name, align_mode, partition_mode, isoquant_mode, isoforms_gtf, isoform_read_map ->
+            test_name, dataset_name, align_mode, partition_mode, isoquant_mode, isoforms_gtf, isoform_read_map, isoform_counts ->
             [test_name, dataset_name, align_mode, partition_mode, "isoquant_${isoquant_mode}",
-             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG]
+             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG,
+             isoform_counts ?: NO_COUNTS]
         }
 
         isoseq_isoform_ch = IsoSeqAssembly.out.isoseq_gff.map {
             test_name, dataset_name, align_mode, partition_mode, isoseq_mode, isoforms_gff, isoform_read_map ->
             [test_name, dataset_name, align_mode, partition_mode, "isoseq_${isoseq_mode}",
-             placeholders.NO_ISOFORMS_BED, isoforms_gff, isoform_read_map, NO_TED_LOG]
+             placeholders.NO_ISOFORMS_BED, isoforms_gff, isoform_read_map, NO_TED_LOG,
+             NO_COUNTS]
         }
 
         flames_isoform_ch = FlamesAssembly.out.flames_gtf.map {
             test_name, dataset_name, align_mode, partition_mode, flames_mode, isoforms_gtf, isoform_read_map ->
             [test_name, dataset_name, align_mode, partition_mode, "flames_${flames_mode}",
-             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG]
+             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG,
+             NO_COUNTS]
         }
 
         stringtie2_isoform_ch = StringTie2Assembly.out.stringtie2_gtf.map {
             test_name, dataset_name, align_mode, partition_mode, stringtie2_mode, isoforms_gtf, isoform_read_map ->
             [test_name, dataset_name, align_mode, partition_mode, "stringtie2_${stringtie2_mode}",
-             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG]
+             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG,
+             NO_COUNTS]
         }
 
         // Single combine: normalize → mix → join context
@@ -270,8 +290,11 @@ workflow ASSEMBLE_AND_EVAL {
         // Runs for any mode where at least one peak file exists.
         // FLAIR → uses isoforms_bed; GTF-only assemblers → uses isoforms_gtf.
         // all_eval_inputs shape: [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode,
-        //   isoforms_bed, isoforms_gtf, isoform_read_map, ted_log, bam, bai, reads_bed, genome, gtf,
+        //   isoforms_bed, isoforms_gtf, isoform_read_map, ted_log, isoform_counts,
+        //   bam, bai, reads_bed, genome, gtf,
         //   cage_peaks, drna_peaks, ref_tss, ref_tts, library_type, ...]
+        // (isoform_counts added 2026-05-14; downstream consumers in summary_and_viz.nf
+        // had positional indices shifted by +1 accordingly)
         // We also need partition_args — retrieve from FLAIR transcriptome for FLAIR modes,
         // and from the partitioned_with_modes for non-FLAIR modes.
         // Simplest: re-derive partition_args from eval_context_ch (it doesn't carry it).
@@ -289,22 +312,25 @@ workflow ASSEMBLE_AND_EVAL {
             .combine(partition_args_ch, by: [0, 1, 2, 3])
             .filter { items ->
                 // items: [0-4]=keys+transcriptome_mode, [5]=isoforms_bed, [6]=isoforms_gtf,
-                //   [7]=read_map, [8]=ted_log, [9]=bam, [10]=bai, [11]=reads_bed,
-                //   [12]=genome, [13]=gtf, [14]=cage_peaks, [15]=drna_peaks, ..., last=partition_args
-                def cage = items[14]
-                def drna = items[15]
+                //   [7]=read_map, [8]=ted_log, [9]=isoform_counts, [10]=bam, [11]=bai,
+                //   [12]=reads_bed, [13]=genome, [14]=gtf, [15]=cage_peaks, [16]=drna_peaks,
+                //   ..., last=partition_args
+                // (isoform_counts inserted 2026-05-14 to drive ted.py --counts; shifts later positions by 1)
+                def cage = items[15]
+                def drna = items[16]
                 def has_cage = cage.name != 'NO_CAGE' && cage.size() > 0
                 def has_drna = drna.name != 'NO_DRNA' && drna.size() > 0
                 has_cage || has_drna
             }
             .map { test_name, dataset_name, align_mode, partition_mode, transcriptome_mode,
-                   isoforms_bed, isoforms_gtf, isoform_read_map, ted_log,
+                   isoforms_bed, isoforms_gtf, isoform_read_map, ted_log, isoform_counts,
                    bam, bai, reads_bed, genome, gtf,
                    cage_peaks, drna_peaks, ref_tss, ref_tts, library_type,
                    cage_signal_plus, cage_signal_minus, drna_signal_plus, drna_signal_minus,
                    partition_args ->
                 [test_name, dataset_name, transcriptome_mode,
-                 isoforms_bed, isoforms_gtf, gtf, cage_peaks, drna_peaks, partition_args]
+                 isoforms_bed, isoforms_gtf, gtf, isoform_counts,
+                 cage_peaks, drna_peaks, partition_args]
             }
         TedEndPrecision(ted_precision_inputs)
 
