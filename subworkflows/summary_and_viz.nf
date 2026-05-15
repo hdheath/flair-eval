@@ -40,18 +40,17 @@ include { EndSignalScatterPlot     } from '../modules/visualization/summary/main
 include { CumulativeSignalPlot     } from '../modules/visualization/summary/main'
 include { TedScoreVsSignal         } from '../modules/visualization/summary/main'
 include { SjcAltEndAnalysis        } from '../modules/visualization/summary/main'
-include { TedComponentDiagnostic   } from '../modules/visualization/summary/main'
 include { ReadEndSignalScatter     } from '../modules/visualization/summary/main'
 include { PeakRocCurves            } from '../modules/visualization/summary/main'
 include { InternalPrimingAnalysis  } from '../modules/visualization/summary/main'
 include { SignalReadSupport        } from '../modules/visualization/summary/main'
 include { PrSignalBalance          } from '../modules/visualization/summary/main'
 include { SqantiPrecision          } from '../modules/visualization/summary/main'
-include { DepthCalibration         } from '../modules/visualization/summary/main'
 include { ClusterSpreadPlots       } from '../modules/visualization/summary/main'
 include { TedLogAnalysis           } from '../modules/visualization/summary/main'
 include { TedRejectionAnalysis     } from '../modules/visualization/summary/main'
 include { TedConfusionMatrix       } from '../modules/visualization/summary/main'
+include { TedGlobalPileupPrecisionRecall } from '../modules/visualization/summary/main'
 include { EndSignalMetaplot        } from '../modules/visualization/summary/main'
 include { EndSignalHeatmap         } from '../modules/visualization/summary/main'
 include { ReadEndHeatmap           } from '../modules/visualization/summary/main'
@@ -69,6 +68,7 @@ include { CDSCoverageRecovery            } from '../modules/divergence/cds_cover
 include { DroppedGeneCharacterization    } from '../modules/divergence/dropped_gene_characterization/main'
 
 include { CrossSamplePrecisionRecall} from '../modules/visualization/cross_sample/main'
+include { CrossSampleCellLinePrecisionPanel } from '../modules/visualization/cross_sample/main'
 include { CrossSamplePeakRoc        } from '../modules/visualization/cross_sample/main'
 include { CrossSampleConcordance    } from '../modules/visualization/cross_sample/main'
 include { CrossSampleSignalSupport  } from '../modules/visualization/cross_sample/main'
@@ -176,7 +176,7 @@ workflow SUMMARY_AND_VIZ {
         // this one says "what kind". Joins the per-test GTF onto
         // isoforms_per_gene_ch so we can pull biotype + tx-length stats.
         gtf_per_test = all_eval_inputs
-            .map { items -> [items[0], items[13]] }   // test_name, gtf
+            .map { items -> [items[0], items[14]] }   // test_name, gtf
             .unique { it[0] }
         dropped_gene_inputs = isoforms_per_gene_ch
             .join(gtf_per_test)
@@ -211,7 +211,7 @@ workflow SUMMARY_AND_VIZ {
 
         // --- Read vs isoform exon-length distributions ---
         reads_bed_by_test = all_eval_inputs
-            .map { items -> [items[0], items[11]] }
+            .map { items -> [items[0], items[12]] }   // test_name, reads_bed (shifted +1 by isoform_counts insertion)
             .unique { it[0] }
 
         exon_length_inputs = isoforms_per_gene_ch
@@ -343,7 +343,7 @@ workflow SUMMARY_AND_VIZ {
         read_end_heatmap_inputs = cumulative_bed_ch
             .join(
                 all_eval_inputs
-                    .map { items -> [items[0], items[11]] }  // test_name, reads_bed
+                    .map { items -> [items[0], items[12]] }  // test_name, reads_bed (shifted +1 by isoform_counts insertion)
                     .unique { it[0] }                         // one reads_bed per test_name
             )
             .map { test_name, bed_labels, bed_files, read_maps, reads_bed ->
@@ -355,7 +355,7 @@ workflow SUMMARY_AND_VIZ {
         // Reuses cumulative_bed_ch (has read_maps) and adds peak files.
         // Peaks are per-dataset but identical within a test_name; take first.
         dataset_peaks_ch = all_eval_inputs
-            .map { items -> [items[0], items[14], items[15]] }  // test_name, cage_peaks, qs_peaks
+            .map { items -> [items[0], items[15], items[16]] }  // test_name, cage_peaks, drna_peaks (shifted +1)
             .unique { it[0] }  // one per test_name
 
         sjc_alt_end_inputs = cumulative_bed_ch
@@ -384,7 +384,7 @@ workflow SUMMARY_AND_VIZ {
 
         SjcAltEndAnalysis(sjc_alt_end_inputs)
 
-        // --- TED component diagnostic: ROC, violins, heatmaps, weight sweep ---
+        // --- Isoform end AUC-ROC: signal-as-score, JC-dedup TP labels ---
         // Uses signal_bed_ch (no read maps) + peaks + signal tracks.
         ted_diag_inputs = signal_bed_ch
             .join(dataset_peaks_ch)
@@ -409,10 +409,6 @@ workflow SUMMARY_AND_VIZ {
                  drna_signal_plus, drna_signal_minus]
             }
 
-        TedComponentDiagnostic(ted_diag_inputs)
-
-        // --- Isoform end AUC-ROC: signal-as-score, JC-dedup TP labels ---
-        // Reuses ted_diag_inputs: same bed files + peaks + signal tracks.
         IsoformEndRoc(ted_diag_inputs)
 
         // --- Read end-signal scatter: raw read ends vs orthogonal signal ---
@@ -420,8 +416,8 @@ workflow SUMMARY_AND_VIZ {
         // share the same reads, then group by test_name.
         read_signal_ch = all_eval_inputs
             .map { items ->
-                // items[1]=dataset_name, items[11]=reads_bed
-                [items[0], items[1], items[11]]
+                // items[1]=dataset_name, items[12]=reads_bed (shifted +1 by isoform_counts insertion)
+                [items[0], items[1], items[12]]
             }
             .unique { it[0] + '::' + it[1] }
             .groupTuple(by: [0])
@@ -454,8 +450,8 @@ workflow SUMMARY_AND_VIZ {
         // Genome and GTF are the same for all modes in a test_name; take first.
         genome_gtf_ch = all_eval_inputs
             .map { items ->
-                // items[12]=genome, items[13]=gtf
-                [items[0], items[12], items[13]]
+                // items[13]=genome, items[14]=gtf (shifted +1 by isoform_counts insertion)
+                [items[0], items[13], items[14]]
             }
             .unique { it[0] }
 
@@ -490,7 +486,8 @@ workflow SUMMARY_AND_VIZ {
             .map { items ->
                 def isoform_file = items[5].name.contains('NO_ISOFORMS_BED') ? items[6] : items[5]
                 // key = [test_name, dataset_name, align_mode, partition_mode, transcriptome_mode]
-                [items[0], items[1], items[2], items[3], items[4], isoform_file, items[13]]
+                // items[14]=gtf (shifted +1 by isoform_counts insertion)
+                [items[0], items[1], items[2], items[3], items[4], isoform_file, items[14]]
             }
             .filter { !it[5].name.contains('NO_ISOFORMS') }
             .join(
@@ -511,7 +508,7 @@ workflow SUMMARY_AND_VIZ {
             }
             .join(
                 all_eval_inputs
-                    .map { items -> [items[0], items[14], items[15]] }
+                    .map { items -> [items[0], items[15], items[16]] }   // shifted +1
                     .unique { it[0] }
             )
             .map { test_name, labels, beds, gtf, cat_tsvs, cage_peaks, drna_peaks ->
@@ -535,9 +532,9 @@ workflow SUMMARY_AND_VIZ {
 
         PrSignalBalance(pr_signal_inputs)
 
-        // --- Depth calibration: TED log n_reads, acceptance rate, depth-score violin ---
+        // --- TED log-backed diagnostics ---
         // Only include modes that produced a real TED log (non-placeholder, non-empty).
-        depth_cal_ch = all_eval_inputs
+        ted_log_ch = all_eval_inputs
             .map { items ->
                 // items[4]=transcriptome_mode, items[8]=ted_log
                 def ted_log = items[8]
@@ -550,14 +547,12 @@ workflow SUMMARY_AND_VIZ {
                 [test_name, labels, logs.flatten()]
             }
 
-        DepthCalibration(depth_cal_ch)
-
         // --- Cluster spread plots (D2a): IQR violin by pass/reject status ---
-        ClusterSpreadPlots(depth_cal_ch)
+        ClusterSpreadPlots(ted_log_ch)
 
         // --- TED log analysis (E1+E2): end spread + CAGE peak width vs cluster IQR ---
-        // Reuses depth_cal_ch + CAGE peaks BED (from dataset_peaks_ch).
-        ted_log_analysis_inputs = depth_cal_ch
+        // Reuses ted_log_ch + CAGE peaks BED (from dataset_peaks_ch).
+        ted_log_analysis_inputs = ted_log_ch
             .join(dataset_peaks_ch)
             .map { test_name, ted_log_labels, ted_log_files, cage_peaks, _drna_peaks ->
                 [test_name, ted_log_labels, ted_log_files, cage_peaks]
@@ -580,7 +575,7 @@ workflow SUMMARY_AND_VIZ {
                 [test_name, labels, beds.flatten()]
             }
 
-        ted_rejection_inputs = depth_cal_ch
+        ted_rejection_inputs = ted_log_ch
             .join(firstpass_keyed, remainder: true)
             .join(dataset_peaks_ch)
             .map { test_name, ted_log_labels, ted_log_files,
@@ -603,7 +598,7 @@ workflow SUMMARY_AND_VIZ {
         // --- TED confusion matrix: pass/reject × joint TP/FP per config ---
         // Uses TED log + orthogonal CAGE/dRNA peaks.  No firstpass BED needed
         // (we score the TED log positions directly).
-        ted_confusion_inputs = depth_cal_ch
+        ted_confusion_inputs = ted_log_ch
             .join(dataset_peaks_ch)
             .map { test_name, ted_log_labels, ted_log_files, cage_peaks, drna_peaks ->
                 [test_name, ted_log_labels, ted_log_files, cage_peaks, drna_peaks]
@@ -611,11 +606,14 @@ workflow SUMMARY_AND_VIZ {
 
         TedConfusionMatrix(ted_confusion_inputs)
 
+        // --- Global TED pileup P/R: raw peaks → validated peaks → assigned ends ---
+        TedGlobalPileupPrecisionRecall(ted_confusion_inputs)
+
         // --- Isoform diversity: parallel-coordinates across multi-region partitions ---
         // Extract regions from partition_mode args.  Only runs when ≥2 regions detected.
         diversity_ch = all_eval_inputs
             .map { test_name, dataset_name, align_mode, partition_mode, transcriptome_mode,
-                   isoforms_bed, isoforms_gtf, isoform_read_map, ted_log,
+                   isoforms_bed, isoforms_gtf, isoform_read_map, ted_log, isoform_counts,
                    bam, bai, reads_bed, genome, gtf,
                    cage_peaks, drna_peaks, ref_tss, ref_tts,
                    library_type,
@@ -673,6 +671,50 @@ workflow SUMMARY_AND_VIZ {
         CrossSampleSignalSupport(cross_sample_evals)
         CrossSampleLandscape(cross_sample_evals)
         CrossSampleToolEndAccuracy(cross_sample_evals)
+
+        // --- Cell-line precision support panel: end precision + SJ precision ---
+        // One three-column figure per cell line:
+        //   5' reference vs CAGE, 3' reference vs dRNA, GTF SJ vs STAR SJ.
+        cell_line_isoform_inputs = all_eval_inputs
+            .map { items ->
+                def isoform_file = items[5].name.contains('NO_ISOFORMS_BED') ? items[6] : items[5]
+                [params.test_name, items[1], items[4], isoform_file.toString()]
+            }
+            .filter { !it[3].contains('NO_ISOFORMS') }
+            .groupTuple(by: [0])
+            .map { test_name, sample_ids, transcriptome_modes, isoform_files ->
+                [test_name, sample_ids, transcriptome_modes, isoform_files.flatten()]
+            }
+
+        cell_line_gtf_inputs = all_eval_inputs
+            .map { items ->
+                [params.test_name, items[1], items[14].toString()]
+            }
+            .unique { it[1] }
+            .groupTuple(by: [0])
+            .map { test_name, sample_ids, gtfs ->
+                [test_name, sample_ids, gtfs]
+            }
+
+        cross_sample_gtf_pr_tsvs = CombineGtfPrecisionRecall.out.combined_pr
+            .map { test_name, gtf_tsv -> [params.test_name, gtf_tsv] }
+            .groupTuple()
+
+        cell_line_precision_inputs = CombinePrecisionRecall.out.combined_pr
+            .map { test_name, pr_tsv -> [params.test_name, pr_tsv] }
+            .groupTuple()
+            .join(cross_sample_gtf_pr_tsvs)
+            .join(cell_line_isoform_inputs)
+            .join(cell_line_gtf_inputs)
+            .map { test_name, ortho_pr_tsvs, gtf_pr_tsvs,
+                   isoform_sample_ids, transcriptome_modes, isoform_files,
+                   gtf_sample_ids, gtf_paths ->
+                [test_name, ortho_pr_tsvs, gtf_pr_tsvs,
+                 isoform_sample_ids, transcriptome_modes, isoform_files,
+                 gtf_sample_ids, gtf_paths]
+            }
+
+        CrossSampleCellLinePrecisionPanel(cell_line_precision_inputs)
 
         // --- Cross-sample signal-stratified peak recovery curves ---
         cross_sample_reasons = cage_peak_reason_tsvs

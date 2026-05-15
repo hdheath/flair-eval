@@ -218,6 +218,65 @@ def parse_isoforms_gtf(gtf_path: str, region_chrom: str = None,
     return parse_gtf_transcripts(gtf_path, regions)
 
 
+def load_supported_ids(counts_path: Optional[str], min_support: int) -> Optional[Set[str]]:
+    """Return transcript IDs with count >= min_support, or None if unavailable.
+
+    Supports IsoQuant two-column counts, Bambu TXNAME/GENEID/sample counts,
+    and FLAIR isoform count tables by treating column 1 as the transcript ID
+    and summing numeric fields to its right.
+    """
+    if not counts_path:
+        return None
+    path = Path(counts_path)
+    if not path.exists():
+        return None
+    supported: Set[str] = set()
+    n_parsed = 0
+    with open(path) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith("#"):
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 2:
+                continue
+            numeric_values = []
+            for value in parts[1:]:
+                try:
+                    numeric_values.append(float(value))
+                except ValueError:
+                    continue
+            if not numeric_values:
+                continue
+            n_parsed += 1
+            if sum(numeric_values) >= min_support:
+                supported.add(parts[0])
+    return supported if n_parsed else None
+
+
+def _matches_supported_id(tx_id: str, supported_ids: Set[str]) -> bool:
+    """Match direct IDs plus the FLAIR `transcript_gene` naming convention."""
+    if tx_id in supported_ids:
+        return True
+    if "_" in tx_id and tx_id.split("_", 1)[0] in supported_ids:
+        return True
+    return False
+
+
+def filter_isoforms_by_counts(
+    isoforms: List[dict],
+    supported_ids: Optional[Set[str]],
+) -> List[dict]:
+    """Filter parsed BED/GTF isoforms to supported transcript IDs."""
+    if supported_ids is None:
+        return isoforms
+    filtered = []
+    for iso in isoforms:
+        tx_id = str(iso.get("tx_id") or iso.get("name") or "")
+        if tx_id and _matches_supported_id(tx_id, supported_ids):
+            filtered.append(iso)
+    return filtered
+
+
 def parse_peaks_bed(path: str, regions: Optional[List[Region]] = None
                     ) -> Dict[Tuple[str, str], List[Tuple[int, int]]]:
     """Parse BED6 peaks into {(chrom, strand): sorted (start, end) intervals}.
@@ -645,6 +704,10 @@ def main():
                               "(e.g. chr7:116000000-117000000 chr11:64000000-69000000)"))
     parser.add_argument("--mode", default="",
                         help="Label for the transcriptome mode (for summary TSV)")
+    parser.add_argument("--counts", default=None,
+                        help="Optional per-transcript counts table for support filtering")
+    parser.add_argument("--min-support", type=int, default=1,
+                        help="Minimum transcript count retained when --counts is provided")
     parser.add_argument("--outdir", required=True,
                         help="Output directory")
     args = parser.parse_args()
@@ -685,6 +748,15 @@ def main():
     else:
         log.info("Parsing isoforms GTF...")
         isoforms = parse_gtf_transcripts(args.isoforms_gtf, regions)
+    supported_ids = load_supported_ids(args.counts, args.min_support)
+    if supported_ids is not None:
+        n_before = len(isoforms)
+        isoforms = filter_isoforms_by_counts(isoforms, supported_ids)
+        log.info(
+            "Read-support filter: kept %d/%d isoforms "
+            "(count >= %s in %s)",
+            len(isoforms), n_before, args.min_support, Path(args.counts).name,
+        )
     log.info(f"  {len(isoforms)} isoforms")
 
     log.info("Computing JC-deduplicated precision/recall...")

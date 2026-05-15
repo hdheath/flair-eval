@@ -674,6 +674,56 @@ def tss_tts_metrics(
                 pass
 
 
+def _load_supported_ids(counts_path: Path, min_support: int) -> Optional[set]:
+    """Parse a per-transcript counts file and return the set of transcript_ids
+    with total count >= min_support, or None if the file can't be parsed.
+
+    Supports two schemas seen in this project:
+      - IsoQuant `*_transcript_counts.tsv` — header `#feature_id\\tcount`,
+        one row per transcript_id (single sample).
+      - Bambu `*_counts_transcript.txt` — header `TXNAME\\tGENEID\\tsample`,
+        one row per transcript_id, with one or more numeric sample columns.
+      - FLAIR `*.isoform.counts.txt` — no header, col1=transcript_id,
+        col2=total count, col3=per-sample count.
+
+    The parser treats the first column as the transcript ID and sums numeric
+    fields to the right.  This handles Bambu's non-numeric GENEID column while
+    preserving the existing IsoQuant/FLAIR behavior for count >= threshold
+    filtering.
+    """
+    if counts_path is None or not Path(counts_path).exists():
+        return None
+    supported = set()
+    n_parsed = 0
+    with open(counts_path) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith('#'):
+                continue
+            parts = line.rstrip('\n').split('\t')
+            if len(parts) < 2:
+                continue
+            numeric_values = []
+            for value in parts[1:]:
+                try:
+                    numeric_values.append(float(value))
+                except ValueError:
+                    continue
+            if not numeric_values:
+                continue
+            total = sum(numeric_values)
+            n_parsed += 1
+            if total >= min_support:
+                supported.add(parts[0])
+    # If the file is empty or unparseable (no data rows), treat as "no
+    # filter" rather than "filter to nothing". Bambu sometimes writes a
+    # placeholder empty counts file when writeBambuOutput didn't produce
+    # one; without this guard the eval would report 0 isoforms instead of
+    # the full GTF count.
+    if n_parsed == 0:
+        return None
+    return supported
+
+
 def calculate_ted_metrics(
     iso_bed: Path,
     map_file: Optional[Path] = None,
@@ -705,6 +755,8 @@ def calculate_ted_metrics(
     cage_signal_minus: Optional[Path] = None,
     drna_signal_plus: Optional[Path] = None,
     drna_signal_minus: Optional[Path] = None,
+    counts_file: Optional[Path] = None,
+    min_support: int = 1,
 ) -> dict:
     """
     Calculate all TED metrics for a single sample.
@@ -730,6 +782,44 @@ def calculate_ted_metrics(
     Returns:
         Dict with all metrics
     """
+    # Optional read-support filter — drop bed rows whose transcript_id has
+    # count < min_support in the matching counts file. Motivated by IsoQuant:
+    # its transcript_models.gtf includes reference transcripts it carried
+    # forward even when no reads supported them in this sample (e.g. on
+    # WTC11_cDNA chr22, 598 of 1918 emitted models had zero reads). FLAIR's
+    # isoforms.bed is already pre-filtered to count>=1 by --support default,
+    # so passing FLAIR's counts file here is a no-op but keeps the call
+    # symmetric across assemblers.
+    #
+    # When a filter is applied we write a temp BED12 so downstream
+    # tss_tts_metrics / read-end entropy operate on the same filtered set
+    # as the count.
+    supported_ids = _load_supported_ids(counts_file, min_support) if counts_file else None
+    filtered_iso_bed_path = None
+    if supported_ids is not None:
+        n_pre = 0
+        n_post = 0
+        filtered_iso_bed_path = Path(str(iso_bed) + f".support_ge{min_support}.tmp")
+        with open(iso_bed) as fin, open(filtered_iso_bed_path, 'w') as fout:
+            for line in fin:
+                if not line.strip() or line.startswith('#'):
+                    continue
+                parts = line.rstrip('\n').split('\t')
+                if len(parts) < 4:
+                    continue
+                n_pre += 1
+                # IsoQuant BED col4 may carry a transcript_id with no gene
+                # suffix; FLAIR's col4 is "tid_gid" — try both forms.
+                name = parts[3]
+                if name in supported_ids or name.split('_')[0] in supported_ids:
+                    fout.write(line)
+                    n_post += 1
+        logger.info(
+            f"Read-support filter: kept {n_post}/{n_pre} isoforms "
+            f"(count >= {min_support} in {Path(counts_file).name})"
+        )
+        iso_bed = filtered_iso_bed_path  # downstream code uses the filtered bed
+
     # Basic counts - read isoform names and extract gene IDs in single pass
     isoform_names = []
     genes = set()
@@ -873,5 +963,12 @@ def calculate_ted_metrics(
         **tss_tts,
         **entropy_metrics,
     }
+
+    # Clean up the temp filtered bed if we wrote one.
+    if filtered_iso_bed_path is not None:
+        try:
+            Path(filtered_iso_bed_path).unlink()
+        except OSError:
+            pass
 
     return result

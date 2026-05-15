@@ -17,9 +17,15 @@ process BambuAssembly {
           val(bambu_mode), val(bambu_args)
 
     output:
+    // counts_transcript.txt is included in the main bambu_gtf tuple so the
+    // evaluation subworkflow can forward it to ted.py's --counts arg.
+    // Bambu, like IsoQuant, emits reference transcripts in the output GTF
+    // even when no reads support them in the sample, so without this filter
+    // isoforms_observed is inflated by zero-support reference carry-throughs.
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
           val(bambu_mode), path("${dataset_name}_${align_mode}_${partition_mode}_bambu_${bambu_mode}.gtf"),
           path("${dataset_name}_${align_mode}_${partition_mode}_bambu_${bambu_mode}_read_map.txt"),
+          path("${dataset_name}_${align_mode}_${partition_mode}_bambu_${bambu_mode}_counts_transcript.txt", optional: true),
           emit: bambu_gtf
     path "${dataset_name}_${align_mode}_${partition_mode}_bambu_${bambu_mode}_counts_transcript.txt", optional: true, emit: transcript_counts
     path "${dataset_name}_${align_mode}_${partition_mode}_bambu_${bambu_mode}_counts_gene.txt", optional: true, emit: gene_counts
@@ -28,7 +34,12 @@ process BambuAssembly {
     def output_prefix = "${dataset_name}_${align_mode}_${partition_mode}_bambu_${bambu_mode}"
     def bambu_params = bambu_args ?: ""
     """
-    #!/usr/bin/env Rscript
+    #!/private/home/hdheath/miniforge3/envs/bambu/bin/Rscript
+    # Absolute path to Rscript (2026-05-14): the conda activate emitted by
+    # Nextflow's process directive works on the login node but on some SLURM
+    # compute nodes does NOT prepend the env bin to PATH, causing
+    # `#!/usr/bin/env Rscript` to find the system R (which has no `bambu`
+    # package). Pinning to the env's Rscript bypasses the activation entirely.
     # v2: wrap read-map extraction in tryCatch — on full-genome runs the
     # rbind of per-read data.frames can fail at R level; don't let that
     # error kill the job since the GTF (the main deliverable) is already written.
@@ -47,6 +58,41 @@ process BambuAssembly {
 
     writeBambuOutput(se, path = ".", prefix = "${output_prefix}")
     file.rename("${output_prefix}extended_annotations.gtf", "${output_prefix}.gtf")
+    # Bambu writes counts files as `<prefix>counts_transcript.txt` (no
+    # separator); the pipeline expects `<prefix>_counts_transcript.txt`.
+    # Also: on some bambu versions / single-sample inputs, writeBambuOutput
+    # silently skips the counts file. To make the pipeline's --counts filter
+    # work reliably for Bambu, we write the counts file ourselves directly
+    # from rowData(se)\$readCount (raw integer read count per transcript).
+    # This gives ted.py what it needs: tab-separated `transcript_id\\tcount`
+    # which it parses to filter isoforms_observed to count >= 1.
+    counts_outfile <- "${output_prefix}_counts_transcript.txt"
+    if (file.exists("${output_prefix}counts_transcript.txt")) {
+        file.rename("${output_prefix}counts_transcript.txt", counts_outfile)
+    } else if ("readCount" %in% colnames(rowData(se))) {
+        cat("writeBambuOutput skipped counts file; writing from rowData(se)\$readCount\\n")
+        rd <- as.data.frame(rowData(se))
+        counts_df <- data.frame(
+            feature_id = rd\$TXNAME,
+            count      = rd\$readCount,
+            stringsAsFactors = FALSE
+        )
+        # ted.py expects `#feature_id\\tcount` (IsoQuant convention) or
+        # whitespace-separated. Use the IsoQuant header format for symmetry.
+        cat("#feature_id\\tcount\\n", file = counts_outfile)
+        write.table(counts_df, file = counts_outfile, sep = "\\t",
+                    quote = FALSE, row.names = FALSE, col.names = FALSE,
+                    append = TRUE)
+        cat(sprintf("Wrote %d transcript counts to %s\\n", nrow(counts_df), counts_outfile))
+    } else {
+        cat("WARNING: no counts data available; touching empty placeholder\\n")
+        file.create(counts_outfile)
+    }
+    if (file.exists("${output_prefix}counts_gene.txt")) {
+        file.rename("${output_prefix}counts_gene.txt", "${output_prefix}_counts_gene.txt")
+    } else {
+        file.create("${output_prefix}_counts_gene.txt")
+    }
 
     read_map_ok <- tryCatch({
         read_maps <- metadata(se)\$readToTranscriptMaps
