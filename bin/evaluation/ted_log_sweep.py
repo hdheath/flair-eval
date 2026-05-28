@@ -43,10 +43,9 @@ import argparse
 import csv
 import logging
 import sys
-from bisect import bisect_left
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
@@ -55,6 +54,19 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# Shared, contract-compliant matcher (summit dedup + one-to-one greedy
+# nearest) — the SAME "TP" definition used by the evaluator and the logreg
+# fit (the R3 fix; 2026-05-28 direction memo §5 item 2).  W2: the sweep that
+# *selects* per-tech weights/thresholds previously used a stale interval-
+# membership matcher (`_hit_peak` / interval-id recall), which biases the
+# fitted weights toward a leaky many-to-one F1.  We now collapse each peak to
+# one summit and match one-to-one, so the weight-selection F1 is the same
+# objective the headline F1 reports.
+try:
+    from peak_matching import build_summit_index, load_signal_bedgraphs
+except ImportError:
+    from evaluation.peak_matching import build_summit_index, load_signal_bedgraphs
 
 try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, PALETTE
@@ -71,9 +83,16 @@ WINDOW = 50   # bp match window (same as evaluation pipeline)
 
 # ── Peak index ──────────────────────────────────────────────────────────────
 
-def _parse_peaks(path: str, chrom: str = None) -> Dict[Tuple[str, str], List[Tuple[int, int]]]:
-    """BED6 → {(chrom, strand): sorted [(start, end)]}.  Optionally filter to one chrom."""
-    peaks: Dict[Tuple[str, str], List[Tuple[int, int]]] = defaultdict(list)
+def _parse_peaks(path: str, chrom: str = None, signal=None
+                 ) -> Dict[Tuple[str, str], List[int]]:
+    """BED6 → {(chrom, strand): sorted [summit_pos]} via the shared matcher.
+
+    W2: each peak interval collapses to ONE summit (dominant-signal position
+    when a `signal` track is supplied, else the peak centre) — the same
+    summit dedup the evaluator uses — so the sweep cannot credit one peak to
+    many surviving candidates.  Optionally filters to one chromosome.
+    """
+    rows: List[Tuple[str, int, int, str]] = []
     with open(path) as fh:
         for line in fh:
             if line.startswith("#"):
@@ -84,26 +103,8 @@ def _parse_peaks(path: str, chrom: str = None) -> Dict[Tuple[str, str], List[Tup
             c, start, end, strand = cols[0], int(cols[1]), int(cols[2]), cols[5]
             if chrom and c != chrom:
                 continue
-            peaks[(c, strand)].append((start, end))
-    for k in peaks:
-        peaks[k].sort()
-    return peaks
-
-
-def _hit_peak(pos: int, intervals: List[Tuple[int, int]]) -> Optional[Tuple[int, int]]:
-    """Return nearest peak interval within WINDOW bp of pos, or None."""
-    if not intervals:
-        return None
-    starts = [iv[0] for iv in intervals]
-    idx = bisect_left(starts, pos)
-    best_iv, best_d = None, WINDOW + 1
-    for i in (idx - 1, idx):
-        if 0 <= i < len(intervals):
-            s, e = intervals[i]
-            d = 0 if s <= pos < e else min(abs(pos - s), abs(pos - (e - 1)))
-            if d < best_d:
-                best_d, best_iv = d, intervals[i]
-    return best_iv if best_d <= WINDOW else None
+            rows.append((c, start, end, strand))
+    return build_summit_index(rows, signal=signal)
 
 
 # ── TED log loading ─────────────────────────────────────────────────────────
@@ -135,7 +136,10 @@ def load_ted_log(path: str, chrom: str = None) -> pd.DataFrame:
 
     If chrom is given, restricts to rows where junc_id starts with that chromosome.
     """
-    df = pd.read_csv(path, sep="\t", dtype=str)
+    # TED logs begin with a '# hdbscan_params: ...' self-describing comment
+    # line; skip it (matches ted_pr_sweep.load_ted_log) so the real header is
+    # parsed and the 'status' column is present.
+    df = pd.read_csv(path, sep="\t", dtype=str, comment="#")
     num_cols = [
         "tss_pos", "tts_pos", "n_reads",
         "TED_depth", "TED_tss_model", "TED_tts_model",
@@ -181,73 +185,81 @@ def load_all_logs(entries: List[str], chrom: str = None) -> Dict[str, pd.DataFra
 # Strategy: precompute per-row peak hit IDs once (expensive), then all sweep
 # iterations work on integer arrays with no Python loops over rows.
 
+def _nearest_summit(
+    pos_arr: np.ndarray,
+    chrom_arr: np.ndarray,
+    strand_arr: np.ndarray,
+    summit_index: Dict[Tuple[str, str], List[int]],
+    uid_base: Dict[Tuple[str, str], int],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """For each call, return (nearest-summit global uid within W, distance).
+
+    uid == -1 and distance == WINDOW+1 when no summit lies within WINDOW.
+    The uid is GLOBAL (uid_base[(chrom,strand)] + local summit index), so a
+    later one-to-one assignment can dedup across the whole peak set.  This is
+    the per-row precompute (done once per config); the actual one-to-one
+    assignment runs per sweep point in `_dedup_pr_one_to_one` because which
+    calls compete for a summit depends on which calls survive the threshold.
+    """
+    n = len(pos_arr)
+    uids = np.full(n, -1, dtype=np.int64)
+    dists = np.full(n, WINDOW + 1, dtype=np.int64)
+    for key, summits in summit_index.items():
+        if not summits:
+            continue
+        c, s = key
+        mask = (chrom_arr == c) & (strand_arr == s)
+        if not mask.any():
+            continue
+        idxs = np.where(mask)[0]
+        summ = np.asarray(summits, dtype=np.int64)
+        pos = pos_arr[idxs]
+        ins = np.searchsorted(summ, pos)
+        base = uid_base[key]
+        for gi, p, ins_i in zip(idxs, pos, ins):
+            best_li, best_d = -1, WINDOW + 1
+            for ci in (ins_i - 1, ins_i):
+                if 0 <= ci < len(summ):
+                    d = int(abs(int(p) - int(summ[ci])))
+                    if d < best_d:
+                        best_d, best_li = d, ci
+            if best_d <= WINDOW:
+                uids[gi] = base + best_li
+                dists[gi] = best_d
+    return uids, dists
+
+
+def _build_uid_base(summit_index: Dict[Tuple[str, str], List[int]]
+                    ) -> Tuple[Dict[Tuple[str, str], int], int]:
+    """Assign each summit a global uid; return (uid_base map, total summits)."""
+    uid_base: Dict[Tuple[str, str], int] = {}
+    base = 0
+    for key in summit_index:
+        uid_base[key] = base
+        base += len(summit_index[key])
+    return uid_base, base
+
+
 def _assign_peak_ids(
     df: pd.DataFrame,
-    cage_peaks: Dict[Tuple[str, str], List[Tuple[int, int]]],
-    drna_peaks: Dict[Tuple[str, str], List[Tuple[int, int]]],
+    cage_peaks: Dict[Tuple[str, str], List[int]],
+    drna_peaks: Dict[Tuple[str, str], List[int]],
 ) -> pd.DataFrame:
-    """Add integer columns to df (done once per config, not per sweep point).
+    """Precompute per-row nearest-summit uid + distance (once per config).
 
-    tss_peak_id  — integer ID of matched CAGE peak interval, or -1
-    tts_peak_id  — integer ID of matched dRNA peak interval, or -1
-    cage_peak_uid — unique (chrom, strand, peak_idx) encoded as int for recall counting
-    drna_peak_uid — same for dRNA
+    W2: instead of interval-membership peak ids (which let one peak be
+    credited to many survivors → many-to-one inflation), we store the nearest
+    SUMMIT uid and its distance for every candidate.  The threshold/weight
+    sweep then runs a one-to-one greedy assignment over the SURVIVORS at each
+    sweep point (see `_dedup_pr_one_to_one`), so a fat cluster of survivors
+    near one summit yields exactly one TP — the same accounting the headline
+    F1 uses.
 
-    Also adds: chrom, strand, junc_id (string) columns for grouping.
+    Adds columns: _tss_uid, _tss_dist, _tts_uid, _tts_dist, _total_cage,
+    _total_drna.
     """
-    # Build flat peak lists with integer IDs per (chrom, strand)
-    cage_flat: Dict[Tuple[str, str], Tuple[np.ndarray, np.ndarray, int]] = {}
-    for key, ivs in cage_peaks.items():
-        starts = np.array([iv[0] for iv in ivs], dtype=np.int64)
-        ends   = np.array([iv[1] for iv in ivs], dtype=np.int64)
-        cage_flat[key] = (starts, ends)
-
-    drna_flat: Dict[Tuple[str, str], Tuple[np.ndarray, np.ndarray]] = {}
-    for key, ivs in drna_peaks.items():
-        starts = np.array([iv[0] for iv in ivs], dtype=np.int64)
-        ends   = np.array([iv[1] for iv in ivs], dtype=np.int64)
-        drna_flat[key] = (starts, ends)
-
-    # Build a global peak → uid mapping so recall just counts unique uids
-    cage_uid_base: Dict[Tuple[str, str], int] = {}
-    base = 0
-    for key in cage_peaks:
-        cage_uid_base[key] = base
-        base += len(cage_peaks[key])
-    total_cage = base
-
-    drna_uid_base: Dict[Tuple[str, str], int] = {}
-    base = 0
-    for key in drna_peaks:
-        drna_uid_base[key] = base
-        base += len(drna_peaks[key])
-    total_drna = base
-
-    def _lookup(pos_arr, chrom_arr, strand_arr, flat, uid_base):
-        """Vectorised peak lookup. Returns (peak_id array, uid array), both int64, -1=no hit."""
-        n = len(pos_arr)
-        peak_ids = np.full(n, -1, dtype=np.int64)
-        uids     = np.full(n, -1, dtype=np.int64)
-        for key, (starts, ends) in flat.items():
-            c, s = key
-            mask = (chrom_arr == c) & (strand_arr == s)
-            if not mask.any():
-                continue
-            idxs = np.where(mask)[0]
-            pos  = pos_arr[idxs]
-            ins  = np.searchsorted(starts, pos)
-            for local_i, (gi, p, ins_i) in enumerate(zip(idxs, pos, ins)):
-                best_pid, best_d = -1, WINDOW + 1
-                for ci in (ins_i - 1, ins_i):
-                    if 0 <= ci < len(starts):
-                        d = 0 if starts[ci] <= p < ends[ci] else min(
-                            abs(p - starts[ci]), abs(p - (ends[ci] - 1)))
-                        if d < best_d:
-                            best_d, best_pid = d, ci
-                if best_d <= WINDOW:
-                    peak_ids[gi] = best_pid
-                    uids[gi] = uid_base[key] + best_pid
-        return peak_ids, uids
+    cage_uid_base, total_cage = _build_uid_base(cage_peaks)
+    drna_uid_base, total_drna = _build_uid_base(drna_peaks)
 
     junc_ids = df["junc_id"].astype(str).values
     chrom_arr  = np.array([_parse_chrom(j) for j in junc_ids])
@@ -255,80 +267,75 @@ def _assign_peak_ids(
     tss_pos = df["tss_pos"].values.astype(np.int64)
     tts_pos = df["tts_pos"].values.astype(np.int64)
 
-    tss_pid, tss_uid = _lookup(tss_pos, chrom_arr, strand_arr, cage_flat, cage_uid_base)
-    tts_pid, tts_uid = _lookup(tts_pos, chrom_arr, strand_arr, drna_flat, drna_uid_base)
+    tss_uid, tss_dist = _nearest_summit(
+        tss_pos, chrom_arr, strand_arr, cage_peaks, cage_uid_base)
+    tts_uid, tts_dist = _nearest_summit(
+        tts_pos, chrom_arr, strand_arr, drna_peaks, drna_uid_base)
 
     df = df.copy()
-    df["_tss_peak_id"] = tss_pid   # local peak index within (chrom,strand), -1=miss
-    df["_tts_peak_id"] = tts_pid
-    df["_tss_uid"]     = tss_uid   # global uid for recall counting
-    df["_tts_uid"]     = tts_uid
-    df["_chrom"]       = chrom_arr
-    df["_strand"]      = strand_arr
-    df["_total_cage"]  = total_cage
-    df["_total_drna"]  = total_drna
+    df["_tss_uid"]    = tss_uid    # global summit uid for nearest CAGE, -1=miss
+    df["_tss_dist"]   = tss_dist
+    df["_tts_uid"]    = tts_uid    # global summit uid for nearest dRNA, -1=miss
+    df["_tts_dist"]   = tts_dist
+    df["_chrom"]      = chrom_arr
+    df["_strand"]     = strand_arr
+    df["_total_cage"] = total_cage
+    df["_total_drna"] = total_drna
     return df
 
 
-def _dedup_pr_fast(
+def _one_to_one_tp(uids: np.ndarray, dists: np.ndarray) -> int:
+    """Greedy one-to-one TP count from per-call (nearest-summit uid, dist).
+
+    Each call carries its nearest summit (uid) and the distance to it.  Sort
+    all matched calls by (distance, uid) and assign greedily so each summit
+    uid is claimed at most once.  Returns the number of distinct summits
+    matched == number of calls matched (one-to-one) — the shared TP.
+    """
+    matched = uids >= 0
+    if not matched.any():
+        return 0
+    u = uids[matched]
+    d = dists[matched]
+    order = np.lexsort((u, d))      # primary key = distance, tie-break = uid
+    used = set()
+    tp = 0
+    for k in order:
+        uid = int(u[k])
+        if uid in used:
+            continue
+        used.add(uid)
+        tp += 1
+    return tp
+
+
+def _dedup_pr_one_to_one(
     mask: np.ndarray,
-    junc_ids: np.ndarray,
-    tss_pid: np.ndarray,
-    tts_pid: np.ndarray,
     tss_uid: np.ndarray,
     tts_uid: np.ndarray,
+    tss_dist: np.ndarray,
+    tts_dist: np.ndarray,
     total_cage: int,
     total_drna: int,
 ) -> Tuple[float, float, float, float, float, float]:
-    """Compute dedup P/R from boolean survivor mask + precomputed arrays.
+    """One-to-one P/R/F1 for the survivor set defined by `mask` (W2 fix).
 
-    No Python loops over rows — uses numpy groupby via structured arrays.
+    precision = TP / (#survivors)         (each survivor is one called end)
+    recall    = TP / (#truth summits)
+    with TP = #distinct summits matched one-to-one == #survivors matched.
+    Computed independently for 5' (CAGE) and 3' (dRNA).
     """
     if not mask.any():
         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
-    jids  = junc_ids[mask]
-    t_pid = tss_pid[mask]
-    s_pid = tts_pid[mask]
-    t_uid = tss_uid[mask]
-    s_uid = tts_uid[mask]
+    n_surv = int(mask.sum())
+    tp5 = _one_to_one_tp(tss_uid[mask], tss_dist[mask])
+    tp3 = _one_to_one_tp(tts_uid[mask], tts_dist[mask])
 
-    # Precision: per junc_id group, count unique (tss_peak_id, tts_peak_id) pairs
-    # Encode pair as single int: use (tss_pid+1)*100003 + (tts_pid+1) (both >= -1)
-    pair_enc = (t_pid.astype(np.int64) + 1) * 100003 + (s_pid.astype(np.int64) + 1)
-
-    # Sort by junc_id then pair_enc to find unique pairs per group efficiently
-    order = np.lexsort((pair_enc, jids))
-    jids_s    = jids[order]
-    t_pid_s   = t_pid[order]
-    s_pid_s   = s_pid[order]
-    pair_s    = pair_enc[order]
-
-    # Find group boundaries
-    boundaries = np.concatenate(([True], jids_s[1:] != jids_s[:-1], [True]))
-    group_start = np.where(boundaries[:-1])[0]
-    group_end   = np.where(boundaries[1:])[0]
-
-    total_pairs = 0
-    total_5p_tp = 0
-    total_3p_tp = 0
-    for gs, ge in zip(group_start, group_end):
-        sl = slice(gs, ge + 1)
-        # unique pairs within group
-        up = np.unique(pair_s[sl])
-        total_pairs += len(up)
-        # reconstruct tss_pid from encoding: tss_pid = (enc // 100003) - 1
-        up_tss = (up // 100003) - 1
-        up_tts = (up %  100003) - 1
-        total_5p_tp += int((up_tss >= 0).sum())
-        total_3p_tp += int((up_tts >= 0).sum())
-
-    prec_5 = total_5p_tp / total_pairs if total_pairs > 0 else 0.0
-    prec_3 = total_3p_tp / total_pairs if total_pairs > 0 else 0.0
-
-    # Recall: unique peak uids touched by any survivor
-    rec_5 = len(np.unique(t_uid[t_uid >= 0])) / total_cage if total_cage > 0 else 0.0
-    rec_3 = len(np.unique(s_uid[s_uid >= 0])) / total_drna if total_drna > 0 else 0.0
+    prec_5 = tp5 / n_surv if n_surv else 0.0
+    prec_3 = tp3 / n_surv if n_surv else 0.0
+    rec_5 = tp5 / total_cage if total_cage > 0 else 0.0
+    rec_3 = tp3 / total_drna if total_drna > 0 else 0.0
 
     def _f1(p, r):
         return 2 * p * r / (p + r) if (p + r) > 0 else 0.0
@@ -339,11 +346,10 @@ def _dedup_pr_fast(
 def _make_arrays(df: pd.DataFrame):
     """Extract numpy arrays from an _assign_peak_ids-enriched DataFrame."""
     return (
-        df["junc_id"].astype(str).values,
-        df["_tss_peak_id"].values.astype(np.int64),
-        df["_tts_peak_id"].values.astype(np.int64),
         df["_tss_uid"].values.astype(np.int64),
         df["_tts_uid"].values.astype(np.int64),
+        df["_tss_dist"].values.astype(np.int64),
+        df["_tts_dist"].values.astype(np.int64),
         int(df["_total_cage"].iloc[0]),
         int(df["_total_drna"].iloc[0]),
     )
@@ -377,7 +383,7 @@ def _sweep_weights(
     if fixed_other_weights is None:
         fixed_other_weights = {"wd": 0.33, "wm": 0.34, "wa": 0.33}
 
-    jids, tss_pid, tts_pid, tss_uid, tts_uid, total_cage, total_drna = _make_arrays(df)
+    tss_uid, tts_uid, tss_dist, tts_dist, total_cage, total_drna = _make_arrays(df)
     depth, tss_model, tss_annot, tts_model, tts_annot = _score_arrays(df)
 
     fo = fixed_other_weights
@@ -402,12 +408,14 @@ def _sweep_weights(
             for t in thresh_grid:
                 if end == "tss":
                     mask = (sweep_score >= t) & (fixed_tts >= fixed_other_thresh)
-                    _, _, f1, _, _, _ = _dedup_pr_fast(
-                        mask, jids, tss_pid, tts_pid, tss_uid, tts_uid, total_cage, total_drna)
+                    _, _, f1, _, _, _ = _dedup_pr_one_to_one(
+                        mask, tss_uid, tts_uid, tss_dist, tts_dist,
+                        total_cage, total_drna)
                 else:
                     mask = (fixed_tss >= fixed_other_thresh) & (sweep_score >= t)
-                    _, _, _, _, _, f1 = _dedup_pr_fast(
-                        mask, jids, tss_pid, tts_pid, tss_uid, tts_uid, total_cage, total_drna)
+                    _, _, _, _, _, f1 = _dedup_pr_one_to_one(
+                        mask, tss_uid, tts_uid, tss_dist, tts_dist,
+                        total_cage, total_drna)
                 if f1 > best_f1:
                     best_f1, best_t = f1, float(t)
 
@@ -432,7 +440,7 @@ def _joint_threshold_sweep(
     n_steps: int = 21,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """2D (t_tss × t_tts) sweep using optimal weights. All numpy, no iterrows."""
-    jids, tss_pid, tts_pid, tss_uid, tts_uid, total_cage, total_drna = _make_arrays(df)
+    tss_uid, tts_uid, tss_dist, tts_dist, total_cage, total_drna = _make_arrays(df)
     depth, tss_model, tss_annot, tts_model, tts_annot = _score_arrays(df)
 
     tss_score = (opt_5["w_depth"] * depth
@@ -454,8 +462,9 @@ def _joint_threshold_sweep(
         tss_mask = tss_score >= t_tss
         for tj, t_tts in enumerate(grid):
             mask = tss_mask & (tts_score >= t_tts)
-            p5, r5, f5, p3, r3, f3 = _dedup_pr_fast(
-                mask, jids, tss_pid, tts_pid, tss_uid, tts_uid, total_cage, total_drna)
+            p5, r5, f5, p3, r3, f3 = _dedup_pr_one_to_one(
+                mask, tss_uid, tts_uid, tss_dist, tts_dist,
+                total_cage, total_drna)
             f1_5_grid[ti, tj]  = f5
             f1_3_grid[ti, tj]  = f3
             prec5_grid[ti, tj] = p5
@@ -619,6 +628,16 @@ def main():
     parser.add_argument("--chrom", default=None,
                         help="Restrict analysis to this chromosome (e.g. chr22). "
                              "Strongly recommended to keep runtime manageable.")
+    parser.add_argument("--cage-signal-plus", default=None,
+                        help="CAGE 5' signal bedGraph (+ strand). When given, "
+                             "each CAGE peak's summit = dominant-signal position "
+                             "instead of the interval centre.")
+    parser.add_argument("--cage-signal-minus", default=None,
+                        help="CAGE 5' signal bedGraph (- strand).")
+    parser.add_argument("--drna-signal-plus", default=None,
+                        help="dRNA 3' signal bedGraph (+ strand).")
+    parser.add_argument("--drna-signal-minus", default=None,
+                        help="dRNA 3' signal bedGraph (- strand).")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -637,10 +656,19 @@ def main():
         log.error("No TED log data loaded")
         sys.exit(1)
 
+    chroms_for_signal = {chrom} if chrom else None
+    cage_signal = load_signal_bedgraphs(
+        args.cage_signal_plus, args.cage_signal_minus, chroms=chroms_for_signal)
+    drna_signal = load_signal_bedgraphs(
+        args.drna_signal_plus, args.drna_signal_minus, chroms=chroms_for_signal)
+    if cage_signal or drna_signal:
+        log.info("  Signal-based summits enabled (CAGE=%s, dRNA=%s)",
+                 cage_signal is not None, drna_signal is not None)
+
     log.info("Loading CAGE peaks from %s", args.cage_peaks)
-    cage_peaks = _parse_peaks(args.cage_peaks, chrom=chrom)
+    cage_peaks = _parse_peaks(args.cage_peaks, chrom=chrom, signal=cage_signal)
     log.info("Loading dRNA peaks from %s", args.drna_peaks)
-    drna_peaks = _parse_peaks(args.drna_peaks, chrom=chrom)
+    drna_peaks = _parse_peaks(args.drna_peaks, chrom=chrom, signal=drna_signal)
 
     total_cage = sum(len(v) for v in cage_peaks.values())
     total_drna = sum(len(v) for v in drna_peaks.values())

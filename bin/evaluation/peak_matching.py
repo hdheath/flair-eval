@@ -82,8 +82,24 @@ def _interval_summit(start: int, end: int,
     best_pos = center
     best_val = None
     best_center_dist = None
-    for pos, val in signal:
-        if pos < start or pos >= end:
+    # `signal` is sorted by position when produced by load_signal_bedgraphs,
+    # so bisect to the window start and stop at the window end.  Detect
+    # sortedness cheaply (one pass over positions) so an ad-hoc unsorted
+    # list (e.g. in unit tests) still scans correctly.
+    positions = [p for p, _ in signal]
+    sorted_track = all(positions[i] <= positions[i + 1]
+                       for i in range(len(positions) - 1))
+    if sorted_track:
+        lo = bisect_left(positions, start)
+        scan = signal[lo:]
+    else:
+        scan = signal
+    for pos, val in scan:
+        if pos < start:
+            continue
+        if pos >= end:
+            if sorted_track:
+                break
             continue
         cdist = abs(pos - center)
         if (best_val is None or val > best_val or
@@ -150,6 +166,77 @@ def load_summit_index_from_bed(
 def count_summits(index: SummitIndex) -> int:
     """Total number of truth summits (the recall denominator)."""
     return sum(len(v) for v in index.values())
+
+
+# ── Signal bedGraph loading ──────────────────────────────────────────────────
+
+# A (chrom, strand) -> list of (position, value) signal samples.  Each
+# bedGraph interval [start, end) contributes one sample at its centre with
+# the interval's value; _interval_summit picks the dominant-signal position
+# inside a peak from these samples.
+SignalTrack = Dict[Tuple[str, str], List[Tuple[int, float]]]
+
+
+def load_signal_bedgraphs(
+    plus_path: Optional[str] = None,
+    minus_path: Optional[str] = None,
+    chroms: Optional[Iterable[str]] = None,
+) -> Optional[SignalTrack]:
+    """Load per-strand bedGraph(s) into a (chrom, strand) -> [(pos, val)] track.
+
+    Each bedGraph line is "chrom start end value" (4 columns, half-open
+    interval).  Every interval contributes a sample at its centre carrying
+    its value; build_summit_index/`_interval_summit` then resolve each peak
+    to the dominant-signal position covered by these samples.
+
+    `plus_path` provides the '+' strand track, `minus_path` the '-' strand.
+    Either may be None (that strand falls back to peak centre).  Returns None
+    if neither path is usable, so callers can pass the result straight to
+    `signal=` and transparently fall back to the geometric centre.
+
+    `chroms` optionally restricts to a set/iterable of chromosome names
+    (cheap pre-filter for whole-genome bedGraphs on tiny/chr22 fixtures).
+    """
+    chroms_set = set(chroms) if chroms is not None else None
+    track: SignalTrack = defaultdict(list)
+
+    def _ingest(path: Optional[str], strand: str) -> None:
+        if not path:
+            return
+        try:
+            fh = open(path)
+        except OSError:
+            return
+        with fh:
+            for line in fh:
+                if not line or line[0] in "#tb":  # skip comments/track/browser
+                    if not line[0].isdigit() and not line.startswith("chr"):
+                        continue
+                cols = line.rstrip("\n").split("\t")
+                if len(cols) < 4:
+                    continue
+                chrom = cols[0]
+                if chroms_set is not None and chrom not in chroms_set:
+                    continue
+                try:
+                    start = int(cols[1])
+                    end = int(cols[2])
+                    val = float(cols[3])
+                except ValueError:
+                    continue
+                pos = (start + end) // 2
+                track[(chrom, strand)].append((pos, val))
+
+    _ingest(plus_path, "+")
+    _ingest(minus_path, "-")
+
+    if not track:
+        return None
+    # Sort each track by position so _interval_summit's scan is well-ordered
+    # (it scans all samples; sorting is for determinism / readability).
+    for key in track:
+        track[key].sort()
+    return dict(track)
 
 
 # ── One-to-one greedy nearest matching ───────────────────────────────────────

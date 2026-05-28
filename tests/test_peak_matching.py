@@ -24,6 +24,7 @@ import math
 from evaluation.peak_matching import (
     build_summit_index,
     load_summit_index_from_bed,
+    load_signal_bedgraphs,
     count_summits,
     match_positions_one_to_one,
     match_ends,
@@ -32,6 +33,7 @@ from evaluation.peak_matching import (
     SWEEP_WINDOWS,
     _interval_summit,
 )
+from evaluation.bed_utils import one_to_one_match_counts, vectorized_overlap_counts
 
 
 # ── Summit collapse ───────────────────────────────────────────────────────
@@ -219,3 +221,111 @@ def test_load_summit_index_from_tiny_cage(data_dir):
     assert count_summits(idx) == 6
     # cage_peak_1 at [950,1050) on + -> summit 1000.
     assert 1000 in idx[("chr_test", "+")]
+
+
+# ── W1: ted_core one-to-one match counts (precision == recall TP) ──────────
+
+def _peak_row(chrom, start, end, strand):
+    return {"Chrom": chrom, "Start": start, "End": end, "Name": "p",
+            "Score": 0.0, "Strand": strand}
+
+
+def _end_row(chrom, pos, strand):
+    # single-position endpoint convention (Start == called-end coordinate)
+    return {"Chrom": chrom, "Start": pos, "End": pos + 1, "Name": "iso",
+            "Score": 0.0, "Strand": strand}
+
+
+def test_one_to_one_match_counts_cluster_not_inflated_precision():
+    """THE W1 regression: 5 called ends near ONE summit -> TP=1.
+
+    The OLD ted_core precision (m/n_tx, per-isoform bedtools-closest) would
+    count all 5 isoforms as "near a peak" -> precision 5/5 = 1.0 (inflated,
+    exactly the no-filter-TED leak).  The unified one-to-one TP is 1, so
+    precision = 1/5 and recall = 1/1 share the SAME numerator.
+    """
+    peaks = [_peak_row("chr1", 950, 1050, "+")]          # summit 1000
+    ends = [_end_row("chr1", p, "+") for p in (980, 990, 1000, 1010, 1020)]
+    tp, n_calls, n_peaks = one_to_one_match_counts(ends, peaks, window=50)
+    assert tp == 1, "one cluster on one summit must give exactly one TP"
+    assert n_calls == 5
+    assert n_peaks == 1
+    # precision and recall as ted_core now computes them:
+    assert tp / n_calls == 1 / 5     # NOT the inflated 5/5
+    assert tp / n_peaks == 1.0
+
+
+def test_one_to_one_precision_recall_share_tp():
+    """precision numerator == recall numerator (one-to-one guarantee)."""
+    peaks = [_peak_row("chr1", 950, 1050, "+"),
+             _peak_row("chr1", 1950, 2050, "+")]          # summits 1000, 2000
+    ends = [_end_row("chr1", p, "+") for p in (1005, 1010, 2003)]
+    tp, n_calls, n_peaks = one_to_one_match_counts(ends, peaks, window=50)
+    assert tp == 2          # two summits matched, two calls matched
+    assert n_calls == 3
+    assert n_peaks == 2
+    assert tp / n_calls == 2 / 3
+    assert tp / n_peaks == 1.0
+
+
+def test_vectorized_overlap_counts_backcompat():
+    """Recall wrapper still returns (TP, n_peaks)."""
+    peaks = [_peak_row("chr1", 950, 1050, "+")]
+    ends = [_end_row("chr1", p, "+") for p in (990, 1010)]
+    tp, n_peaks = vectorized_overlap_counts(ends, peaks, window=50)
+    assert (tp, n_peaks) == (1, 1)
+
+
+def test_one_to_one_match_counts_signal_summit_shifts_match():
+    """A signal track moves the summit off-centre and changes who matches."""
+    # Peak [900, 1100) -> centre 1000.  Signal peaks at 1080.
+    peaks = [_peak_row("chr1", 900, 1100, "+")]
+    signal = {("chr1", "+"): [(910, 1.0), (1080, 9.0)]}
+    # Call at 1075 is 75 bp from centre (miss at W=50) but 5 bp from the
+    # signal summit (hit).  Call at 1000 is on the centre but 80 bp from the
+    # signal summit (miss at W=50).
+    ends_near_signal = [_end_row("chr1", 1075, "+")]
+    tp_sig, _, _ = one_to_one_match_counts(ends_near_signal, peaks, 50, signal=signal)
+    tp_nosig, _, _ = one_to_one_match_counts(ends_near_signal, peaks, 50, signal=None)
+    assert tp_sig == 1      # matches the signal summit
+    assert tp_nosig == 0    # 75 bp from the geometric centre -> no match
+
+
+# ── Signal bedGraph loading ───────────────────────────────────────────────
+
+def test_load_signal_bedgraphs_tiny(tmp_path):
+    plus = tmp_path / "plus.bedgraph"
+    minus = tmp_path / "minus.bedgraph"
+    plus.write_text("chr_test\t950\t1050\t9.0\nchr_test\t2000\t2100\t3.0\n")
+    minus.write_text("chr_test\t7250\t7350\t5.0\n")
+    track = load_signal_bedgraphs(str(plus), str(minus))
+    assert track is not None
+    assert ("chr_test", "+") in track
+    assert ("chr_test", "-") in track
+    # centre of [950,1050) is 1000, value 9.0
+    assert (1000, 9.0) in track[("chr_test", "+")]
+
+
+def test_load_signal_bedgraphs_none_when_missing():
+    assert load_signal_bedgraphs(None, None) is None
+    assert load_signal_bedgraphs("/no/such/file.bedgraph", None) is None
+
+
+def test_signal_summit_from_real_tiny_bedgraph(data_dir):
+    """Wire the _synth tiny bedGraphs into build_summit_index."""
+    import os
+    synth = (data_dir / ".." / ".." / "analysis" / "improving_plots" /
+             "jupyter" / "plots_out" / "tiny" / "_synth")
+    synth = synth.resolve()
+    if not (synth / "tiny_cage_plus.bedgraph").exists():
+        import pytest
+        pytest.skip("synth bedGraphs not present")
+    track = load_signal_bedgraphs(
+        str(synth / "tiny_cage_plus.bedgraph"),
+        str(synth / "tiny_cage_minus.bedgraph"),
+    )
+    assert track is not None
+    # cage_peak_1 [950,1050) + with a single flat bedGraph block -> summit
+    # collapses to the block centre 1000 (signal present but uniform).
+    idx = build_summit_index([("chr_test", 950, 1050, "+")], signal=track)
+    assert idx[("chr_test", "+")] == [1000]

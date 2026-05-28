@@ -19,7 +19,9 @@ from .bed_utils import (
     extract_distance_and_peak,
     extract_signed_distances,
     vectorized_overlap_counts,
+    one_to_one_match_counts,
 )
+from .peak_matching import load_signal_bedgraphs
 from .read_analysis import (
     parse_map_file_comprehensive,
     count_assigned_reads_by_type,
@@ -110,6 +112,7 @@ def tss_tts_metrics(
     max_count_drna: Optional[int] = None,
     max_count_ref_tss: Optional[int] = None,
     max_count_ref_tts: Optional[int] = None,
+    signal_tracks: Optional[Dict[str, object]] = None,
 ) -> Tuple[dict, Dict[str, List[int]]]:
     """
     Compute precision/recall/F1 for TSS/TTS and extract signed distances for plotting.
@@ -205,19 +208,26 @@ def tss_tts_metrics(
                 with timed_section(f"classify_isoform_recoverability_{label}"):
                     recov_mask = classify_isoform_recoverability(closest_rows, recoverable_ids)
 
-            # Count isoforms within window
-            m = sum(1 for dist, _ in dist_map.values() if dist <= window)
-            precision = (m / n_tx) if n_tx else None
-
-            # For recall
+            # ── W1: precision AND recall share ONE TP definition ──────────
+            # Both come from the shared summit + one-to-one greedy matcher
+            # (the R3 fix), so a fat cluster of called ends near one peak
+            # contributes exactly ONE true positive on BOTH sides of the F1.
+            # The OLD precision was per-isoform bedtools-closest (m / n_tx —
+            # the fraction of isoforms near any peak, many-to-one), which the
+            # no-filter TED emitter inflated structurally.  Now:
+            #     precision = TP / n_calls   recall = TP / n_peaks
+            # with TP == #summits matched == #calls matched (one-to-one).
             peaks_rows = read_bed6(pth)
             if not peaks_rows:
                 logger.warning(f"Peaks file '{pth}' parsed to 0 intervals")
 
-            # Read endpoint BED as rows
+            # Read endpoint BED as rows (one row per isoform end = one call).
             endpoint_rows = read_bed6(endpoint_bed)
-            c, t = vectorized_overlap_counts(endpoint_rows, peaks_rows, window)
-            recall = (c / t) if t else None
+            sig = signal_tracks.get(key) if signal_tracks else None
+            tp, n_calls, t = one_to_one_match_counts(
+                endpoint_rows, peaks_rows, window, signal=sig)
+            precision = (tp / n_calls) if n_calls else None
+            recall = (tp / t) if t else None
             f1 = safe_f1(precision, recall)
 
             return precision, recall, f1, signed_dists, recov_mask, recoverable_ids, closest_rows
@@ -910,6 +920,29 @@ def calculate_ted_metrics(
         "ref_prime5": ref_prime5_peaks,
         "ref_prime3": ref_prime3_peaks,
     }
+    # Signal-based summits (the hdheath follow-up): collapse each truth peak
+    # to its dominant CTSS / density-peak position instead of the geometric
+    # centre when per-strand signal bedGraphs are available.  Graceful: any
+    # peak set without a signal track falls back to the peak centre.  The
+    # keys here match the `peaks` dict keys ('prime5' = CAGE, 'prime3' = dRNA);
+    # reference peaks have no signal so they keep centre-based summits.
+    signal_tracks: Dict[str, object] = {}
+    chroms_for_signal = None  # whole-genome bedGraphs; tiny fixtures are small
+    cage_sig = load_signal_bedgraphs(
+        str(cage_signal_plus) if cage_signal_plus else None,
+        str(cage_signal_minus) if cage_signal_minus else None,
+        chroms=chroms_for_signal,
+    )
+    if cage_sig is not None:
+        signal_tracks["prime5"] = cage_sig
+    drna_sig = load_signal_bedgraphs(
+        str(drna_signal_plus) if drna_signal_plus else None,
+        str(drna_signal_minus) if drna_signal_minus else None,
+        chroms=chroms_for_signal,
+    )
+    if drna_sig is not None:
+        signal_tracks["prime3"] = drna_sig
+
     with timed_section("tss_tts_metrics"):
         # Only pass reads_bed if not skipping read metrics
         tss_tts, signed_distances = tss_tts_metrics(
@@ -925,6 +958,7 @@ def calculate_ted_metrics(
             max_count_drna=max_count_drna,
             max_count_ref_tss=max_count_ref_tss,
             max_count_ref_tts=max_count_ref_tts,
+            signal_tracks=signal_tracks or None,
         )
 
     # Read-end entropy analysis (skip if skip_read_metrics or no reads/assigned reads)

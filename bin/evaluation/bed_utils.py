@@ -228,30 +228,66 @@ def extract_signed_distances(rows: List[List[str]]) -> List[int]:
     return distances
 
 
-def vectorized_overlap_counts(bed_rows: List[dict], peaks_rows: List[dict], window: int) -> Tuple[int, int]:
+def vectorized_overlap_counts(
+    bed_rows: List[dict],
+    peaks_rows: List[dict],
+    window: int,
+    signal=None,
+) -> Tuple[int, int]:
     """Return (#peak summits matched one-to-one within window, total peaks).
 
-    Contract-compliant recall (the R3 fix): each peak interval is collapsed
-    to ONE summit (peak centre — no signal bedGraph wired into this path),
-    and called ends are matched to summits ONE-TO-ONE (greedy nearest) so a
-    fat cluster of isoform ends near one peak credits exactly one summit,
-    not many.  Strand-aware; strand-agnostic ('.') peaks match both strands.
-
-    The single-position TSS/TTS endpoint convention from extract_tss_tts_bed
-    means bed_row Start == end position (End == Start+1); the match uses the
-    bed_row Start as the called-end coordinate.
+    Thin back-compat wrapper around :func:`one_to_one_match_counts` that
+    returns just the recall (numerator, denominator) pair.  Prefer
+    one_to_one_match_counts when you also need the precision numerator /
+    call count (W1 — so precision and recall share the same TP).
     """
+    tp, _n_calls, n_peaks = one_to_one_match_counts(
+        bed_rows, peaks_rows, window, signal=signal)
+    return tp, n_peaks
+
+
+def one_to_one_match_counts(
+    bed_rows: List[dict],
+    peaks_rows: List[dict],
+    window: int,
+    signal=None,
+) -> Tuple[int, int, int]:
+    """Return (TP, n_calls, n_peaks) under summit + one-to-one matching.
+
+    Contract-compliant accounting (the R3 fix), shared by precision AND
+    recall in ted_core.tss_tts_metrics (the W1 unification):
+
+      * each peak interval collapses to ONE summit — the dominant-signal
+        position when a `signal` track is supplied, else the peak centre,
+      * called ends match summits ONE-TO-ONE (greedy nearest), so a fat
+        cluster of isoform ends near one peak credits exactly one TP, not
+        one per call.
+
+    Because matching is one-to-one, the number of matched calls equals the
+    number of matched summits — so a single TP count feeds both:
+        precision = TP / n_calls      recall = TP / n_peaks
+
+    Strand-aware; strand-agnostic ('.') peaks match both strands.  The
+    single-position TSS/TTS endpoint convention from extract_tss_tts_bed
+    means bed_row Start == the called-end coordinate (End == Start+1).
+
+    `signal`, if given, maps (chrom, strand) -> sorted [(pos, value)] so the
+    summit is the dominant CTSS / density-peak; otherwise the interval
+    centre is used (graceful fallback).
+    """
+    n_calls = len(bed_rows)
     if not peaks_rows:
-        return 0, 0
+        return 0, n_calls, 0
 
-    from .peak_matching import match_positions_one_to_one
+    from .peak_matching import match_positions_one_to_one, _interval_summit
 
-    # Collapse each peak to a single summit (centre); bucket by chrom/strand.
+    # Collapse each peak to a single summit; bucket by chrom/strand.
     summits_by_cs = defaultdict(list)  # (chrom, strand) -> [summit_pos, ...]
     for row in peaks_rows:
-        summit = (int(row['Start']) + int(row['End'])) // 2
         strands = ['+', '-'] if row['Strand'] == '.' else [row['Strand']]
         for strand in strands:
+            sig = signal.get((row['Chrom'], strand)) if signal else None
+            summit = _interval_summit(int(row['Start']), int(row['End']), sig)
             summits_by_cs[(row['Chrom'], strand)].append(summit)
     for key in summits_by_cs:
         summits_by_cs[key].sort()
@@ -271,6 +307,7 @@ def vectorized_overlap_counts(bed_rows: List[dict], peaks_rows: List[dict], wind
             if j >= 0:
                 matched_keys.add((key[0], key[1], summits[j]))
 
+    tp = len(matched_keys)
     # Denominator is the count of distinct peak intervals (one summit each);
     # strand-agnostic peaks counted once in the input list.
-    return len(matched_keys), len(peaks_rows)
+    return tp, n_calls, len(peaks_rows)
