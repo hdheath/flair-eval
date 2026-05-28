@@ -229,45 +229,48 @@ def extract_signed_distances(rows: List[List[str]]) -> List[int]:
 
 
 def vectorized_overlap_counts(bed_rows: List[dict], peaks_rows: List[dict], window: int) -> Tuple[int, int]:
-    """Return (#peaks matched by ≥1 isoform within window, total peaks)."""
+    """Return (#peak summits matched one-to-one within window, total peaks).
+
+    Contract-compliant recall (the R3 fix): each peak interval is collapsed
+    to ONE summit (peak centre — no signal bedGraph wired into this path),
+    and called ends are matched to summits ONE-TO-ONE (greedy nearest) so a
+    fat cluster of isoform ends near one peak credits exactly one summit,
+    not many.  Strand-aware; strand-agnostic ('.') peaks match both strands.
+
+    The single-position TSS/TTS endpoint convention from extract_tss_tts_bed
+    means bed_row Start == end position (End == Start+1); the match uses the
+    bed_row Start as the called-end coordinate.
+    """
     if not peaks_rows:
         return 0, 0
 
-    consumed = set()
+    from .peak_matching import match_positions_one_to_one
 
-    # Group bed rows by chrom/strand
-    bed_by_cs = defaultdict(list)
+    # Collapse each peak to a single summit (centre); bucket by chrom/strand.
+    summits_by_cs = defaultdict(list)  # (chrom, strand) -> [summit_pos, ...]
+    for row in peaks_rows:
+        summit = (int(row['Start']) + int(row['End'])) // 2
+        strands = ['+', '-'] if row['Strand'] == '.' else [row['Strand']]
+        for strand in strands:
+            summits_by_cs[(row['Chrom'], strand)].append(summit)
+    for key in summits_by_cs:
+        summits_by_cs[key].sort()
+
+    # Group called ends (single-position endpoints) by chrom/strand.
+    ends_by_cs = defaultdict(list)
     for row in bed_rows:
-        key = (row['Chrom'], row['Strand'])
-        bed_by_cs[key].append(row)
+        ends_by_cs[(row['Chrom'], row['Strand'])].append(int(row['Start']))
 
-    # Group peaks by chrom/strand
-    peaks_by_cs = defaultdict(list)
-    for idx, row in enumerate(peaks_rows):
-        key = (row['Chrom'], row['Strand'])
-        peaks_by_cs[key].append((idx, row))
-        if row['Strand'] == '.':
-            # Strand-agnostic peaks go to both strands
-            for strand in ['+', '-']:
-                peaks_by_cs[(row['Chrom'], strand)].append((idx, row))
-
-    # Check overlaps
-    for (c, s), bed_chunk in bed_by_cs.items():
-        if (c, s) not in peaks_by_cs:
+    matched_keys = set()  # (chrom, strand, summit) — dedup '.' double-placement
+    for key, positions in ends_by_cs.items():
+        summits = summits_by_cs.get(key)
+        if not summits:
             continue
+        assign = match_positions_one_to_one(positions, summits, window)
+        for j in assign:
+            if j >= 0:
+                matched_keys.add((key[0], key[1], summits[j]))
 
-        peaks_chunk = peaks_by_cs[(c, s)]
-        # Sort peaks by start
-        peaks_chunk_sorted = sorted(peaks_chunk, key=lambda x: x[1]['Start'])
-
-        for bed_row in bed_chunk:
-            lo = bed_row['Start'] - window
-            hi = bed_row['End'] + window
-
-            for idx, peak in peaks_chunk_sorted:
-                if peak['Start'] > hi:
-                    break
-                if peak['End'] >= lo:
-                    consumed.add(idx)
-
-    return len(consumed), len(peaks_rows)
+    # Denominator is the count of distinct peak intervals (one summit each);
+    # strand-agnostic peaks counted once in the input list.
+    return len(matched_keys), len(peaks_rows)

@@ -31,6 +31,16 @@ try:
 except ImportError:
     from evaluation.signal_utils import parse_bed12, tss_tts
 
+# Shared, contract-compliant matcher (summit dedup + one-to-one greedy
+# nearest).  Used for peak-based RECALL so a fat cluster of called ends
+# near one truth peak yields exactly one matched summit, not one per call
+# (the R3 recall inflator).  Same module the logreg fit + pileup PR use.
+try:
+    from peak_matching import build_summit_index, match_positions_one_to_one
+except ImportError:
+    from evaluation.peak_matching import (
+        build_summit_index, match_positions_one_to_one)
+
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)-8s  %(message)s")
 log = logging.getLogger(__name__)
@@ -354,6 +364,48 @@ def _nearest_annot(pos: int, sorted_intervals: List[Tuple[int, int]], window: in
     return None
 
 
+def _summit_index_from_intervals(
+    peaks: Dict[Tuple[str, str], List[Tuple[int, int]]]
+) -> Dict[Tuple[str, str], List[int]]:
+    """Collapse an interval peak dict to a (chrom,strand)->summit index.
+
+    One summit per peak interval (peak centre; no signal bedGraph wired
+    in).  Used to give peak-based recall the contract's one-to-one,
+    summit-deduped accounting.
+    """
+    rows: List[Tuple[str, int, int, str]] = []
+    for (chrom, strand), ivs in peaks.items():
+        for s, e in ivs:
+            rows.append((chrom, s, e, strand))
+    return build_summit_index(rows)
+
+
+def _one_to_one_recall(
+    isoforms: List[dict],
+    summit_index: Dict[Tuple[str, str], List[int]],
+    end_type: str,
+    window: int,
+) -> Tuple[int, int]:
+    """One-to-one (greedy nearest) peak-based recall (the R3 fix).
+
+    Buckets all isoform ends by (chrom, strand), matches each bucket to its
+    summits with the shared greedy-nearest matcher (each summit consumed at
+    most once), and returns (#summits matched, #summits total).
+    """
+    buckets: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+    for iso in isoforms:
+        buckets[(iso["chrom"], iso["strand"])].append(int(iso[end_type]))
+    matched = 0
+    for key, positions in buckets.items():
+        summits = summit_index.get(key, [])
+        if not summits:
+            continue
+        assign = match_positions_one_to_one(positions, summits, window)
+        matched += sum(1 for j in assign if j >= 0)
+    total = sum(len(v) for v in summit_index.values())
+    return matched, total
+
+
 def compute_jc_deduplicated_precision_recall(
     isoforms: List[dict],
     annotated_ends: Dict[str, Dict[str, List[int]]],
@@ -532,18 +584,17 @@ def compute_jc_deduplicated_precision_recall(
         use_peaks = current_peaks is not None
 
         if use_peaks:
-            # Peak-based recall: all isoforms (incl. single-exon) vs all peaks.
-            # Uses interval-edge matching consistent with the precision dedup loop.
-            all_matched_peaks: Set[Tuple[str, str, int, int]] = set()
-            for iso in isoforms:
-                pos = iso[end_type]
-                peak_ivs = current_peaks.get((iso["chrom"], iso["strand"]), [])
-                m = _nearest_annot(pos, peak_ivs, window)
-                if m is not None:
-                    all_matched_peaks.add((iso["chrom"], iso["strand"], m[0], m[1]))
-            total_peaks = sum(len(v) for v in current_peaks.values())
-            recall = len(all_matched_peaks) / total_peaks if total_peaks > 0 else None
-            n_annot_matched = len(all_matched_peaks)
+            # Peak-based recall: all isoforms (incl. single-exon) vs all
+            # peaks, collapsed to summits and matched ONE-TO-ONE (greedy
+            # nearest) so a cluster of called ends near one peak credits at
+            # most one summit (R3 fix).  Previously this deduped only by
+            # interval identity, which still let a single fat cluster of
+            # calls saturate recall via overlapping wide intervals.
+            summit_index = _summit_index_from_intervals(current_peaks)
+            n_matched, total_peaks = _one_to_one_recall(
+                isoforms, summit_index, end_type, window)
+            recall = n_matched / total_peaks if total_peaks > 0 else None
+            n_annot_matched = n_matched
             n_annot_total = total_peaks
         else:
             # GTF-based recall: every distinct annotated TSS/TTS in the
