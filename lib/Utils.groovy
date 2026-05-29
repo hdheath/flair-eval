@@ -10,6 +10,86 @@ import groovy.json.JsonSlurper
 class Utils {
 
     /**
+     * Canonical column order for the STAGE-1 assembly manifest CSV.
+     * The ASSEMBLE subworkflow writes rows in EXACTLY this order; the
+     * EVALUATION entrypoint parses by these header names. Keep in sync.
+     */
+    static final List<String> MANIFEST_COLUMNS = [
+        'test_name', 'dataset_name', 'align_mode', 'partition_mode',
+        'transcriptome_mode', 'tool',
+        'isoforms_bed', 'isoforms_gtf', 'isoform_read_map', 'ted_log', 'isoform_counts',
+        'firstpass', 'cds_bed', 'cds_info',
+        'bam', 'bai', 'reads_bed', 'genome', 'gtf', 'cage_peaks', 'drna_peaks',
+        'cage_signal_plus', 'cage_signal_minus', 'drna_signal_plus', 'drna_signal_minus',
+        'library_type', 'partition_region', 'partition_args'
+    ]
+
+    /** Header line (no trailing newline) for the manifest CSV. */
+    static String manifestHeader() {
+        return MANIFEST_COLUMNS.join(',')
+    }
+
+    /**
+     * Parse the STAGE-1 assembly manifest CSV into a list of row maps.
+     *
+     * Mirrors the samplesheet-reading pattern: reads the header, splits each
+     * data line, and returns [colName: value] maps. Handles quoted fields
+     * (values that contained a comma were wrapped in double quotes by the
+     * ASSEMBLE writer). Skips blank lines and a leading '#'-comment line.
+     *
+     * @param manifestPath  Path/String to the manifest CSV
+     * @return              List<Map> one map per assembly row
+     */
+    static List<Map> parseManifest(manifestPath) {
+        def rows = []
+        def header = null
+        new File(manifestPath.toString()).withReader { reader ->
+            reader.eachLine { rawLine ->
+                def line = rawLine
+                if (line == null) return
+                if (!line.trim()) return
+                if (line.startsWith('#')) return
+                def values = splitCsvLine(line)
+                if (header == null) {
+                    header = values
+                    return
+                }
+                // Pad/trim to header width
+                if (values.size() > header.size()) {
+                    values = values[0..<header.size()]
+                } else if (values.size() < header.size()) {
+                    values = values + ([''] * (header.size() - values.size()))
+                }
+                rows.add([header, values].transpose().collectEntries())
+            }
+        }
+        return rows
+    }
+
+    /**
+     * Split a single CSV line honoring double-quoted fields (no embedded
+     * newlines). Quotes are stripped from the returned values.
+     */
+    static List<String> splitCsvLine(String line) {
+        def out = []
+        def cur = new StringBuilder()
+        def inQuotes = false
+        for (int i = 0; i < line.length(); i++) {
+            def c = line.charAt(i)
+            if (c == ('"' as char)) {
+                inQuotes = !inQuotes
+            } else if (c == (',' as char) && !inQuotes) {
+                out.add(cur.toString())
+                cur = new StringBuilder()
+            } else {
+                cur.append(c)
+            }
+        }
+        out.add(cur.toString())
+        return out
+    }
+
+    /**
      * Sanitize mode names to use hyphens instead of underscores.
      * This ensures underscores can be used as delimiters in filenames.
      */
@@ -52,6 +132,7 @@ class Utils {
         def isoseq_modes = pipeline_config.isoseq ?: [:]
         def flames_modes = pipeline_config.flames ?: [:]
         def stringtie2_modes = pipeline_config.stringtie2 ?: [:]
+        def lraa_modes = pipeline_config.lraa ?: [:]
 
         def test_sets_list = []
         new File(csvPath.toString()).withReader { reader ->
@@ -99,7 +180,8 @@ class Utils {
                     isoquant: sanitizeModeMap(isoquant_modes),
                     isoseq: sanitizeModeMap(isoseq_modes),
                     flames: sanitizeModeMap(flames_modes),
-                    stringtie2: sanitizeModeMap(stringtie2_modes)
+                    stringtie2: sanitizeModeMap(stringtie2_modes),
+                    lraa: sanitizeModeMap(lraa_modes)
                 ])))
             }
         }
