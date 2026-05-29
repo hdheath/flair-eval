@@ -262,9 +262,23 @@ except Exception:  # pragma: no cover - clone/deps unavailable
     _TED_IMPORTABLE = False
 
 _RR = _namedtuple("_RR", "chrom strand start end name polyA")
+_JUNC = _namedtuple("_JUNC", "start end")   # duck-types isoform_data.Junc
 _VK = dict(w_depth=0.4, w_model=0.35, w_annot=0.25, threshold=0.5,
            depth_saturation=50.0, annot_half_life=100.0, annot_max_dist=500,
            trust_3prime=False)
+
+
+def _emitted_exons_valid(rep_start, rep_end, juncs):
+    """Mirror isoform_data.get_exons geometry and return True iff every exon
+    has start <= end (i.e. would NOT trip the Exon() assert). rep_start/rep_end
+    are the snapped genomic ends; juncs is the chain (genomic order)."""
+    if not juncs:
+        return rep_start <= rep_end
+    exons = [(rep_start, juncs[0].start)]
+    for i in range(len(juncs) - 1):
+        exons.append((juncs[i].end, juncs[i + 1].start))
+    exons.append((juncs[-1].end, rep_end))
+    return all(s <= e for s, e in exons)
 
 
 @pytest.mark.skipif(not _TED_IMPORTABLE, reason="flair.ted not importable")
@@ -320,6 +334,165 @@ def test_distance_miss_read_kept_at_own_position_not_dropped():
     assert math.isfinite(far_conf), "far read confidence not finite"
     for k in ("TED_tss_reality", "TED_tts_reality", "TED_confidence"):
         assert math.isfinite(float(far_scores[k])), f"{k} not finite for far read"
+
+
+# ─── SPLICE-BOUNDS CLAMP: snapped/kept ends never cross splice structure ──
+# Regression for the chr22 WTC11 AssertionError (isoform_data.py:68
+# Exon(start<=end) via get_exons -> Exon(start, juncs[0].start)). A snapped or
+# kept biological 5'/3' end that lands on the wrong side of a splice site must
+# be CLAMPED back to a valid coordinate — NOT dropped — so get_exons always
+# receives valid geometry. Covers BOTH strands and BOTH ends.
+
+@pytest.mark.skipif(not _TED_IMPORTABLE, reason="flair.ted not importable")
+def test_plus_strand_tss_peak_past_first_donor_is_clamped_not_dropped():
+    """+ strand: the nearest approved TSS peak sits DOWNSTREAM of the first
+    splice donor. Snapping there would make rep_start >= juncs[0].start and
+    blow up get_exons. The read must be emitted (no drop) with rep_start
+    clamped strictly inside the first exon, valid geometry, finite confidence."""
+    import math
+    # Chain: exon1 [800, 1200), intron, exon2 [1500, 5200). First donor=1200.
+    juncs = [_JUNC(1200, 1500)]
+    # TSS peak at 1400 is PAST the donor (1200); TTS peak at 5000 is fine.
+    approved = {
+        ("chr1", "+"): {
+            "tss": _np.array([1400], dtype=_np.int64),
+            "tts": _np.array([5000], dtype=_np.int64),
+            "tss_scores": {1400: {"depth_score": 0.5, "model_score": 0.6,
+                                  "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tts_scores": {5000: {"depth_score": 0.5, "model_score": 0.6,
+                                  "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tss_reality": {1400: 0.5}, "tts_reality": {5000: 0.5},
+            "tss_approved": _np.array([1400], dtype=_np.int64),
+            "tts_approved": _np.array([5000], dtype=_np.int64),
+        }
+    }
+    # Read starts at 1390 (its own TSS already past the donor), end 5002.
+    reads = [_RR("chr1", "+", 1390, 5002, "overshoot", (False, False))]
+    out = _ted.ted_global_assign_reads(
+        reads, "chr1", approved, tss_snap=50, tts_snap=25, scorer=None,
+        val_kwargs_tss=_VK, val_kwargs_tts=_VK,
+        threshold_tss=0.5, threshold_tts=0.5, chain_juncs=juncs)
+
+    assert len(out) == 1, f"read was DROPPED instead of clamped: {len(out)} groups"
+    conf, rep_start, rep_end, strand, repname, names, scores, tag = out[0]
+    # rep_start must be strictly before the first donor (valid first exon).
+    assert rep_start < juncs[0].start, (
+        f"rep_start {rep_start} not clamped before first donor {juncs[0].start}")
+    assert rep_end >= juncs[-1].end, f"rep_end {rep_end} crosses last acceptor"
+    assert _emitted_exons_valid(rep_start, rep_end, juncs), (
+        f"emitted exon geometry invalid: start={rep_start} end={rep_end} juncs={juncs}")
+    assert math.isfinite(conf) and math.isfinite(float(scores["TED_confidence"]))
+
+
+@pytest.mark.skipif(not _TED_IMPORTABLE, reason="flair.ted not importable")
+def test_plus_strand_tts_peak_before_last_acceptor_is_clamped_not_dropped():
+    """+ strand symmetric case: nearest approved TTS peak sits UPSTREAM of the
+    last splice acceptor. Must clamp rep_end strictly after the last acceptor."""
+    # Chain: exon1 [800,1200) intron exon2 [1500,5200). Last acceptor=1500.
+    juncs = [_JUNC(1200, 1500)]
+    # TTS peak at 1450 is BEFORE the last acceptor (1500); TSS peak 900 ok.
+    approved = {
+        ("chr1", "+"): {
+            "tss": _np.array([900], dtype=_np.int64),
+            "tts": _np.array([1450], dtype=_np.int64),
+            "tss_scores": {900: {"depth_score": 0.5, "model_score": 0.6,
+                                 "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tts_scores": {1450: {"depth_score": 0.5, "model_score": 0.6,
+                                  "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tss_reality": {900: 0.5}, "tts_reality": {1450: 0.5},
+            "tss_approved": _np.array([900], dtype=_np.int64),
+            "tts_approved": _np.array([1450], dtype=_np.int64),
+        }
+    }
+    reads = [_RR("chr1", "+", 905, 1460, "shorttts", (False, False))]
+    out = _ted.ted_global_assign_reads(
+        reads, "chr1", approved, tss_snap=50, tts_snap=25, scorer=None,
+        val_kwargs_tss=_VK, val_kwargs_tts=_VK,
+        threshold_tss=0.5, threshold_tts=0.5, chain_juncs=juncs)
+    assert len(out) == 1, "read dropped instead of clamped (TTS case)"
+    _c, rep_start, rep_end, _s, _rn, _ns, _sc, _t = out[0]
+    assert rep_end > juncs[-1].end, (
+        f"rep_end {rep_end} not clamped after last acceptor {juncs[-1].end}")
+    assert _emitted_exons_valid(rep_start, rep_end, juncs)
+
+
+@pytest.mark.skipif(not _TED_IMPORTABLE, reason="flair.ted not importable")
+def test_minus_strand_both_ends_clamped_not_dropped():
+    """- strand: biological TSS = genomic END, biological TTS = genomic START.
+    A TSS peak BEFORE the last acceptor (genomic end too small) and a TTS peak
+    PAST the first donor (genomic start too large) must both be clamped, on the
+    correct genomic sides, with valid emitted geometry and no drop."""
+    # Chain genomic: exon1 [800,1200) intron exon2 [1500,5200).
+    # first donor=1200 (genomic start ceiling), last acceptor=1500 (end floor).
+    juncs = [_JUNC(1200, 1500)]
+    # - strand: TSS peak (genomic end) at 1450 < last acceptor 1500 -> invalid.
+    #           TTS peak (genomic start) at 1400 > first donor 1200 -> invalid.
+    approved = {
+        ("chr1", "-"): {
+            "tss": _np.array([1450], dtype=_np.int64),
+            "tts": _np.array([1400], dtype=_np.int64),
+            "tss_scores": {1450: {"depth_score": 0.5, "model_score": 0.6,
+                                  "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tts_scores": {1400: {"depth_score": 0.5, "model_score": 0.6,
+                                  "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tss_reality": {1450: 0.5}, "tts_reality": {1400: 0.5},
+            "tss_approved": _np.array([1450], dtype=_np.int64),
+            "tts_approved": _np.array([1400], dtype=_np.int64),
+        }
+    }
+    # - strand read: genomic start=1410 (TTS side), genomic end=1460 (TSS side).
+    reads = [_RR("chr1", "-", 1410, 1460, "minus_overshoot", (False, False))]
+    out = _ted.ted_global_assign_reads(
+        reads, "chr1", approved, tss_snap=50, tts_snap=25, scorer=None,
+        val_kwargs_tss=_VK, val_kwargs_tts=_VK,
+        threshold_tss=0.5, threshold_tts=0.5, chain_juncs=juncs)
+    assert len(out) == 1, "minus-strand read dropped instead of clamped"
+    _c, rep_start, rep_end, _s, _rn, _ns, _sc, _t = out[0]
+    # Genomic invariants hold regardless of strand.
+    assert rep_start < juncs[0].start, (
+        f"genomic rep_start {rep_start} not < first donor {juncs[0].start}")
+    assert rep_end > juncs[-1].end, (
+        f"genomic rep_end {rep_end} not > last acceptor {juncs[-1].end}")
+    assert _emitted_exons_valid(rep_start, rep_end, juncs), (
+        "minus-strand emitted geometry invalid")
+
+
+@pytest.mark.skipif(not _TED_IMPORTABLE, reason="flair.ted not importable")
+def test_valid_ends_unchanged_and_single_exon_untouched():
+    """Clamp must be a no-op when ends are already valid, and single-exon
+    chains (no juncs) must be left entirely alone (chain_juncs empty/None)."""
+    juncs = [_JUNC(1200, 1500)]
+    approved = {
+        ("chr1", "+"): {
+            "tss": _np.array([1000], dtype=_np.int64),
+            "tts": _np.array([5000], dtype=_np.int64),
+            "tss_scores": {1000: {"depth_score": 0.5, "model_score": 0.6,
+                                  "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tts_scores": {5000: {"depth_score": 0.5, "model_score": 0.6,
+                                  "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tss_reality": {1000: 0.5}, "tts_reality": {5000: 0.5},
+            "tss_approved": _np.array([1000], dtype=_np.int64),
+            "tts_approved": _np.array([5000], dtype=_np.int64),
+        }
+    }
+    reads = [_RR("chr1", "+", 1002, 5002, "valid", (False, False))]
+    out = _ted.ted_global_assign_reads(
+        reads, "chr1", approved, tss_snap=50, tts_snap=25, scorer=None,
+        val_kwargs_tss=_VK, val_kwargs_tts=_VK,
+        threshold_tss=0.5, threshold_tts=0.5, chain_juncs=juncs)
+    assert len(out) == 1
+    _c, rep_start, rep_end, *_ = out[0]
+    # Unchanged snap to valid peaks.
+    assert (rep_start, rep_end) == (1000, 5000), "valid ends were perturbed"
+
+    # Single-exon: no juncs -> no clamp, snap as usual.
+    out_se = _ted.ted_global_assign_reads(
+        reads, "chr1", approved, tss_snap=50, tts_snap=25, scorer=None,
+        val_kwargs_tss=_VK, val_kwargs_tts=_VK,
+        threshold_tss=0.5, threshold_tts=0.5, chain_juncs=None)
+    assert len(out_se) == 1
+    _c2, rs2, re2, *_ = out_se[0]
+    assert _emitted_exons_valid(rs2, re2, [])
 
 
 if __name__ == "__main__":
