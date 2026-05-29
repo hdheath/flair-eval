@@ -150,6 +150,83 @@ def test_ted_columns_flow_to_gtf(ted_run):
         assert name in gtf, f"{name} not found as a GTF attribute"
 
 
+def test_snap_drop_fix_threshold_does_not_drop_reads():
+    """FIX 2 (snap-drop / no-filter): a reality threshold of 1.0 rejects EVERY
+    global peak, but under no-filter NOTHING is dropped on that confidence
+    threshold — reads still snap to their nearest peak and emit, carrying the
+    (low) reality forward as a column.
+
+    Pre-fix, only threshold-approved peaks were snap targets, so an all-reject
+    threshold dropped every read -> 0 isoforms. Post-fix the # emitted isoforms
+    still equals the # clusters and the per-end confidences are all present.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        out = _run_ted(Path(td), extra_args=("--ted_threshold", "1.0"))
+        bed = _read_rows(Path(str(out) + ".isoforms.bed"))
+        ted_log = _read_rows(Path(str(out) + ".ted_log.tsv"))
+        reallyunfilt = _read_rows(Path(str(out) + ".firstpass.reallyunfiltered.bed"))
+        unfilt = _read_rows(Path(str(out) + ".firstpass.unfiltered.bed"))
+
+    # Every global peak should be rejected at threshold=1.0 ...
+    peak_status = [r[3] for r in ted_log
+                   if len(r) > 3 and r[2] == "global_peak"]
+    assert peak_status, "no global_peak rows in ted_log"
+    assert all(s == "reject" for s in peak_status), (
+        f"expected ALL peaks rejected at threshold=1.0, got {set(peak_status)}")
+
+    # ... yet reads still snap and clusters still emit (no confidence drop).
+    n_clusters_log = sum(1 for r in ted_log
+                         if len(r) > 3 and r[2] == "global_assign" and r[3] == "pass")
+    assert n_clusters_log > 0, (
+        "FIX 2 regression: all reads dropped at snap time under all-reject "
+        "threshold (confidence-threshold drop survived the no-filter fix)")
+    # #emitted isoforms == #clusters: no-filter parity holds even all-reject.
+    assert len(reallyunfilt) == n_clusters_log, (
+        f"raw clusters ({len(reallyunfilt)}) != global_assign passes ({n_clusters_log})")
+    assert len(unfilt) == len(reallyunfilt), (
+        f"no-filter dropped ends: unfiltered ({len(unfilt)}) != raw ({len(reallyunfilt)})")
+    assert len(bed) > 0, "no isoforms emitted under all-reject threshold (snap-drop fix failed)"
+
+    # Per-end confidences all present and finite for every emitted isoform —
+    # carrying the (low) reality as a column is the whole point of the fix.
+    import math
+    for r in bed:
+        assert len(r) == 30, f"expected 30 BED cols, got {len(r)}"
+        for name, idx in _TED_COL_IDX.items():
+            v = r[idx]
+            assert v != "", f"{name} empty for {r[3]} under all-reject threshold"
+            assert math.isfinite(float(v)), f"{name}={v} not finite for {r[3]}"
+
+
+def test_chemistry_preset_runs_clean():
+    """FIX 1: the --ted_chemistry preset bundle runs end-to-end (cDNA -> the
+    sigma_tts=15 default fills in) and preserves no-filter parity."""
+    with tempfile.TemporaryDirectory() as td:
+        out = _run_ted(Path(td), extra_args=("--ted_chemistry", "ont_cdna"))
+        bed = _read_rows(Path(str(out) + ".isoforms.bed"))
+        ted_log = _read_rows(Path(str(out) + ".ted_log.tsv"))
+    assert bed, "no isoforms emitted under --ted_chemistry ont_cdna"
+    n_clusters = sum(1 for r in ted_log
+                     if len(r) > 3 and r[2] == "global_assign" and r[3] == "pass")
+    assert n_clusters > 0
+    # cDNA preset must NOT trust the 3' (only dRNA does); TTS_model stays real.
+    tts_models = {float(r[_TED_COL_IDX["TTS_model"]]) for r in bed}
+    assert any(v != 1.0 for v in tts_models), (
+        "cDNA --ted_chemistry should NOT short-circuit TTS_model to 1.0")
+
+
+def test_chemistry_drna_preset_trusts_3prime():
+    """FIX 1: --ted_chemistry ont_drna enables 3'-trust via the bundle (no
+    explicit --ted_trust_3prime needed) -> TTS_model forced to 1.0."""
+    with tempfile.TemporaryDirectory() as td:
+        out = _run_ted(Path(td), extra_args=("--ted_chemistry", "ont_drna"))
+        bed = _read_rows(Path(str(out) + ".isoforms.bed"))
+    assert bed, "no isoforms emitted under --ted_chemistry ont_drna"
+    for r in bed:
+        assert float(r[_TED_COL_IDX["TTS_model"]]) == 1.0, (
+            f"ont_drna preset should trust 3' (TTS_model==1.0): {r[3]}")
+
+
 def test_dRNA_trust_short_circuits_tts_model():
     """--ted_trust_3prime forces TTS_model to 1.0 while keeping TSS_model real."""
     with tempfile.TemporaryDirectory() as td:
@@ -163,6 +240,86 @@ def test_dRNA_trust_short_circuits_tts_model():
     tss_models = {float(r[_TED_COL_IDX["TSS_model"]]) for r in rows}
     assert any(v != 1.0 for v in tss_models), (
         "TSS_model should remain real (not all 1.0) under --ted_trust_3prime")
+
+
+# ─── FIX 2b: distance-miss reads are KEPT at their own end position ───────
+# Unit-level (no subprocess): drives ted_global_assign_reads directly so it
+# runs even when the full FLAIR env / models are unavailable. Asserts that a
+# read whose end is FAR from any approved peak is still emitted (not dropped)
+# at its own end position, carrying a finite TED reality/confidence column.
+import sys as _sys
+from collections import namedtuple as _namedtuple
+
+_CLONE_SRC = CLONE / "src"
+if str(_CLONE_SRC) not in _sys.path:
+    _sys.path.insert(0, str(_CLONE_SRC))
+
+try:
+    import numpy as _np
+    from flair import ted as _ted
+    _TED_IMPORTABLE = True
+except Exception:  # pragma: no cover - clone/deps unavailable
+    _TED_IMPORTABLE = False
+
+_RR = _namedtuple("_RR", "chrom strand start end name polyA")
+_VK = dict(w_depth=0.4, w_model=0.35, w_annot=0.25, threshold=0.5,
+           depth_saturation=50.0, annot_half_life=100.0, annot_max_dist=500,
+           trust_3prime=False)
+
+
+@pytest.mark.skipif(not _TED_IMPORTABLE, reason="flair.ted not importable")
+def test_distance_miss_read_kept_at_own_position_not_dropped():
+    """FIX 2b: a read whose 5'/3' end is far from ANY approved peak is NOT
+    dropped at snap time. It is emitted at its own end position carrying a
+    finite TED reality/confidence column (a logged diagnostic, not a removal).
+    Normal snapping still applies when a peak IS within the window."""
+    import math
+    approved = {
+        ("chr1", "+"): {
+            "tss": _np.array([1000], dtype=_np.int64),
+            "tts": _np.array([5000], dtype=_np.int64),
+            "tss_scores": {1000: {"depth_score": 0.5, "model_score": 0.6,
+                                  "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tts_scores": {5000: {"depth_score": 0.5, "model_score": 0.6,
+                                  "annotation_score": 0.4, "annot_dist_bp": 10}},
+            "tss_reality": {1000: 0.5}, "tts_reality": {5000: 0.5},
+            "tss_approved": _np.array([1000], dtype=_np.int64),
+            "tts_approved": _np.array([5000], dtype=_np.int64),
+        }
+    }
+    reads = [
+        _RR("chr1", "+", 1005, 5002, "near", (False, False)),    # snaps to peaks
+        _RR("chr1", "+", 20000, 25000, "far", (False, False)),   # far from any peak
+    ]
+    out = _ted.ted_global_assign_reads(
+        reads, "chr1", approved, tss_snap=50, tts_snap=25, scorer=None,
+        val_kwargs_tss=_VK, val_kwargs_tts=_VK,
+        threshold_tss=0.5, threshold_tts=0.5)
+
+    # No drop: #emitted clusters == #distinct (snapped/self) end pairs == 2.
+    assert len(out) == 2, (
+        f"distance-miss read was DROPPED at snap time: got {len(out)} groups, "
+        "expected 2 (snap-drop fix regression)")
+
+    by_read = {}
+    for conf, rs, re_, strand, repname, names, scores, tag in out:
+        for nm in names:
+            by_read[nm] = (conf, rs, re_, scores)
+    assert "far" in by_read, "far read not emitted"
+    assert "near" in by_read, "near read not emitted"
+
+    # The near read snapped to the approved peaks; the far read kept its own
+    # end position (no rounding to the distant peak).
+    near_conf, near_s, near_e, _ = by_read["near"]
+    far_conf, far_s, far_e, far_scores = by_read["far"]
+    assert (near_s, near_e) == (1000, 5000), "near read did not snap to peaks"
+    assert (far_s, far_e) == (20000, 25000), (
+        "far read was snapped away from its own position instead of kept")
+
+    # Finite confidence carried as a column for the kept self-position read.
+    assert math.isfinite(far_conf), "far read confidence not finite"
+    for k in ("TED_tss_reality", "TED_tts_reality", "TED_confidence"):
+        assert math.isfinite(float(far_scores[k])), f"{k} not finite for far read"
 
 
 if __name__ == "__main__":
