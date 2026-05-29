@@ -23,13 +23,16 @@ process FlairTranscriptome {
           path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.ted_log.tsv", optional: true), emit: transcriptome
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), val(partition_args), val(transcriptome_mode),
           path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.firstpass.bed", optional: true), emit: firstpass
-    // CDS-aware BED produced by --predict_cds (predictProductivity).
-    // File path: <out_prefix>.isoforms.CDS.bed; the original .isoforms.bed
-    // is left untouched. Optional because some pipeline modes might not
-    // run predict_cds (e.g. FLAMES, IsoSeq don't generate this file).
-    tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode), val(partition_args), val(transcriptome_mode),
-          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.isoforms.CDS.bed", optional: true),
-          path("${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}_transcriptome.isoforms.CDS.info.tsv", optional: true), emit: cds_bed
+    // NOTE: the separate CDS-aware BED (*.isoforms.CDS.bed / *.isoforms.CDS.info.tsv)
+    // is OBSOLETE. The new dev FLAIR (flair-ted-52826) makes CDS/productivity
+    // prediction INLINE in the regular .isoforms.bed (columns 7/8) and REMOVED
+    // both the separate CDS files and the --predict_cds flag. The process must
+    // therefore NOT declare these as outputs — declaring them (even as optional)
+    // made the split ASSEMBLY entry abort with MissingFileException on a fresh
+    // output-collection because the script structurally never writes them.
+    // The manifest still carries cds_bed/cds_info columns (always NO_CDS now)
+    // for schema back-compat; re-enabling the CDS analyses by reading the
+    // inline productivity from .isoforms.bed is a future follow-up.
 
     script:
     // Auto-detect junction file format: .bed → --junction_bed, .tab → --junction_tab
@@ -60,6 +63,7 @@ process FlairTranscriptome {
         -t ${task.cpus} \\
         --sample_name ${out_base} \\
         --keep_intermediate \\
+        --generate_map \\
         ${junction_tab_arg} \\
         ${ted_log_flag} \\
         ${predict_cds_flag} \\

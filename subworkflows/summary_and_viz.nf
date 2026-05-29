@@ -188,8 +188,13 @@ workflow SUMMARY_AND_VIZ {
         // --- Alt-end CDS analysis: UTR / productivity deltas ---
         // For SJC groups with >=2 isoforms, computes UTR length deltas
         // and productivity-class transitions (PRO->PTC, etc.) between
-        // sibling isoforms. Consumes the *.isoforms.CDS.bed files
-        // produced by --predict_cds (predictProductivity).
+        // sibling isoforms. Historically consumed the *.isoforms.CDS.bed files
+        // from --predict_cds (predictProductivity). The new dev FLAIR makes
+        // productivity INLINE in .isoforms.bed (cols 7/8) and no longer writes
+        // a separate CDS BED, so flair_cds_bed is now an EMPTY channel: this
+        // channel is empty and AltEndCDSAnalysis / CDSCoverageRecovery below
+        // are effectively no-op. FOLLOW-UP (hdheath): re-enable them by reading
+        // inline productivity from the regular .isoforms.bed.
         cds_bed_ch = flair_cds_bed
             .filter { it[6] != null }      // skip modes without CDS BED
             .map { test_name, dataset_name, align_mode, partition_mode,
@@ -214,10 +219,23 @@ workflow SUMMARY_AND_VIZ {
             .map { items -> [items[0], items[12]] }   // test_name, reads_bed (shifted +1 by isoform_counts insertion)
             .unique { it[0] }
 
-        exon_length_inputs = isoforms_per_gene_ch
+        exon_length_isoform_ch = all_eval_inputs
+            .map { items ->
+                // items[0]=test_name, [4]=transcriptome_mode, [5]=isoforms_bed,
+                // [6]=isoforms_gtf, [9]=isoform_counts
+                def isoform_file = items[5].name.contains('NO_ISOFORMS_BED') ? items[6] : items[5]
+                [items[0], items[4], isoform_file, items[9].toString()]
+            }
+            .filter { !it[2].name.contains('NO_ISOFORMS') }
+            .groupTuple(by: [0])
+            .map { test_name, labels, files, counts ->
+                [test_name, labels, files.flatten(), counts]
+            }
+
+        exon_length_inputs = exon_length_isoform_ch
             .join(reads_bed_by_test)
-            .map { test_name, labels, files, reads_bed ->
-                [test_name, labels, files, reads_bed]
+            .map { test_name, labels, files, counts, reads_bed ->
+                [test_name, labels, files, counts, reads_bed]
             }
 
         ExonLengthDistributionPlot(exon_length_inputs)

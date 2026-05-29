@@ -25,6 +25,7 @@ include { IsoQuantAssembly     } from '../modules/transcriptome/isoquant/main'
 include { IsoSeqAssembly       } from '../modules/transcriptome/isoseq/main'
 include { FlamesAssembly       } from '../modules/transcriptome/flames/main'
 include { StringTie2Assembly    } from '../modules/transcriptome/stringtie2/main'
+include { LraaAssembly         } from '../modules/transcriptome/lraa/main'
 include { PrepareReferencePeaks} from '../modules/evaluation/prepare_ref_peaks/main'
 include { Evaluation           } from '../modules/evaluation/main'
 include { TedEndPrecision       } from '../modules/evaluation/main'
@@ -34,7 +35,7 @@ workflow ASSEMBLE_AND_EVAL {
 
     take:
         partitioned_ch     // [test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks]
-        datasets_ch        // [test_name, dataset, align_modes, partition_modes, transcriptome_modes, bambu_modes, isoquant_modes, isoseq_modes, flames_modes, stringtie2_modes]
+        datasets_ch        // [test_name, dataset, align_modes, partition_modes, transcriptome_modes, bambu_modes, isoquant_modes, isoseq_modes, flames_modes, stringtie2_modes, lraa_modes]
         dataset_signal_ch  // [test_name, library_type, cage_signal_plus, cage_signal_minus, drna_signal_plus, drna_signal_minus]
         placeholders       // val: map with keys NO_ISOFORMS_BED, NO_ISOFORMS_GTF, NO_JUNCTION_TAB, NO_CAGE, NO_DRNA
 
@@ -57,7 +58,7 @@ workflow ASSEMBLE_AND_EVAL {
         // older configs that don't use the prefix convention).
         transcriptome_inputs = partitioned_with_modes.flatMap {
             test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks,
-            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes, ds_lraa_modes ->
             def partition_args = ds_partition_modes[partition_mode] ?: ''
             def junction_tab_file = dataset.junction_tab ? file(dataset.junction_tab) : placeholders.NO_JUNCTION_TAB
             def lib = dataset.library_type ?: 'unknown'
@@ -113,7 +114,7 @@ workflow ASSEMBLE_AND_EVAL {
         // --- Bambu ---
         bambu_inputs = partitioned_with_modes.flatMap {
             test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks,
-            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes, ds_lraa_modes ->
             if (ds_bambu_modes.isEmpty()) return []
             ds_bambu_modes.collect { bambu_mode, bambu_args ->
                 [test_name, dataset_name, align_mode, partition_mode, bam, bai, genome, gtf,
@@ -129,7 +130,7 @@ workflow ASSEMBLE_AND_EVAL {
         // so all samples share the same mode name in results.
         isoquant_inputs = partitioned_with_modes.flatMap {
             test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks,
-            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes, ds_lraa_modes ->
             if (ds_isoquant_modes.isEmpty()) return []
             def lib = dataset.library_type ?: 'unknown'
             ds_isoquant_modes.findAll { isoquant_mode, isoquant_args ->
@@ -154,7 +155,7 @@ workflow ASSEMBLE_AND_EVAL {
         // IsoSeq is designed for PacBio CCS/HiFi data; only run on pacbio samples.
         isoseq_inputs = partitioned_with_modes.flatMap {
             test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks,
-            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes, ds_lraa_modes ->
             if (ds_isoseq_modes.isEmpty()) return []
             def lib = dataset.library_type ?: 'unknown'
             // Only run IsoSeq on PacBio data or unknown library type
@@ -169,7 +170,7 @@ workflow ASSEMBLE_AND_EVAL {
         // --- FLAMES ---
         flames_inputs = partitioned_with_modes.flatMap {
             test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks,
-            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes, ds_lraa_modes ->
             if (ds_flames_modes.isEmpty()) return []
             ds_flames_modes.collect { flames_mode, flames_args ->
                 [test_name, dataset_name, align_mode, partition_mode, bam, bai, genome, gtf,
@@ -181,7 +182,7 @@ workflow ASSEMBLE_AND_EVAL {
         // --- StringTie2 ---
         stringtie2_inputs = partitioned_with_modes.flatMap {
             test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks,
-            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes, ds_lraa_modes ->
             if (ds_stringtie2_modes.isEmpty()) return []
             ds_stringtie2_modes.collect { stringtie2_mode, stringtie2_args ->
                 [test_name, dataset_name, align_mode, partition_mode, bam, bai, genome, gtf,
@@ -189,6 +190,30 @@ workflow ASSEMBLE_AND_EVAL {
             }
         }
         StringTie2Assembly(stringtie2_inputs)
+
+        // --- LRAA (Long Read Alignment Assembler) ---
+        // Container-only (singularity .sif pulled from the upstream Docker
+        // image; see params.lraa_sif in nextflow.config).  Reference-guided
+        // by default; --HiFi is auto-injected for pacbio library types,
+        // mirroring the IsoQuant 'auto' pattern above.
+        lraa_inputs = partitioned_with_modes.flatMap {
+            test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks,
+            dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes, ds_lraa_modes ->
+            if (ds_lraa_modes.isEmpty()) return []
+            def lib = dataset.library_type ?: 'unknown'
+            ds_lraa_modes.collect { lraa_mode, lraa_args ->
+                def resolved = (lraa_args ?: '').toString()
+                // Inject --HiFi for PacBio (HiFi/CCS) samples if the user
+                // didn't already specify it in lraa_args.  ONT samples
+                // (and 'unknown' library types) must NOT get --HiFi.
+                if (lib.startsWith('pacbio') && !(resolved =~ /(?<![\w-])--HiFi(?![\w-])/)) {
+                    resolved = "--HiFi ${resolved}".trim()
+                }
+                [test_name, dataset_name, align_mode, partition_mode, bam, bai, genome, gtf,
+                 lraa_mode, resolved]
+            }
+        }
+        LraaAssembly(lraa_inputs)
 
         // --- Reference peaks ---
         ref_peak_inputs = partitioned_ch.map {
@@ -256,17 +281,17 @@ workflow ASSEMBLE_AND_EVAL {
         }
 
         isoseq_isoform_ch = IsoSeqAssembly.out.isoseq_gff.map {
-            test_name, dataset_name, align_mode, partition_mode, isoseq_mode, isoforms_gff, isoform_read_map ->
+            test_name, dataset_name, align_mode, partition_mode, isoseq_mode, isoforms_gff, isoform_read_map, isoform_counts ->
             [test_name, dataset_name, align_mode, partition_mode, "isoseq_${isoseq_mode}",
              placeholders.NO_ISOFORMS_BED, isoforms_gff, isoform_read_map, NO_TED_LOG,
-             NO_COUNTS]
+             isoform_counts ?: NO_COUNTS]
         }
 
         flames_isoform_ch = FlamesAssembly.out.flames_gtf.map {
-            test_name, dataset_name, align_mode, partition_mode, flames_mode, isoforms_gtf, isoform_read_map ->
+            test_name, dataset_name, align_mode, partition_mode, flames_mode, isoforms_gtf, isoform_read_map, isoform_counts ->
             [test_name, dataset_name, align_mode, partition_mode, "flames_${flames_mode}",
              placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG,
-             NO_COUNTS]
+             isoform_counts ?: NO_COUNTS]
         }
 
         stringtie2_isoform_ch = StringTie2Assembly.out.stringtie2_gtf.map {
@@ -276,12 +301,20 @@ workflow ASSEMBLE_AND_EVAL {
              NO_COUNTS]
         }
 
+        lraa_isoform_ch = LraaAssembly.out.lraa_gtf.map {
+            test_name, dataset_name, align_mode, partition_mode, lraa_mode, isoforms_gtf, isoform_read_map, isoform_counts ->
+            [test_name, dataset_name, align_mode, partition_mode, "lraa_${lraa_mode}",
+             placeholders.NO_ISOFORMS_BED, isoforms_gtf, isoform_read_map, NO_TED_LOG,
+             isoform_counts ?: NO_COUNTS]
+        }
+
         // Single combine: normalize → mix → join context
         // Using .mix() instead of .concat() so evaluations can start as
         // soon as any assembler finishes, rather than waiting in order.
         all_eval_inputs = flair_isoform_ch
             .mix(bambu_isoform_ch, isoquant_isoform_ch,
-                 isoseq_isoform_ch, flames_isoform_ch, stringtie2_isoform_ch)
+                 isoseq_isoform_ch, flames_isoform_ch, stringtie2_isoform_ch,
+                 lraa_isoform_ch)
             .combine(eval_context_ch, by: [0, 1, 2, 3])
 
         Evaluation(all_eval_inputs)
@@ -303,7 +336,7 @@ workflow ASSEMBLE_AND_EVAL {
 
         partition_args_ch = partitioned_with_modes
             .map { test_name, dataset_name, align_mode, partition_mode, bam, bai, bed, genome, gtf, cage_peaks, drna_peaks,
-                   dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes ->
+                   dataset, ds_align_modes, ds_partition_modes, ds_transcriptome_modes, ds_bambu_modes, ds_isoquant_modes, ds_isoseq_modes, ds_flames_modes, ds_stringtie2_modes, ds_lraa_modes ->
                 def partition_args = ds_partition_modes[partition_mode] ?: ''
                 [test_name, dataset_name, align_mode, partition_mode, partition_args]
             }
@@ -380,10 +413,9 @@ workflow ASSEMBLE_AND_EVAL {
         all_eval_inputs         = all_eval_inputs
         flair_transcriptome     = FlairTranscriptome.out.transcriptome
         flair_firstpass         = FlairTranscriptome.out.firstpass
-        // CDS-aware BEDs from --predict_cds (predictProductivity output).
-        // Consumed by AltEndCDSAnalysis / CDSCoverageRecovery in
-        // SUMMARY_AND_VIZ. Tuple shape:
-        //   [test_name, dataset_name, align_mode, partition_mode,
-        //    partition_args, transcriptome_mode, isoforms_CDS.bed, isoforms_CDS.info.tsv]
-        flair_cds_bed           = FlairTranscriptome.out.cds_bed
+        // Separate CDS-aware BED is OBSOLETE under the new dev FLAIR
+        // (productivity is inline in .isoforms.bed). FlairTranscriptome no
+        // longer emits cds_bed; emit empty so AltEndCDSAnalysis /
+        // CDSCoverageRecovery in SUMMARY_AND_VIZ are gracefully no-op.
+        flair_cds_bed           = Channel.empty()
 }

@@ -26,7 +26,7 @@
 //                        bam, bai, reads_bed, genome, gtf, cage_peaks, drna_peaks,
 //                        partition_args] (monolith convenience; ref peaks added in EVALUATE)
 //   flair_firstpass   — FlairTranscriptome.out.firstpass
-//   flair_cds_bed     — FlairTranscriptome.out.cds_bed
+//   flair_cds_bed     — Channel.empty() (separate CDS BED obsolete; inline now)
 //   manifest_rows     — per-assembly CSV row strings (header-less) for the manifest
 // =============================================================================
 
@@ -285,11 +285,12 @@ workflow ASSEMBLE {
             [[test_name, dataset_name, align_mode, partition_mode, transcriptome_mode],
              firstpass_bed ?: NO_FIRSTPASS]
         }
-        flair_cds_keyed = FlairTranscriptome.out.cds_bed.map {
-            test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode, cds_bed, cds_info ->
-            [[test_name, dataset_name, align_mode, partition_mode, transcriptome_mode],
-             cds_bed ?: NO_CDS, cds_info ?: NO_CDS]
-        }
+        // The separate CDS BED is OBSOLETE under the new dev FLAIR (productivity
+        // is inline in .isoforms.bed). FlairTranscriptome no longer emits cds_bed,
+        // so this keyed channel is empty: the remainder:true join below fills the
+        // manifest cds_bed/cds_info columns with the NO_CDS placeholder for every
+        // row. Column stays in the 28-col schema for back-compat.
+        flair_cds_keyed = Channel.empty()
 
         // signal map keyed by test_name
         signal_keyed = dataset_signal_ch.map {
@@ -411,6 +412,8 @@ workflow ASSEMBLE {
         isoform_tuples    = isoform_tuples
         eval_context_seed = eval_context_seed
         flair_firstpass   = FlairTranscriptome.out.firstpass
-        flair_cds_bed     = FlairTranscriptome.out.cds_bed
+        // CDS BED is obsolete (inline productivity now) — emit empty so
+        // downstream CDS analyses are gracefully fed nothing (no-op).
+        flair_cds_bed     = Channel.empty()
         manifest_rows     = manifest_rows
 }
