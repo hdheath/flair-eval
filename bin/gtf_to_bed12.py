@@ -200,10 +200,16 @@ def main():
         sys.exit(1)
     
     n_transcripts = gtf_to_bed12(args.gtf, args.output, args.source, args.verbose)
-    
+
     if n_transcripts == 0:
-        print("Warning: No transcripts written to output", file=sys.stderr)
-        sys.exit(1)
+        # 0 transcripts is a LEGITIMATE outcome (e.g. a tool like IsoSeq finds no
+        # isoforms in a single chromosome), NOT a failure. A valid empty BED12 was
+        # already written. Exiting non-zero here propagates through ted.py's
+        # subprocess.run(check=True) and aborts the whole pipeline, so warn and
+        # exit 0 — downstream eval handles the empty BED.
+        print("Warning: No transcripts written to output (empty input is allowed)",
+              file=sys.stderr)
+        sys.exit(0)
 
 
 if __name__ == '__main__':

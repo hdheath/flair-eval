@@ -715,8 +715,9 @@ def write_summary_tsv(results: dict, outpath: Path, mode_label: str = ""):
 
 
 def write_per_jc_tsv(per_jc: list, outpath: Path):
-    if not per_jc:
-        return
+    # Always write the file (header-only when empty) so downstream consumers —
+    # e.g. the Nextflow module's unconditional `mv per_junction_chain.tsv` — never
+    # fail on tools that yield 0 isoforms in the region (e.g. isoseq on chr22).
     fields = ["chrom", "strand", "jc_hash", "n_isoforms", "n_junctions",
               "5prime_unique_pos", "5prime_dedup_tp", "5prime_redundant",
               "3prime_unique_pos", "3prime_dedup_tp", "3prime_redundant",
