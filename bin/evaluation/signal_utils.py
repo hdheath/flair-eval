@@ -47,13 +47,42 @@ def tss_tts(start: int, end: int, strand: str) -> Tuple[int, int]:
 
 # ── BED12 parsing ──────────────────────────────────────────────────────────
 
-def parse_bed12(path: str | Path) -> List[dict]:
-    """Parse a BED12 file and return a list of isoform dicts.
+def _clean_field(value: str) -> str:
+    """Strip a trailing comma / whitespace from a FlairBed extension field.
 
-    Each dict contains:
+    FlairBed writes some array-style fields with a trailing comma (e.g.
+    ``ENSG00000177663.16,``).  Returns an empty string when the field is
+    blank, so empty TED columns degrade to ``""``.
+    """
+    return value.strip().rstrip(",").strip()
+
+
+def parse_bed12(path: str | Path) -> List[dict]:
+    """Parse a BED12 (or 30-column FlairBed) file → list of isoform dicts.
+
+    Each dict always contains:
       chrom, start, end, name, score, strand, tss, tts,
       junctions (tuple of (donor, acceptor) 2-tuples), n_exons (int),
-      spliced_len (int, sum of exon/block sizes).
+      spliced_len (int, sum of exon/block sizes), gene_id.
+
+    For a **FlairBed** (>=18 columns, the new FLAIR/TED ``*.isoforms.bed``
+    schema — see ``flair_bed.as``) the following INLINE fields are read
+    directly rather than parsed out of the name:
+      thick_start/thick_end  (cols 7/8, 0-indexed 6/7) — CDS genomic span,
+      gene_id                (col 13) — FLG... FLAIR gene ID (used for
+                             gene grouping; the bare FLT name in col 4 is
+                             NOT a gene ID),
+      ref_transcript_id      (col 14, ENST...),
+      ref_gene_mapping       (col 15, ENSG...),
+      read_support           (col 16, int),
+      frac_support           (col 17, float),
+      productivity           (col 18, PRO/PTC/NGO/NST or "").
+    The 8 TED confidence columns (23-30) are read when present and may be
+    empty strings.
+
+    For a plain BED12 (exactly 12 cols, e.g. a non-FLAIR tool or a GTF→BED
+    conversion) the FlairBed fields are absent; gene_id then falls back to
+    :func:`gene_from_name` and productivity is "".
 
     Splice junctions are derived from block starts/sizes.
     """
@@ -74,6 +103,11 @@ def parse_bed12(path: str | Path) -> List[dict]:
                 score = int(c[4])
             except ValueError:
                 score = 0
+            try:
+                thick_start = int(c[6])
+                thick_end = int(c[7])
+            except (ValueError, IndexError):
+                thick_start, thick_end = start, end
             bc = int(c[9])
             bsz = [int(x) for x in c[10].rstrip(",").split(",") if x]
             bst = [int(x) for x in c[11].rstrip(",").split(",") if x]
@@ -81,10 +115,51 @@ def parse_bed12(path: str | Path) -> List[dict]:
             for i in range(bc - 1):
                 juncs.append((start + bst[i] + bsz[i], start + bst[i + 1]))
             tss, tts = tss_tts(start, end, strand)
+
+            # ── FlairBed inline extension columns (new schema) ──────────
+            is_flair_bed = len(c) >= 18
+            flg_gene_id = _clean_field(c[12]) if len(c) > 12 else ""
+            ref_transcript_id = _clean_field(c[13]) if len(c) > 13 else ""
+            ref_gene_mapping = _clean_field(c[14]) if len(c) > 14 else ""
+            read_support = None
+            if len(c) > 15:
+                try:
+                    read_support = int(_clean_field(c[15]))
+                except (ValueError, TypeError):
+                    read_support = None
+            frac_support = None
+            if len(c) > 16:
+                try:
+                    frac_support = float(_clean_field(c[16]))
+                except (ValueError, TypeError):
+                    frac_support = None
+            productivity = _clean_field(c[17]) if len(c) > 17 else ""
+            ted_cols = {}
+            if len(c) >= 30:
+                for key, idx in (
+                    ("TSS_depth", 22), ("TSS_model", 23),
+                    ("TSS_annot", 24), ("TSS_reality", 25),
+                    ("TTS_depth", 26), ("TTS_model", 27),
+                    ("TTS_annot", 28), ("TTS_reality", 29),
+                ):
+                    ted_cols[key] = _clean_field(c[idx])
+
+            # gene_id: prefer the inline FLG gene id (FlairBed); else fall
+            # back to the historical name regex (plain BED12 / non-FLAIR).
+            gene_id = flg_gene_id if (is_flair_bed and flg_gene_id) \
+                else gene_from_name(name)
+
             isoforms.append(dict(
                 chrom=chrom, start=start, end=end, name=name,
-                score=score, strand=strand, gene_id=gene_from_name(name),
+                score=score, strand=strand, gene_id=gene_id,
                 tss=tss, tts=tts,
+                thick_start=thick_start, thick_end=thick_end,
+                ref_transcript_id=ref_transcript_id,
+                ref_gene_mapping=ref_gene_mapping,
+                read_support=read_support, frac_support=frac_support,
+                productivity=productivity or None,
+                is_flair_bed=is_flair_bed,
+                ted=ted_cols,
                 junctions=tuple(juncs), n_exons=bc,
                 spliced_len=sum(bsz),
             ))
