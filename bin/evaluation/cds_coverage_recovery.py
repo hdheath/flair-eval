@@ -51,8 +51,21 @@ if str(_BIN_DIR) not in sys.path:
     sys.path.insert(0, str(_BIN_DIR))
 
 # Reuse the CDS BED parser from alt_end_cds_analysis to keep behavior
-# consistent (same productivity regex, same has_cds gate).
-from evaluation.alt_end_cds_analysis import parse_bed12_cds, has_cds  # noqa: E402
+# consistent (same productivity regex, same CDS-coord parse).
+#
+# NOTE on the CDS gate (hdheath decision 2026-05-29): coverage-recovery uses
+# the CONSERVATIVE definition of "CDS predicted" — only isoforms with an
+# ACTUAL CODING SPAN (thickStart != thickEnd, i.e. PRO/PTC) count.  NGO (no
+# good ORF) and NST (start but no stop) have no real coding span (thick ==
+# span) and are treated as NO-CDS, so they are dropped from the
+# coverage-recovery diff.  That is what alt_end_cds_analysis.has_coding_span
+# already means, so we import it under the local name ``has_cds`` here.  The
+# productivity-present ``has_cds`` (which counts NGO/NST) is used only by the
+# OTHER analyses (alt_end_cds productivity-transition classification).
+from evaluation.alt_end_cds_analysis import (  # noqa: E402
+    parse_bed12_cds,
+    has_coding_span as has_cds,
+)
 
 logging.basicConfig(format="%(levelname)s %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)

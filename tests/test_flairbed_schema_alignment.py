@@ -147,13 +147,45 @@ def test_alt_end_cds_analysis_produces_nonempty(tmp_path):
 
 def test_cds_coverage_recovery_nonempty():
     isos = cds.parse_bed12_cds(FLAIRBED)
-    # all 5 isoforms have a productivity class -> all count as "CDS predicted"
-    assert sum(1 for i in isos if cds.has_cds(i)) == 5
+    # CONSERVATIVE gate (hdheath 2026-05-29): only isoforms with a real
+    # coding span (thickStart != thickEnd -> PRO/PTC) count as "CDS
+    # predicted".  NGO (FLT0003) and NST (FLT0005) have thick == span and
+    # are NO-CDS, so 3 of the 5 isoforms qualify (PRO,PTC on FLG0001; PRO on
+    # FLG0002).
+    assert sum(1 for i in isos if ccr.has_cds(i)) == 3
     by_gene = ccr.gene_productivity_classes(isos)
     assert set(by_gene) == {"FLG0001", "FLG0002"}
-    # FLG0001 productivity composition: PRO + PTC + NGO
+    # FLG0001 keeps PRO + PTC (both real coding spans); NGO is dropped.
     assert by_gene["FLG0001"]["PRO"] == 1
     assert by_gene["FLG0001"]["PTC"] == 1
-    assert by_gene["FLG0001"]["NGO"] == 1
+    assert by_gene["FLG0001"]["NGO"] == 0
+    # FLG0002 keeps PRO; NST is dropped (no coding span).
     assert by_gene["FLG0002"]["PRO"] == 1
-    assert by_gene["FLG0002"]["NST"] == 1
+    assert by_gene["FLG0002"]["NST"] == 0
+
+
+def test_cds_coverage_recovery_gate_is_conservative_but_altend_keeps_all_four():
+    """The two analyses use DIFFERENT CDS gates on purpose:
+
+      * cds_coverage_recovery.has_cds == has_coding_span -> NGO/NST are
+        NO-CDS (dropped from the coverage-recovery diff);
+      * alt_end_cds_analysis.has_cds == productivity-present -> NGO/NST
+        still count, so productivity-transition classification sees all
+        four classes.
+    """
+    isos = cds.parse_bed12_cds(FLAIRBED)
+    by_name = {i["name"]: i for i in isos}
+    ngo = by_name["FLT0003"]  # NGO, thick == span
+    nst = by_name["FLT0005"]  # NST, thick == span
+
+    # coverage-recovery's gate (conservative): NGO/NST -> NO-CDS
+    assert ccr.has_cds(ngo) is False
+    assert ccr.has_cds(nst) is False
+
+    # alt_end_cds's own has_cds (productivity present): NGO/NST -> still CDS
+    assert cds.has_cds(ngo) is True
+    assert cds.has_cds(nst) is True
+
+    # alt_end_cds still classifies all 4 productivity classes across isoforms
+    per_iso, _ = cds.analyse_one_label("FLAIR", isos)
+    assert set(per_iso["productivity"]) == {"PRO", "PTC", "NGO", "NST"}
