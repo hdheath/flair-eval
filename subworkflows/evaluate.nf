@@ -82,7 +82,15 @@ workflow EVALUATE {
         all_eval_inputs = isoform_tuples
             .combine(eval_context_ch, by: [0, 1, 2, 3])
 
-        Evaluation(all_eval_inputs)
+        // Evaluation runs ted.py, which restricts signal bedGraph loading to the
+        // partition region's chromosome(s) (Fix B). Append partition_args (keyed
+        // by 4-tuple) as the final tuple element so the process can derive
+        // --region.  Kept as a SEPARATE channel so all_eval_inputs' 24-field
+        // shape (consumed positionally downstream) is unchanged.
+        eval_inputs_with_region = all_eval_inputs
+            .combine(partition_args_ch, by: [0, 1, 2, 3])
+
+        Evaluation(eval_inputs_with_region)
 
         // ------------------------------------------------------------------
         // TED End Precision

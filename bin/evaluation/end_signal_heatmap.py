@@ -46,13 +46,13 @@ try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2
     from signal_utils import (
         parse_isoforms, load_signal_tracks, BedGraphTrack,
-        load_read_map, lookup_read_count,
+        load_read_map, lookup_read_count, chroms_from_regions,
     )
 except ImportError:
     from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2
     from evaluation.signal_utils import (
         parse_isoforms, load_signal_tracks, BedGraphTrack,
-        load_read_map, lookup_read_count,
+        load_read_map, lookup_read_count, chroms_from_regions,
     )
 
 apply_rc()
@@ -271,6 +271,9 @@ def main() -> None:
                    help="Bin size in bp (default 5)")
     p.add_argument("--max-isoforms", type=int, default=2000,
                    help="Max isoforms per method (default 2000, 0=all)")
+    p.add_argument("--region", nargs="+", default=None,
+                   help="Partition region(s), e.g. chr22:16000000-26000000. "
+                        "Restricts signal loading to these chromosomes.")
     p.add_argument("--verbose",      action="store_true")
     args = p.parse_args()
 
@@ -307,8 +310,13 @@ def main() -> None:
 
     if args.verbose:
         print("Loading signal tracks...")
+    _chroms = chroms_from_regions(args.region)
+    if _chroms is None:
+        sys.stderr.write("WARNING: end_signal_heatmap: no --region; "
+                         "signal loaded genome-wide.\n")
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
+        chroms=_chroms,
     )
 
     out = Path(args.output)

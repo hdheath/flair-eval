@@ -31,12 +31,13 @@ process Evaluation {
           path(isoforms_bed), path(isoforms_gtf), path(isoform_read_map),
           path(ted_log),
           path(isoform_counts),
-          path(bam), path(bai), path(reads_bed), path(genome), path(gtf),
+          path(bam), path(bai), path(reads_bed), val(genome), path(gtf),
           path(cage_peaks), path(drna_peaks),
           path(ref_tss), path(ref_tts),
           val(library_type),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus),
+          val(partition_args)
 
     output:
     // Core evaluation result
@@ -83,11 +84,25 @@ process Evaluation {
     // preventing zero-support reference carry-throughs from inflating the count
     // (notably IsoQuant: ~30% of GTF transcripts have zero supporting reads).
     def counts_arg = (isoform_counts.name != 'NO_COUNTS' && isoform_counts.size() > 0) ? "--counts ${isoform_counts}" : ""
+    // Surface in the process log whether the count >= 1 filter will run for
+    // this evaluation.  Useful for spotting assemblers without native
+    // per-transcript counts (currently only StringTie2 — see startup log in
+    // main.nf), or empty counts files in modes where they should exist.
+    def counts_note = counts_arg ?
+        "echo 'ted.py --counts ENABLED for ${transcriptome_mode} (${isoform_counts.name})'" :
+        "echo 'ted.py --counts SKIPPED for ${transcriptome_mode} (no native per-transcript counts; isoforms_observed reflects all GTF transcripts)'"
     def output_prefix = "${dataset_name}_${align_mode}_${partition_mode}_${transcriptome_mode}"
+    // Region restriction for signal bedGraph loading (Fix B): extract the
+    // --region token(s) from partition_args so ted.py restricts signal to the
+    // partition chromosome(s). Empty for whole-genome (--all) partitions.
+    // partition_args is e.g. "--region chr22:16000000-26000000 ... --..." or "".
+    def region_match = (partition_args =~ /--region\s+(.+?)(?:\s+--|$)/)
+    def region_arg = region_match ? "--region ${region_match[0][1].trim()}" : ""
 
     if (is_simplified)
     """
     # v2: pair-aware dedup precision (2026-04-02)
+    ${counts_note}
     mkdir -p ted_plots
     mkdir -p test_regions
 
@@ -119,6 +134,7 @@ process Evaluation {
         ${cage_signal_minus_arg_ted} \\
         ${drna_signal_plus_arg_ted} \\
         ${drna_signal_minus_arg_ted} \\
+        ${region_arg} \\
         --window 50 \\
         --window-5prime 50 \\
         --window-3prime 50 \\
@@ -169,6 +185,7 @@ process Evaluation {
     else
     """
     # v2: pair-aware dedup precision (2026-04-02)
+    ${counts_note}
     mkdir -p ted_plots
     mkdir -p test_regions
 
@@ -187,6 +204,7 @@ process Evaluation {
         ${cage_signal_minus_arg_ted} \\
         ${drna_signal_plus_arg_ted} \\
         ${drna_signal_minus_arg_ted} \\
+        ${region_arg} \\
         --window 50 \\
         --window-5prime 50 \\
         --window-3prime 50 \\

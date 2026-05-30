@@ -33,7 +33,7 @@ import matplotlib.pyplot as plt
 from pub_style import ModeStyler, style_ax, legend_outside, savefig, W1, apply_rc
 from signal_utils import (
     parse_isoforms, load_signal_tracks, isoform_signal,
-    load_read_map, lookup_read_count,
+    load_read_map, lookup_read_count, chroms_from_regions,
 )
 
 
@@ -386,6 +386,9 @@ def main():
     parser.add_argument("--cage-minus", required=True, help="CAGE bedGraph (- strand)")
     parser.add_argument("--qs-plus",    required=True, help="dRNA bedGraph (+ strand)")
     parser.add_argument("--qs-minus",   required=True, help="dRNA bedGraph (- strand)")
+    parser.add_argument("--region", nargs="+", default=None,
+                        help="Partition region(s), e.g. chr22:16000000-26000000. "
+                             "Restricts signal loading to these chromosomes.")
     parser.add_argument("--output",     required=True, help="Output directory")
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()
@@ -435,8 +438,13 @@ def main():
 
     if args.verbose:
         print("  Loading signal tracks...")
+    _chroms = chroms_from_regions(args.region)
+    if _chroms is None:
+        sys.stderr.write("WARNING: cumulative_signal_plot: no --region; "
+                         "signal loaded genome-wide.\n")
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
+        chroms=_chroms,
     )
 
     if args.verbose:

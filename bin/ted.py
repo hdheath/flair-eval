@@ -85,6 +85,11 @@ def main():
     parser.add_argument("--align-mode", type=str, help="Alignment mode")
     parser.add_argument("--partition-mode", type=str, help="Partition mode")
     parser.add_argument("--pipeline-mode", type=str, help="Pipeline mode (process label)")
+    parser.add_argument("--region", nargs="+", default=None,
+                        help="Partition region(s), e.g. chr22:16000000-26000000. "
+                             "Restricts signal bedGraph loading to these "
+                             "chromosomes so genome-wide signal cannot leak into "
+                             "region-restricted summit/metric calculations.")
 
     args = parser.parse_args()
 
@@ -165,6 +170,7 @@ def main():
         drna_signal_minus=args.drna_signal_minus,
         counts_file=args.counts,
         min_support=args.min_support,
+        regions=args.region,
     )
 
     # Clean up temp file if we created one

@@ -317,7 +317,8 @@ workflow ASSEMBLE_AND_EVAL {
                  lraa_isoform_ch)
             .combine(eval_context_ch, by: [0, 1, 2, 3])
 
-        Evaluation(all_eval_inputs)
+        // Evaluation runs below, AFTER partition_args_ch is built, so ted.py can
+        // be passed the partition --region for signal-bedGraph restriction (Fix B).
 
         // --- TED End Precision (all assemblers with orthogonal peaks) ---
         // Runs for any mode where at least one peak file exists.
@@ -340,6 +341,15 @@ workflow ASSEMBLE_AND_EVAL {
                 def partition_args = ds_partition_modes[partition_mode] ?: ''
                 [test_name, dataset_name, align_mode, partition_mode, partition_args]
             }
+
+        // Evaluation (ted.py): append partition_args as final tuple element so
+        // ted.py restricts signal bedGraphs to the partition chromosome(s) (Fix
+        // B).  Separate channel keeps all_eval_inputs' 24-field shape intact for
+        // positional downstream consumers.
+        eval_inputs_with_region = all_eval_inputs
+            .combine(partition_args_ch, by: [0, 1, 2, 3])
+
+        Evaluation(eval_inputs_with_region)
 
         ted_precision_inputs = all_eval_inputs
             .combine(partition_args_ch, by: [0, 1, 2, 3])

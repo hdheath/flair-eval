@@ -8,7 +8,7 @@ and the top-level calculate_ted_metrics function.
 import csv
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .utils import timed_section, which, safe_f1, count_lines, get_logger
 from .bed_utils import (
@@ -767,6 +767,7 @@ def calculate_ted_metrics(
     drna_signal_minus: Optional[Path] = None,
     counts_file: Optional[Path] = None,
     min_support: int = 1,
+    regions: Optional[Sequence[str]] = None,
 ) -> dict:
     """
     Calculate all TED metrics for a single sample.
@@ -927,7 +928,17 @@ def calculate_ted_metrics(
     # keys here match the `peaks` dict keys ('prime5' = CAGE, 'prime3' = dRNA);
     # reference peaks have no signal so they keep centre-based summits.
     signal_tracks: Dict[str, object] = {}
-    chroms_for_signal = None  # whole-genome bedGraphs; tiny fixtures are small
+    # Restrict signal bedGraphs to the partition region's chromosome(s) so
+    # genome-wide signal cannot inflate summit dominance or create false
+    # out-of-region end matches. `regions` is the parsed --region list
+    # (None => whole genome). See chroms_from_regions() in signal_utils.
+    from .signal_utils import chroms_from_regions
+    chroms_for_signal = chroms_from_regions(regions)
+    if chroms_for_signal is None:
+        logger.warning(
+            "ted_core: no partition region supplied; signal bedGraphs loaded "
+            "genome-wide (signal-based summits/metrics not region-restricted)."
+        )
     cage_sig = load_signal_bedgraphs(
         str(cage_signal_plus) if cage_signal_plus else None,
         str(cage_signal_minus) if cage_signal_minus else None,

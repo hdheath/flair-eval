@@ -30,6 +30,7 @@ from signal_utils import (
     parse_bed12,
     load_signal_tracks,
     isoform_signal,
+    chroms_from_regions,
 )
 
 RNG_SEED = 42
@@ -155,6 +156,9 @@ def main():
             "any-support diagnostics; mean preserves the historical averaging."
         ),
     )
+    parser.add_argument("--region", nargs="+", default=None,
+                        help="Partition region(s), e.g. chr22:16000000-26000000. "
+                             "Restricts signal loading to these chromosomes.")
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()
 
@@ -179,8 +183,13 @@ def main():
 
     if args.verbose:
         print("  Loading signal tracks...")
+    _chroms = chroms_from_regions(args.region)
+    if _chroms is None:
+        sys.stderr.write("WARNING: read_end_signal_scatter: no --region; "
+                         "signal loaded genome-wide.\n")
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
+        chroms=_chroms,
     )
 
     plot_read_end_signal_scatter(

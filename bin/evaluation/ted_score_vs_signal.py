@@ -32,10 +32,12 @@ from scipy.stats import spearmanr, gaussian_kde
 
 try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, PALETTE
-    from signal_utils import load_signal_tracks, isoform_signal, SIG_WINDOW
+    from signal_utils import (load_signal_tracks, isoform_signal, SIG_WINDOW,
+                              chroms_from_regions)
 except ImportError:
     from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, PALETTE
-    from evaluation.signal_utils import load_signal_tracks, isoform_signal, SIG_WINDOW
+    from evaluation.signal_utils import (load_signal_tracks, isoform_signal,
+                                         SIG_WINDOW, chroms_from_regions)
 
 apply_rc()
 logging.basicConfig(level=logging.INFO,
@@ -379,6 +381,9 @@ def main():
     parser.add_argument("--qs-plus", required=True)
     parser.add_argument("--qs-minus", required=True)
     parser.add_argument("--output", required=True, help="Output directory")
+    parser.add_argument("--region", nargs="+", default=None,
+                        help="Partition region(s), e.g. chr22:16000000-26000000. "
+                             "Restricts signal loading to these chromosomes.")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -388,9 +393,13 @@ def main():
     outdir = Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # Load signal tracks
+    # Load signal tracks (region-restricted to partition chromosomes)
+    _chroms = chroms_from_regions(args.region)
+    if _chroms is None:
+        log.warning("ted_score_vs_signal: no --region; signal loaded genome-wide.")
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
+        chroms=_chroms,
     )
 
     # Parse BED files, skip non-TED

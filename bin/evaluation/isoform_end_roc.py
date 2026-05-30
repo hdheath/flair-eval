@@ -59,11 +59,14 @@ import matplotlib.ticker
 
 try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
-    from signal_utils import parse_isoforms, load_signal_tracks, BedGraphTrack, isoform_signal
+    from signal_utils import (parse_isoforms, load_signal_tracks, BedGraphTrack,
+                              isoform_signal, chroms_from_regions)
     from ted_end_precision import parse_peaks_bed, _nearest_annot
 except ImportError:
     from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
-    from evaluation.signal_utils import parse_isoforms, load_signal_tracks, BedGraphTrack, isoform_signal
+    from evaluation.signal_utils import (parse_isoforms, load_signal_tracks,
+                                         BedGraphTrack, isoform_signal,
+                                         chroms_from_regions)
     from evaluation.ted_end_precision import parse_peaks_bed, _nearest_annot
 
 apply_rc()
@@ -420,17 +423,25 @@ def main() -> None:
                    help="Output directory")
     p.add_argument("--window",      type=int, default=50,
                    help="bp tolerance for end-to-peak matching (default 50)")
+    p.add_argument("--region", nargs="+", default=None,
+                   help="Partition region(s), e.g. chr22:16000000-26000000. "
+                        "Restricts signal loading to these chromosomes.")
     p.add_argument("--verbose",     action="store_true")
     args = p.parse_args()
 
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
 
-    # --- Load signal tracks ---
+    # --- Load signal tracks (region-restricted to partition chromosomes) ---
     if args.verbose:
         print("Loading signal tracks...", file=sys.stderr)
+    _chroms = chroms_from_regions(args.region)
+    if _chroms is None:
+        sys.stderr.write("WARNING: isoform_end_roc: no --region; "
+                         "signal loaded genome-wide.\n")
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
+        chroms=_chroms,
     )
 
     # --- Load peak files ---

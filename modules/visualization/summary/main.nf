@@ -329,20 +329,27 @@ process ExonLengthDistributionPlot {
     errorStrategy 'ignore'
 
     input:
-    tuple val(test_name), val(bed_labels), path(bed_files), path(reads_bed)
+    tuple val(test_name), val(bed_labels), path(bed_files), val(count_paths), path(reads_bed)
 
     output:
     path "exon_length_distributions/*", optional: true
 
     script:
     def bed_args = []
+    def count_args = []
     for (int i = 0; i < bed_labels.size(); i++) {
         bed_args << "${bed_labels[i]}:${bed_files[i]}"
+        def count_path = count_paths[i]?.toString()
+        if (count_path && !count_path.contains('NO_COUNTS')) {
+            count_args << "${bed_labels[i]}:${count_path}"
+        }
     }
+    def counts_arg = count_args ? "--counts ${count_args.join(' ')} --min-support 1" : ""
     """
     python ${projectDir}/bin/evaluation/exon_length_distribution_plot.py \\
         --reads-bed ${reads_bed} \\
         --bed ${bed_args.join(' ')} \\
+        ${counts_arg} \\
         --output exon_length_distributions \\
         --verbose || true
     """
@@ -468,7 +475,7 @@ process EndSignalScatterPlot {
     input:
     tuple val(test_name), val(bed_labels), path(bed_files),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "end_signal_scatter/*", optional: true
@@ -483,6 +490,7 @@ process EndSignalScatterPlot {
         --bed ${bed_args.join(' ')} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output end_signal_scatter \\
         --signal-stat max \\
         --verbose || true
@@ -502,7 +510,7 @@ process TedScoreVsSignal {
     input:
     tuple val(test_name), val(bed_labels), path(bed_files),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "ted_score_signal/*.png", optional: true
@@ -517,6 +525,7 @@ process TedScoreVsSignal {
         --bed ${bed_args.join(' ')} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output ted_score_signal \\
         --verbose || true
     """
@@ -534,7 +543,7 @@ process CumulativeSignalPlot {
     input:
     tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "cumulative_signal/*.png", optional: true
@@ -552,6 +561,7 @@ process CumulativeSignalPlot {
         --read-map ${map_args.join(' ')} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output cumulative_signal \\
         --verbose || true
     """
@@ -571,7 +581,7 @@ process SjcAltEndAnalysis {
     tuple val(test_name), val(bed_labels), path(bed_files),
           val(cage_peaks), val(drna_peaks),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "sjc_alt_end/*.png", optional: true
@@ -587,6 +597,7 @@ process SjcAltEndAnalysis {
         --cage-peaks ${cage_peaks} --qs-peaks ${drna_peaks} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output sjc_alt_end \\
         --verbose || true
     """
@@ -606,7 +617,7 @@ process TedComponentDiagnostic {
     tuple val(test_name), val(bed_labels), path(bed_files),
           val(cage_peaks), val(drna_peaks),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "ted_component_diagnostic/**/*.{png,tsv}", optional: true
@@ -623,6 +634,7 @@ process TedComponentDiagnostic {
         --cage-peaks ${cage_peaks} --qs-peaks ${drna_peaks} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output ted_component_diagnostic \\
         --verbose || true
     """
@@ -671,7 +683,7 @@ process ReadEndSignalScatter {
     input:
     tuple val(test_name), val(read_labels), path(read_files),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "read_end_signal/*", optional: true
@@ -686,6 +698,7 @@ process ReadEndSignalScatter {
         --bed ${bed_args.join(' ')} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output read_end_signal \\
         --signal-stat max \\
         --verbose || true
@@ -704,7 +717,7 @@ process InternalPrimingAnalysis {
 
     input:
     tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
-          path(genome), path(gtf)
+          val(genome), path(gtf)
 
     output:
     path "*.png", optional: true
@@ -740,7 +753,7 @@ process SignalReadSupport {
     input:
     tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "*.png", optional: true
@@ -755,6 +768,7 @@ process SignalReadSupport {
         --bed ${bed_args.join(' ')} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output . \\
         --verbose || true
     """
@@ -774,7 +788,7 @@ process PrSignalBalance {
     tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
           val(cage_signal_plus), val(cage_signal_minus),
           val(drna_signal_plus), val(drna_signal_minus),
-          path(combined_tsv)
+          path(combined_tsv), val(region_arg)
 
     output:
     path "*.png", optional: true
@@ -790,6 +804,7 @@ process PrSignalBalance {
         --bed ${bed_args.join(' ')} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output . \\
         --verbose || true
     """
@@ -906,7 +921,7 @@ process EndSignalMetaplot {
     input:
     tuple val(test_name), val(bed_labels), path(bed_files),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "metaplot_*.png",         optional: true
@@ -922,6 +937,7 @@ process EndSignalMetaplot {
         --bed ${bed_args.join(' ')} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output . \\
         --verbose || true
     """
@@ -940,7 +956,7 @@ process EndSignalHeatmap {
     input:
     tuple val(test_name), val(bed_labels), path(bed_files), path(read_map_files),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "heatmap_*.png", optional: true
@@ -958,6 +974,7 @@ process EndSignalHeatmap {
         --read-map ${map_args.join(' ')} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus} --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output . \\
         --verbose || true
     """
@@ -1176,7 +1193,7 @@ process IsoformEndRoc {
     tuple val(test_name), val(bed_labels), path(bed_files),
           val(cage_peaks), val(drna_peaks),
           val(cage_signal_plus), val(cage_signal_minus),
-          val(drna_signal_plus), val(drna_signal_minus)
+          val(drna_signal_plus), val(drna_signal_minus), val(region_arg)
 
     output:
     path "roc_*.png",           optional: true
@@ -1197,6 +1214,7 @@ process IsoformEndRoc {
         ${drna_pk_arg} \\
         --cage-plus ${cage_signal_plus} --cage-minus ${cage_signal_minus} \\
         --qs-plus ${drna_signal_plus}   --qs-minus ${drna_signal_minus} \\
+        ${region_arg} \\
         --output . \\
         --verbose || true
     """

@@ -39,10 +39,12 @@ import matplotlib.pyplot as plt
 
 try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler, legend_outside
-    from signal_utils import parse_isoforms, load_signal_tracks, BedGraphTrack
+    from signal_utils import (parse_isoforms, load_signal_tracks, BedGraphTrack,
+                              chroms_from_regions)
 except ImportError:
     from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler, legend_outside
-    from evaluation.signal_utils import parse_isoforms, load_signal_tracks, BedGraphTrack
+    from evaluation.signal_utils import (parse_isoforms, load_signal_tracks,
+                                         BedGraphTrack, chroms_from_regions)
 
 apply_rc()
 
@@ -253,6 +255,9 @@ def main() -> None:
                    help="Bin size in bp for averaging (default 10)")
     p.add_argument("--smooth",     type=int, default=11,
                    help="Savitzky-Golay smoothing window in bins (default 11)")
+    p.add_argument("--region", nargs="+", default=None,
+                   help="Partition region(s), e.g. chr22:16000000-26000000. "
+                        "Restricts signal loading to these chromosomes.")
     p.add_argument("--verbose",    action="store_true")
     args = p.parse_args()
 
@@ -278,8 +283,13 @@ def main() -> None:
 
     if args.verbose:
         print("Loading signal tracks...")
+    _chroms = chroms_from_regions(args.region)
+    if _chroms is None:
+        sys.stderr.write("WARNING: end_signal_metaplot: no --region; "
+                         "signal loaded genome-wide.\n")
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
+        chroms=_chroms,
     )
 
     tss_profiles: Dict[str, np.ndarray] = {}

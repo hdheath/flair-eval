@@ -526,6 +526,29 @@ def isoform_signal(
     return tss, tts
 
 
+def chroms_from_regions(regions) -> Optional[Set[str]]:
+    """Derive a chromosome restriction set from CLI region tokens.
+
+    ``regions`` is the list passed to a ``--region``/``--regions`` argparse
+    option (e.g. ``["chr22:16000000-26000000", "chr3:48000000-53000000"]``)
+    or ``None``. Returns the set of chromosome names, or ``None`` for
+    whole-genome (no restriction). Used to restrict bedGraph signal loading to
+    the partition region so genome-wide signal cannot leak into
+    region-restricted metrics.
+
+    A ``None``/empty value returns ``None`` (whole-genome) — callers SHOULD log
+    a warning in that case so the loss of restriction is visible.
+    """
+    if not regions:
+        return None
+    chroms: Set[str] = set()
+    for r in regions:
+        if not r:
+            continue
+        chroms.add(str(r).split(":", 1)[0])
+    return chroms or None
+
+
 def load_signal_tracks(
     cage_plus: str,
     cage_minus: str,

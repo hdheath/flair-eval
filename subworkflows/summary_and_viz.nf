@@ -91,6 +91,26 @@ workflow SUMMARY_AND_VIZ {
 
     main:
 
+        // --- Region restriction for signal loading (Fix B) -----------------
+        // Summary-level signal plots/metrics aggregate across partitions (keyed
+        // by test_name), so they restrict signal bedGraph loading to the UNION
+        // of all configured partition-region chromosomes.  Parse the --region
+        // tokens out of the partition config (same source IsoformDiversity uses)
+        // and build a single reusable `--region ...` arg.  Empty => whole-genome
+        // (e.g. an --all/whole-genome run) and each script warns on stderr.
+        def jsonSlurperSig = new groovy.json.JsonSlurper()
+        def sigConfig = jsonSlurperSig.parse(new File(file(params.params_file).toString()))
+        def sigPartitionConfig = sigConfig.partition ?: [:]
+        def sigRegions = []
+        sigPartitionConfig.each { mode_name, mode_args ->
+            def m = (mode_args =~ /--region\s+(.+?)(?:\s+--|$)/)
+            if (m.find()) {
+                m.group(1).trim().split(/\s+/).each { r -> sigRegions << r }
+            }
+        }
+        sigRegions = sigRegions.unique()
+        def signalRegionArg = sigRegions ? "--region ${sigRegions.join(' ')}" : ""
+
 
         // --- Summary plots: group evaluation TSVs by test_name ---
         all_evaluations = evaluation_results
@@ -300,9 +320,11 @@ workflow SUMMARY_AND_VIZ {
             .map { test_name, bed_labels, bed_files,
                    cage_signal_plus, cage_signal_minus,
                    drna_signal_plus, drna_signal_minus ->
+                // Fix B: signalRegionArg restricts signal loading to the union of
+                // configured partition-region chromosomes (test_name-aggregated).
                 [test_name, bed_labels, bed_files,
                  cage_signal_plus, cage_signal_minus,
-                 drna_signal_plus, drna_signal_minus]
+                 drna_signal_plus, drna_signal_minus, signalRegionArg]
             }
 
         EndSignalScatterPlot(signal_plot_inputs)
@@ -338,9 +360,10 @@ workflow SUMMARY_AND_VIZ {
             .map { test_name, bed_labels, bed_files, read_maps,
                    cage_signal_plus, cage_signal_minus,
                    drna_signal_plus, drna_signal_minus ->
+                // Fix B: signalRegionArg restricts signal loading to partition chroms.
                 [test_name, bed_labels, bed_files, read_maps,
                  cage_signal_plus, cage_signal_minus,
-                 drna_signal_plus, drna_signal_minus]
+                 drna_signal_plus, drna_signal_minus, signalRegionArg]
             }
 
         CumulativeSignalPlot(cumulative_signal_inputs)
@@ -394,10 +417,11 @@ workflow SUMMARY_AND_VIZ {
                    cage_signal_plus, cage_signal_minus,
                    drna_signal_plus, drna_signal_minus ->
                 // read_maps not needed — analysis is purely peak-based
+                // Fix B: signalRegionArg restricts signal loading to partition chroms.
                 [test_name, bed_labels, bed_files,
                  cage_peaks, drna_peaks,
                  cage_signal_plus, cage_signal_minus,
-                 drna_signal_plus, drna_signal_minus]
+                 drna_signal_plus, drna_signal_minus, signalRegionArg]
             }
 
         SjcAltEndAnalysis(sjc_alt_end_inputs)
@@ -421,10 +445,11 @@ workflow SUMMARY_AND_VIZ {
                    cage_peaks, drna_peaks,
                    cage_signal_plus, cage_signal_minus,
                    drna_signal_plus, drna_signal_minus ->
+                // Fix B: signalRegionArg restricts signal loading to partition chroms.
                 [test_name, bed_labels, bed_files,
                  cage_peaks, drna_peaks,
                  cage_signal_plus, cage_signal_minus,
-                 drna_signal_plus, drna_signal_minus]
+                 drna_signal_plus, drna_signal_minus, signalRegionArg]
             }
 
         IsoformEndRoc(ted_diag_inputs)
@@ -456,9 +481,10 @@ workflow SUMMARY_AND_VIZ {
             .map { test_name, read_labels, read_files,
                    cage_signal_plus, cage_signal_minus,
                    drna_signal_plus, drna_signal_minus ->
+                // Fix B: signalRegionArg restricts signal loading to partition chroms.
                 [test_name, read_labels, read_files,
                  cage_signal_plus, cage_signal_minus,
-                 drna_signal_plus, drna_signal_minus]
+                 drna_signal_plus, drna_signal_minus, signalRegionArg]
             }
 
         ReadEndSignalScatter(read_signal_ch)
@@ -542,10 +568,13 @@ workflow SUMMARY_AND_VIZ {
             .join(sqanti_ch.map { test_name, tsv -> [test_name, tsv] })
             .map { test_name, bed_labels, bed_files, read_maps,
                    cage_plus, cage_minus, qs_plus, qs_minus,
-                   combined_tsv ->
+                   region_arg, combined_tsv ->
+                // cumulative_signal_inputs now carries signalRegionArg (Fix B) as
+                // its final element; place combined_tsv before region_arg to match
+                // the PrSignalBalance process input tuple ordering.
                 [test_name, bed_labels, bed_files, read_maps,
                  cage_plus, cage_minus, qs_plus, qs_minus,
-                 combined_tsv]
+                 combined_tsv, region_arg]
             }
 
         PrSignalBalance(pr_signal_inputs)

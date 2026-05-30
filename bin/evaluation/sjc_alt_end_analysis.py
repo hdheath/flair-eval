@@ -74,14 +74,14 @@ try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, PALETTE
     from signal_utils import (
         parse_isoforms, group_by_junction_chain,
-        load_signal_tracks,
+        load_signal_tracks, chroms_from_regions,
     )
     from ted_end_precision import parse_peaks_bed, _nearest_annot
 except ImportError:
     from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, PALETTE
     from evaluation.signal_utils import (
         parse_isoforms, group_by_junction_chain,
-        load_signal_tracks,
+        load_signal_tracks, chroms_from_regions,
     )
     from evaluation.ted_end_precision import parse_peaks_bed, _nearest_annot
 
@@ -476,6 +476,9 @@ def main():
     parser.add_argument("--qs-plus",    required=True, help="dRNA bedGraph (+ strand)")
     parser.add_argument("--qs-minus",   required=True, help="dRNA bedGraph (- strand)")
     parser.add_argument("--output",     required=True, help="Output directory")
+    parser.add_argument("--region", nargs="+", default=None,
+                        help="Partition region(s), e.g. chr22:16000000-26000000. "
+                             "Restricts signal loading to these chromosomes.")
     parser.add_argument("--verbose",    action="store_true")
     args = parser.parse_args()
 
@@ -498,8 +501,12 @@ def main():
     log.info("Loaded %d / %d CAGE / dRNA peak groups",
              len(cage_peaks), len(qs_peaks))
 
+    _chroms = chroms_from_regions(args.region)
+    if _chroms is None:
+        log.warning("sjc_alt_end_analysis: no --region; signal loaded genome-wide.")
     cage_p, cage_m, qs_p, qs_m = load_signal_tracks(
         args.cage_plus, args.cage_minus, args.qs_plus, args.qs_minus,
+        chroms=_chroms,
     )
 
     # ── Run analysis per assembler ────────────────────────────────────────
