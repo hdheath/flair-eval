@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flair-eval/samples/1",
+  "title": "flair-eval samples.csv row",
+  "type": "object",
+  "required": [
+    "sample",
+    "genome",
+    "gtf"
+  ],
+  "properties": {
+    "sample": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "reads": {
+      "type": "string",
+      "description": "FASTQ/FASTA(.gz)"
+    },
+    "bam": {
+      "type": "string",
+      "description": "sorted, indexed BAM"
+    },
+    "genome": {
+      "type": "string"
+    },
+    "gtf": {
+      "type": "string"
+    },
+    "platform": {
+      "enum": [
+        "pacbio",
+        "ont"
+      ]
+    },
+    "library": {
+      "enum": [
+        "cDNA",
+        "dRNA"
+      ]
+    },
+    "cage": {
+      "type": "string"
+    },
+    "pas": {
+      "type": "string"
+    },
+    "junctions": {
+      "type": "string"
+    },
+    "spikein_gtf": {
+      "type": "string"
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "reads"
+      ]
+    },
+    {
+      "required": [
+        "bam"
+      ]
+    }
+  ],
+  "additionalProperties": false
+}
