@@ -372,3 +372,58 @@ def test_a22_added_run_keeps_first_launch_baseline(tmp_path):
     assert data["runs"] == ["flair-2.2.0", "dev-57040d2", "flair-3.0.1"]   # A17: then run_index, then id
     page = open(out).read()
     assert "first run of the earliest of" in page and "Use default" in page   # the page explains and can switch
+
+
+# --------------------------------------------------------------------- A24 launch id
+def _bl(sample, rid, ri, created, launch):
+    b = _b(sample, rid, ri, created)
+    b["pipeline"]["launch"] = launch
+    return b
+
+
+def test_a24_launch_id_groups_when_run_0_failed_everywhere():
+    # Launch A lost run 0 in every sample; launch B's indexes never repeat A's. Time order alone
+    # would merge them and pick B's run 0; the launch id keeps A's run 1 as the baseline.
+    bs = [_bl("s", "b", 1, "2026-01-01T00:00:01Z", "A"), _bl("t", "b", 1, "2026-01-01T00:00:02Z", "A"),
+          _bl("s", "c", 2, "2026-01-01T00:00:03Z", "A"),
+          _bl("s", "z", 0, "2026-02-01T00:00:00Z", "B"), _bl("t", "z", 0, "2026-02-01T00:00:01Z", "B")]
+    assert [sorted({b["run_id"] for b in g}) for g in launches(bs)] == [["b", "c"], ["z"]]
+    assert default_baseline(bs) == ("b", "earliest_launch")
+    for b in bs:
+        del b["pipeline"]["launch"]
+    assert len(launches(bs)) == 1                      # the A22 heuristic cannot split these
+
+
+def test_a24_earliest_launch_is_by_oldest_created_and_resume_keeps_id():
+    # A -resume'd launch keeps its session id: a bundle written much later still belongs to it.
+    bs = [_bl("s", "late", 0, "2026-03-01T00:00:00Z", "B"),
+          _bl("s", "first", 0, "2026-01-01T00:00:00Z", "A"),
+          _bl("s", "resumed", 1, "2026-04-01T00:00:00Z", "A")]
+    got = launches(bs)
+    assert [[b["run_id"] for b in g] for g in got] == [["first", "resumed"], ["late"]]
+    assert default_baseline(bs) == ("first", "earliest_launch")
+
+
+def test_a24_mixed_ids_and_old_bundles():
+    # Old bundles (no launch id) fall back to the A22 heuristic; they are the earliest launch here.
+    old = [_b("s", "old0", 0, "2025-01-01T00:00:00Z"), _b("s", "old1", 1, "2025-01-01T00:00:05Z")]
+    new = [_bl("s", "new0", 0, "2026-01-01T00:00:00Z", "N"), _bl("s", "new1", 1, "2026-01-01T00:00:05Z", "N")]
+    assert [[b["run_id"] for b in g] for g in launches(new + old)] == [["old0", "old1"], ["new0", "new1"]]
+    assert default_baseline(new + old) == ("old0", "earliest_launch")
+
+
+def test_a24_report_uses_launch_id(tmp_path):
+    s = "wtc11_pacbio"
+    for rid, ri, launch, created in (("flair-3.0.1", 1, "first", "2026-01-01T00:00:00+00:00"),
+                                     ("dev-425b260", 2, "first", "2026-01-01T00:01:00+00:00"),
+                                     ("flair-2.2.0", 0, "second", "2026-02-01T00:00:00+00:00")):
+        d = _bundle_copy(tmp_path, s, rid, run_index=ri)
+        b = json.load(open(d / "bundle.json"))
+        b["pipeline"].update(launch=launch, created=created)
+        json.dump(b, open(d / "bundle.json", "w"))
+    out = tmp_path / "r.html"
+    res = build("--bundles", tmp_path / "b", "--out", out)
+    assert res.returncode == 0, res.stderr                 # schema accepts pipeline.launch
+    data = embedded(out)
+    assert data["baseline"] == "flair-3.0.1"
+    assert data["baseline_rule"] == {"rule": "earliest_launch", "launches": 2}

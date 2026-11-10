@@ -7,8 +7,9 @@ with the newest pipeline.created wins. The HTML inlines its CSS/JS and embeds th
 data as JSON, so it opens offline. Per-isoform tables are not embedded.
 
 The baseline is --baseline when given. Without it (CONTRACTS A22) it is the first run of the
-earliest launch: bundles are split into launches where run_index starts over, and the run with
-the lowest run_index in the launch holding the oldest pipeline.created wins, ties by id. With no
+earliest launch: bundles are grouped into launches by pipeline.launch (A24), or, for bundles
+without it, where run_index starts over; the run with the lowest run_index in the launch holding
+the oldest pipeline.created wins, ties by id. With no
 run_index at all, the first run id in name order is used (A5). The page says which rule picked
 the baseline and lets the reader switch it. Runs are ordered baseline first, then by
 bundle.json run_index, then by id (A17), and keep that colour throughout the report.
@@ -198,15 +199,17 @@ def _run_index(b):
     return ri if isinstance(ri, int) and not isinstance(ri, bool) else None
 
 
-def launches(bundles):
-    """Bundles grouped by pipeline launch, earliest first.
+def _launch_id(b):
+    v = (b.get("pipeline") or {}).get("launch")
+    return v if isinstance(v, str) and v else None
 
-    Bundles carry no launch id, and pipeline.created is stamped per bundle, so a launch is
-    recovered from time order: walking the bundles oldest first, a new launch starts when a
-    (sample, run_index) pair repeats, since run_index counts runs.yaml from 0 in every launch.
-    Bundles without run_index join the launch they fall in. Limit: a later launch whose run
-    indexes do not repeat any of the earlier launch's (say its run 0 failed in every sample)
-    is merged into it; only a launch id in the bundle would tell them apart."""
+
+def _guess_launches(bundles):
+    """A22 fallback for bundles without pipeline.launch. pipeline.created is stamped per bundle,
+    so a launch is recovered from time order: walking the bundles oldest first, a new launch
+    starts when a (sample, run_index) pair repeats, since run_index counts runs.yaml from 0 in
+    every launch. Bundles without run_index join the launch they fall in. Limit: a later launch
+    whose run indexes do not repeat any of the earlier launch's is merged into it."""
     out, seen = [], None
     for b in sorted(bundles, key=lambda b: (_created_key(b), b["run_id"], b["sample"])):
         ri = _run_index(b)
@@ -221,11 +224,27 @@ def launches(bundles):
     return out
 
 
+def launches(bundles):
+    """Bundles grouped by pipeline launch, earliest first (CONTRACTS A24).
+
+    Bundles with pipeline.launch (Nextflow's session id) are grouped by it; the rest by the A22
+    heuristic. The earliest launch is the one whose oldest pipeline.created is oldest."""
+    by_id = {}
+    for b in bundles:
+        lid = _launch_id(b)
+        if lid is not None:
+            by_id.setdefault(lid, []).append(b)
+    groups = list(by_id.values()) + _guess_launches([b for b in bundles if _launch_id(b) is None])
+    for g in groups:
+        g.sort(key=lambda b: (_created_key(b), b["run_id"], b["sample"]))
+    return sorted(groups, key=lambda g: (_created_key(g[0]), g[0]["run_id"], g[0]["sample"]))
+
+
 def default_baseline(bundles):
     """(run_id, reason) for the A22 default baseline. reason: earliest_launch | name_order."""
     if not any(_run_index(b) is not None for b in bundles):
         return sorted({b["run_id"] for b in bundles})[0], "name_order"
-    first = [b for b in launches(bundles)[0] if _run_index(b) is not None]
+    first = next(g for g in ([b for b in l if _run_index(b) is not None] for l in launches(bundles)) if g)
     best = min(first, key=lambda b: (_run_index(b), b["run_id"]))
     return best["run_id"], "earliest_launch"
 
