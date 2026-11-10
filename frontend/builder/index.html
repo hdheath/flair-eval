@@ -163,6 +163,8 @@ aside.panel { position: sticky; top: max(16px, env(safe-area-inset-top, 0px)); d
 .term .btn { background: transparent; color: var(--code-ink); border-color: rgba(255,255,255,0.22); font-size: 0.8rem; padding: 4px 10px; }
 .term .btn:hover { border-color: var(--code-ink); }
 .why-list { margin: 0; padding: 0 14px 10px 30px; font-size: 0.78rem; color: var(--code-dim); }
+.term .launch-hint { margin: 0; padding: 10px 14px; border-top: 1px solid rgba(255,255,255,0.08); font-size: 0.78rem; color: var(--code-dim); }
+.term .launch-hint code { color: var(--code-ink); }
 
 .files { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); display: grid; min-width: 0; }
 .tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 8px 0; border-bottom: 1px solid var(--line); }
@@ -220,7 +222,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
           <span class="count" id="sample-count"></span>
         </div>
         <p class="hint">One dataset each: long reads (or an aligned BAM) plus the genome and annotation to compare against.
-          Full paths are safest. A relative path is read next to <code>samples.csv</code> first, then from the folder you launch in.</p>
+          On phoenix, the <code>hg38</code> preset picks the lab reference (GRCh38 + GENCODE v49 basic). Full paths are safest. A relative path is read next to <code>samples.csv</code> first, then from the folder you launch in.</p>
         <div class="col" id="samples" style="gap:12px"></div>
         <div class="adders"><button class="btn add" type="button" id="add-sample">+ Add sample</button></div>
       </section>
@@ -245,19 +247,21 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
         <div class="card">
           <div class="grid two">
             <div class="field">
-              <label for="o-outdir">Output folder</label>
-              <input type="text" class="mono" id="o-outdir" data-opt="outdir" placeholder="./flair-eval-results">
-              <span class="hint">Results and the report go here. Use storage with room to spare.</span>
+              <label for="o-outdir">Output folder (required)</label>
+              <input type="text" class="mono" id="o-outdir" data-opt="outdir" data-key="o:outdir"
+                placeholder="/private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name" autocomplete="off" spellcheck="false">
+              <span class="hint">Bundles, the report and (on phoenix) Nextflow's work files. Use groups or warm-archive storage, not your home folder (about 100 GB quota). Type your user name in place of <code>$USER</code>.</span>
+              <span class="err" data-err="o:outdir" hidden></span>
             </div>
             <div class="field">
-              <label for="o-executor">Where jobs run</label>
+              <label for="o-executor">Where it runs</label>
               <select id="o-executor" data-opt="executor">
-                <option value="local">This computer</option>
-                <option value="slurm">SLURM cluster</option>
+                <option value="phoenix">phoenix (default)</option>
+                <option value="local">This computer (local)</option>
               </select>
-              <span class="hint">On a cluster login node, pick SLURM so each step is its own job.</span>
+              <span class="hint">phoenix (UCSC PRISM) needs no <code>-profile</code>: every step is a SLURM job, and FLAIR envs come from the shared lab cache.</span>
             </div>
-            <div class="field">
+            <div class="field" id="software-field" hidden>
               <label for="o-software">How FLAIR is installed</label>
               <select id="o-software" data-opt="software">
                 <option value="conda">conda</option>
@@ -286,7 +290,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
             <div class="grid two">
               <div class="field">
                 <label for="o-profile">Custom profile</label>
-                <input type="text" class="mono" id="o-profile" data-opt="profile" placeholder="e.g. slurm,singularity">
+                <input type="text" class="mono" id="o-profile" data-opt="profile" placeholder="e.g. local,singularity">
                 <span class="hint">Replaces the two choices above when filled in.</span>
               </div>
               <div class="field">
@@ -311,7 +315,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
               </div>
               <div class="field">
                 <label for="o-envcache">FLAIR environment cache</label>
-                <input type="text" class="mono" id="o-envcache" data-opt="env_cache" placeholder="./flair-env-cache">
+                <input type="text" class="mono" id="o-envcache" data-opt="env_cache" placeholder="/private/groups/brookslab/flair-eval/env_cache (shared)">
                 <span class="hint">Where FLAIR builds are kept, so each version is built once.</span>
               </div>
             </div>
@@ -339,6 +343,8 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
         </div>
         <pre id="cmd" aria-label="nextflow command"></pre>
         <ul class="why-list" id="why" hidden></ul>
+        <p class="launch-hint" id="launch-hint">On phoenix, do not run Nextflow on the login node (mustard): put this command in an
+          <code>sbatch</code> job, or give the same flags to <code>flair-eval run</code>, which submits the driver as a SLURM job for you.</p>
       </div>
 
       <details class="first" id="first-time">
@@ -350,7 +356,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
             <div class="snip"><code id="snip-2">pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"</code><button class="btn" type="button" data-copy="snip-2">Copy</button></div>
             <div class="snip"><code id="snip-3">flair-eval doctor</code><button class="btn" type="button" data-copy="snip-3">Copy</button></div></li>
           <li>Try the bundled test data, then run the command above on your own:
-            <div class="snip"><code id="snip-4">flair-eval run --test</code><button class="btn" type="button" data-copy="snip-4">Copy</button></div></li>
+            <div class="snip"><code id="snip-4">flair-eval run --test --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_test</code><button class="btn" type="button" data-copy="snip-4">Copy</button></div></li>
         </ol>
       </details>
 

@@ -14,16 +14,30 @@ but are not tested. See [docs/flair_versions.md](docs/flair_versions.md).
 
 ## Usage
 
-You need Nextflow ≥ 25.04 and Java 17+. FLAIR itself is fetched per run (see "FLAIR sources").
+flair-eval is set up for the lab's **phoenix** cluster (UCSC PRISM): with no `-profile` it runs
+every step as a SLURM job, uses conda, and shares one FLAIR env cache with the whole lab
+(`/private/groups/brookslab/flair-eval/env_cache`), so 2.2.0 and 3.0.1 are built once for everyone.
+You need Nextflow ≥ 25.04 and Java 17+ on `PATH`. FLAIR itself is fetched per run.
+
+`--outdir` is required. Put it on groups or warm-archive storage, never in home (~100 GB quota);
+on phoenix Nextflow's work dir goes inside it (`<outdir>/work`).
+Launch with `umask 002` so the shared caches stay writable for everyone (`flair-eval run` does this).
 
 ### One command, no files
 
 ```bash
-nextflow run hdheath/flair-eval -profile local,conda \
-  --reads sample.fq.gz --genome genome.fa --gtf annotation.gtf \
-  --flair 2.2.0,3.0.1,dev --outdir results
-# -> results/report/report.html
+nextflow run hdheath/flair-eval \
+  --reads sample.fq.gz --genome hg38 \
+  --flair 2.2.0,3.0.1,dev \
+  --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
+# -> <outdir>/report/report.html
 ```
+
+`--genome hg38` is a lab preset: GRCh38 primary assembly + GENCODE v49 basic from
+`/private/groups/brookslab/reference_*`, and it fills `--gtf` unless you give one. Any other genome:
+`--genome genome.fa --gtf annotation.gtf`. The Nextflow driver itself runs for the whole
+comparison, so start it inside a SLURM job or `tmux`, not as a bare login-node command; the
+`flair-eval run` CLI ([docs/usage_cli.md](docs/usage_cli.md)) submits it for you.
 
 `--flair` takes comma-separated tokens; each one becomes a run:
 
@@ -63,9 +77,11 @@ runs:
 ```
 
 ```bash
-nextflow run hdheath/flair-eval -profile local,conda \
-  --input samples.csv --runs runs.yaml --outdir results
+nextflow run hdheath/flair-eval --input samples.csv --runs runs.yaml \
+  --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
 ```
+
+A `genome` cell may name a preset (`hg38`) and leave `gtf` empty.
 
 Every run is applied to every sample. Relative paths in `samples.csv` are read next to the CSV
 first, then from the launch directory. Columns and keys are listed in
@@ -105,25 +121,20 @@ launch, so adding a run later keeps the old baseline. The report lets you switch
 
 | profile | what it does |
 |---|---|
-| `local` | run on this machine |
+| none (= `phoenix`) | phoenix: `slurm` + `conda` + the shared lab env cache; work dir in `<outdir>/work` |
+| `local` | run on this machine, requests capped at its CPUs and memory |
 | `slurm` | SLURM on PRISM: partition short/medium/long picked from each task's time; sizes from measured use |
 | `conda` | conda on: activates each run's FLAIR env and builds a small Python env for evaluation/report |
 | `docker`, `singularity` | container engine on (needed for `container:` runs; evaluation/report use a pandas image) |
 | `test` | the bundled test data (`tests/data/`) |
 
-Combine an executor with an environment, e.g. `-profile slurm,conda` or `-profile local,singularity`.
+Off phoenix, combine an executor with an environment, e.g. `-profile local,conda` or
+`-profile local,singularity`.
 Without `conda`/`docker`/`singularity`, evaluation and report use the `python3` on `PATH`, which
 needs pandas and numpy.
 
-On PRISM, keep results and caches off home (quota ~100 GB):
-
-```bash
-nextflow run hdheath/flair-eval -profile slurm,conda \
-  --input samples.csv --runs runs.yaml \
-  --outdir /private/groups/brookslab/$USER/results/flair-eval/dd_mm_yy_name \
-  --env_cache /private/groups/brookslab/$USER/flair-env-cache \
-  -work-dir /private/groups/brookslab/$USER/work/flair-eval
-```
+`--env_cache` and `-work-dir` override the phoenix defaults if you need a private cache or a
+work dir outside the outdir.
 
 ### Help, checks and tests
 
@@ -132,7 +143,7 @@ nextflow run hdheath/flair-eval --help
 ```
 
 ```bash
-nextflow run . -stub -profile local --input samples.csv --runs runs.yaml --outdir /tmp/stub
+nextflow run . -stub -profile local --input samples.csv --runs runs.yaml --outdir stub-out
 ```
 
 ```bash

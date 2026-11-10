@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import datetime
+import getpass
 import re
 from pathlib import Path
 from typing import Callable
 
-from . import config, presets
+from . import config, phoenix, presets
 from .tokens import ID_RE, TokenError, parse_tokens, parse_token
 from .validate import NAME_HINT
 
@@ -40,11 +42,24 @@ class Abort(Exception):
     pass
 
 
+def suggested_outdir(user: str | None = None, today: datetime.date | None = None) -> str:
+    """Default --outdir offered on phoenix: groups storage, named dd_mm_yy_flair-eval."""
+    try:
+        user = user or getpass.getuser()
+    except (KeyError, OSError):  # pragma: no cover - no passwd entry
+        user = "$USER"
+    stamp = (today or datetime.date.today()).strftime("%d_%m_%y")
+    return f"{phoenix.LAB_ROOT}/{user}/flair-eval/{stamp}_flair-eval"
+
+
 class Wizard:
     def __init__(self, ask: Callable[[str], str] | None = None,
-                 say: Callable[[str], None] | None = None):
+                 say: Callable[[str], None] | None = None, on_phoenix: bool = False,
+                 default_outdir: str | None = None):
         self._ask = ask or (lambda p: input(p))
         self.say = say or (lambda m: print(m))
+        self.on_phoenix = on_phoenix
+        self.default_outdir = default_outdir
 
     # ------------------------------------------------------------ prompting helpers
     def ask(self, prompt: str, default: str | None = None, required: bool = False,
@@ -97,10 +112,18 @@ class Wizard:
         default = config.default_sample_name(path)
         s["sample"] = self.ask("  Sample name", default=default if ID_RE.fullmatch(default) else None,
                                required=True, check=name_ok)
-        s["genome"] = self.ask("  Genome FASTA", default=(prev or {}).get("genome"),
-                               required=True)
-        s["gtf"] = self.ask("  Reference annotation GTF", default=(prev or {}).get("gtf"),
-                            required=True)
+        genome_default = (prev or {}).get("genome") or ("hg38" if self.on_phoenix else None)
+        hint = f" (or a lab preset: {phoenix.preset_names()})" if self.on_phoenix else ""
+        s["genome"] = self.ask(f"  Genome FASTA{hint}", default=genome_default, required=True)
+        if phoenix.is_genome_preset(s["genome"]):
+            note = phoenix.GENOME_PRESETS[s["genome"]]["note"]
+            gtf = self.ask(f"  Reference annotation GTF (Enter to use the preset's: {note})",
+                           default=(prev or {}).get("gtf") or "")
+        else:
+            gtf = self.ask("  Reference annotation GTF", default=(prev or {}).get("gtf"),
+                           required=True)
+        if gtf:
+            s["gtf"] = gtf
         plat = self.choose("  Platform", PLATFORMS, guess_platform(path))
         if plat:
             s["platform"] = plat
@@ -167,8 +190,14 @@ class Wizard:
             runs.append(run)
         return runs
 
-    def run(self) -> tuple[list[dict], list[dict]] | None:
-        """Return (samples, runs), or None when the user picks the test data instead."""
+    def outdir(self) -> str:
+        self.say("\nOutput folder for this comparison: bundles, the report and (on phoenix) "
+                 "Nextflow's work files.")
+        self.say("  Use groups or warm-archive storage, not your home folder (small quota).")
+        return self.ask("  Output folder (--outdir)", default=self.default_outdir, required=True)
+
+    def run(self) -> tuple[list[dict], list[dict], str] | None:
+        """Return (samples, runs, outdir), or None when the user picks the test data instead."""
         self.say("flair-eval init: set up a FLAIR comparison. Press Enter to accept [defaults].")
         if self.yes("First time? Try flair-eval on its bundled test data instead (no files needed)?"):
             return None
@@ -178,7 +207,8 @@ class Wizard:
                                        samples[-1] if samples else None))
             if not self.yes("Add another sample?"):
                 break
-        return samples, self.runs()
+        runs = self.runs()
+        return samples, runs, self.outdir()
 
 
 def _token_of(run: dict) -> str:

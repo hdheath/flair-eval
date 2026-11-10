@@ -18,10 +18,47 @@ def statuses(checks):
 
 def test_suggest_profile():
     have = lambda *names: (lambda x: "/bin/" + x if x in names else None)  # noqa: E731
-    assert doctor.suggest_profile(have("sbatch", "conda")) == "slurm,conda"
-    assert doctor.suggest_profile(have("apptainer")) == "local,singularity"
-    assert doctor.suggest_profile(have("docker")) == "local,docker"
-    assert doctor.suggest_profile(have()) == "local"
+    assert doctor.suggest_profile(have("sbatch", "conda"), on_phoenix=False) == "slurm,conda"
+    assert doctor.suggest_profile(have("apptainer"), on_phoenix=False) == "local,singularity"
+    assert doctor.suggest_profile(have("docker"), on_phoenix=False) == "local,docker"
+    assert doctor.suggest_profile(have(), on_phoenix=False) == "local"
+    assert doctor.suggest_profile(have(), on_phoenix=None) == "local"  # no sbatch: not phoenix
+    # phoenix: the pipeline's default profile is phoenix, so no -profile at all
+    assert doctor.suggest_profile(have("sbatch", "conda"), on_phoenix=True) == ""
+
+
+def test_phoenix_detection():
+    from flair_eval import phoenix
+    sb = lambda x: "/usr/bin/sbatch" if x == "sbatch" else None  # noqa: E731
+    lab = lambda p: p == phoenix.LAB_ROOT  # noqa: E731
+    assert phoenix.detect(which=sb, is_dir=lab) is True
+    assert phoenix.detect(which=lambda x: None, is_dir=lab) is False   # no SLURM
+    assert phoenix.detect(which=sb, is_dir=lambda p: False) is False   # another cluster
+
+
+def test_phoenix_doctor_report(tmp_path):
+    from flair_eval import phoenix
+    which = lambda x: "/bin/" + x  # noqa: E731
+    out = {"java": 'openjdk version "17.0.9"', "nextflow": "nextflow version 25.10.0"}
+    checks = doctor.run_checks(str(tmp_path), which=which, run=runner(out),
+                               disk_usage=lambda p: Usage(0, 0, 500e9), home="/nonexistent",
+                               on_phoenix=True, is_dir=lambda p: True)
+    cluster = [c for c in checks if c.name == "Cluster"][0]
+    assert "phoenix" in cluster.detail and cluster.status == "ok"
+    envs = [c for c in checks if c.name == "FLAIR envs"][0]
+    assert phoenix.ENV_CACHE in envs.detail
+    lines = []
+    assert doctor.report(checks, "", out=lines.append, on_phoenix=True) == 0
+    text = "\n".join(lines)
+    assert "phoenix (UCSC PRISM) detected: no -profile needed" in text
+    assert phoenix.ENV_CACHE in text and "Suggested profile" not in text
+    # home outdir on phoenix points at groups storage
+    checks = doctor.run_checks(str(tmp_path / "out"), which=which, run=runner(out),
+                               disk_usage=lambda p: Usage(0, 0, 500e9), home=str(tmp_path),
+                               on_phoenix=True, is_dir=lambda p: False)
+    st = statuses(checks)
+    assert st["Output folder"] == "warn" and st["FLAIR envs"] == "warn"
+    assert phoenix.OUTDIR_EXAMPLE in [c for c in checks if c.name == "Output folder"][0].fix
 
 
 def test_nextflow_version():
@@ -33,7 +70,8 @@ def test_all_good(tmp_path):
     which = lambda x: "/bin/" + x  # noqa: E731
     out = {"java": 'openjdk version "17.0.9"', "nextflow": "nextflow version 25.10.0"}
     checks = doctor.run_checks(str(tmp_path), which=which, run=runner(out),
-                               disk_usage=lambda p: Usage(0, 0, 500e9), home="/nonexistent")
+                               disk_usage=lambda p: Usage(0, 0, 500e9), home="/nonexistent",
+                               on_phoenix=False)
     assert set(statuses(checks).values()) == {"ok"}
     lines = []
     assert doctor.report(checks, "slurm,conda", out=lines.append) == 0

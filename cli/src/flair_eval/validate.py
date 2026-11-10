@@ -18,7 +18,7 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator
 
-from . import config
+from . import config, phoenix
 
 NAME_HINT = "start with a letter or digit, then use only letters, digits, '.', '_' or '-'"
 FLAIR_KEYS = ("release", "git", "env", "container")
@@ -187,6 +187,9 @@ def validate_samples(rows: list[dict], header: list[str] | None = None) -> list[
     sch = schema("samples")
     for i, r in enumerate(rows):
         issues = _issues_from_schema(r, sch, ("samples", i), "column")
+        if isinstance(r, dict) and phoenix.is_genome_preset(r.get("genome")):
+            # a genome preset (e.g. hg38) brings its own GTF; the pipeline fills it in
+            issues = [x for x in issues if x.path != ("samples", i, "gtf") or x.code != "required"]
         if header is not None:  # reported once on the header instead
             issues = [x for x in issues if x.code != "unknown_key"]
         out += issues
@@ -214,14 +217,27 @@ def validate_bundle(doc) -> list[Issue]:
 
 def check_paths(rows: list[dict], csv_dir: Path | None = None) -> list[Issue]:
     """Warnings for local input files that do not exist (remote URIs and globs are skipped).
+    A genome preset key (e.g. hg38) is checked as its lab reference files.
 
     A relative path is looked up next to samples.csv first, then in the current folder
     (CONTRACTS section 7, A3)."""
     out: list[Issue] = []
     bases = [b for b in (csv_dir, Path.cwd()) if b is not None]
     for i, r in enumerate(rows):
+        g = r.get("genome")
+        if phoenix.is_genome_preset(g):
+            preset = phoenix.GENOME_PRESETS[g]
+            for k in ("fasta",) + (() if r.get("gtf") else ("gtf",)):
+                if not Path(preset[k]).exists():
+                    out.append(Issue(("samples", i, "genome"), "preset_missing",
+                                     f"genome preset {g!r} uses {preset[k]}, which is not on "
+                                     "this machine (presets are lab references on phoenix; "
+                                     "elsewhere give genome and gtf files)", "warning"))
+                    break
         for col in ("reads", "bam", "genome", "gtf") + tuple(config.TRACK_COLUMNS):
             p = r.get(col)
+            if col == "genome" and phoenix.is_genome_preset(p):
+                continue
             if not p or re.match(r"^[a-z][a-z0-9+.-]*://", p) or any(ch in p for ch in "*?["):
                 continue
             fp = Path(p).expanduser()
@@ -264,6 +280,28 @@ def check_files(samples: str | Path | None = None, runs: str | Path | None = Non
                 out += validate_runs(config.read_runs(rp))
             except config.YamlError as e:
                 out.append(Issue(("runs",), "yaml", str(e)))
+    return out
+
+
+def cwd_only_paths(rows: list[dict], csv_dir: Path) -> list[Issue]:
+    """Errors for relative paths in samples.csv that exist only from the current folder.
+
+    The pipeline looks next to samples.csv first, then in its launch folder. A SLURM-launched
+    driver starts in --outdir, so such paths would no longer be found there."""
+    out: list[Issue] = []
+    for i, r in enumerate(rows):
+        for col in ("reads", "bam", "genome", "gtf") + tuple(config.TRACK_COLUMNS):
+            p = r.get(col)
+            if (not p or re.match(r"^[a-z][a-z0-9+.-]*://", p) or any(ch in p for ch in "*?[")
+                    or (col == "genome" and phoenix.is_genome_preset(p))):
+                continue
+            fp = Path(p).expanduser()
+            if fp.is_absolute() or (csv_dir / fp).exists() or not (Path.cwd() / fp).exists():
+                continue
+            out.append(Issue(("samples", i, col), "cwd_relative",
+                             f"{p} is relative to this folder, but the SLURM job launches in "
+                             "--outdir; write it as a full path or relative to samples.csv "
+                             "(or launch with --foreground)"))
     return out
 
 

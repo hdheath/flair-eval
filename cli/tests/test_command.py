@@ -13,7 +13,16 @@ def test_quick_form(sample, two_runs):
     assert c.argv == ["nextflow", "run", "hdheath/flair-eval", "-r", "v2",
                       "--reads", "/data/HG002.fq.gz", "--genome", "/ref/hg38.fa",
                       "--gtf", "/ref/gencode.gtf", "--sample", "HG002",
-                      "--flair", "3.0.1,dev", "--outdir", "./flair-eval-results"]
+                      "--flair", "3.0.1,dev", "--outdir", "<outdir>"]
+
+
+def test_quick_form_genome_preset_without_gtf(sample, two_runs):
+    s = {"sample": "HG002", "reads": "/data/HG002.fq.gz", "genome": "hg38"}
+    c = build_command([s], two_runs, Options(outdir="/big/out"))
+    assert c.mode == "quick"
+    assert c.argv[5:11] == ["--reads", "/data/HG002.fq.gz", "--genome", "hg38",
+                            "--sample", "HG002"]
+    assert "--gtf" not in c.argv
 
 
 def test_quick_form_with_args_bam_platform_and_options(sample, two_runs):
@@ -73,7 +82,7 @@ def test_report_command():
     c = report_command(["out1", "out2/bundles"], Options(params={"report_title": "T"}))
     assert c.argv == ["nextflow", "run", "hdheath/flair-eval", "-r", "v2", "--report_only",
                       "true", "--bundles", "out1,out2/bundles", "--report_title", "T",
-                      "--outdir", "./flair-eval-results"]
+                      "--outdir", "<outdir>"]
 
 
 @pytest.mark.parametrize("arg,quoted", [
@@ -97,7 +106,7 @@ def test_format_command(sample, two_runs):
     lines = text.split(" \\\n")
     assert lines[0] == "nextflow run hdheath/flair-eval -r v2"
     assert "  --flair_args=--stringent" in lines
-    assert "  --outdir ./flair-eval-results" in lines
+    assert "  --outdir '<outdir>'" in lines  # no default: the pipeline requires --outdir
     assert lines[-1] == "  -resume"
 
 

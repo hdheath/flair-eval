@@ -785,6 +785,10 @@ def cmd_resolve(a):
         log("error: cannot read the run description --run-json %s: %s" % (a.run_json, e))
         return 2
     cache = os.path.abspath(os.path.expanduser(a.cache))
+    # The cache may be shared by a whole lab (the phoenix profile): keep everything this build
+    # writes group-writable, so another member can take a lock, rebuild a broken env or add a
+    # conda package. A setgid cache root (chmod 2775) also keeps the group on new files.
+    os.umask(0o002)
     try:
         os.makedirs(cache, exist_ok=True)
         if "CONDA_PKGS_DIRS" not in os.environ:

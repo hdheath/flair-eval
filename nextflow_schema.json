@@ -51,13 +51,14 @@
                 },
                 "genome": {
                     "type": "string",
-                    "description": "Genome FASTA for the one-command sample.",
+                    "description": "Genome FASTA for the one-command sample, or a lab preset (hg38 on phoenix).",
                     "format": "file-path",
-                    "fa_icon": "fas fa-dna"
+                    "fa_icon": "fas fa-dna",
+                    "help_text": "`--genome hg38` uses GRCh38 primary assembly + GENCODE v49 basic from the lab reference folders and fills --gtf if you leave it out. A samples.csv genome column takes the same preset names."
                 },
                 "gtf": {
                     "type": "string",
-                    "description": "Reference annotation GTF for the one-command sample.",
+                    "description": "Reference annotation GTF for the one-command sample (optional with a --genome preset).",
                     "format": "file-path",
                     "fa_icon": "fas fa-book"
                 },
@@ -105,10 +106,9 @@
             "properties": {
                 "outdir": {
                     "type": "string",
-                    "description": "Output directory: bundles/, report/report.html and pipeline_info/.",
-                    "help_text": "On PRISM put this on groups or warm-archive storage, not in home.",
+                    "description": "Output directory (required): bundles/, report/report.html, pipeline_info/ and, on phoenix, work/.",
+                    "help_text": "Put it on groups or warm-archive storage, not in home, e.g. /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name.",
                     "format": "directory-path",
-                    "default": "./flair-eval-results",
                     "fa_icon": "fas fa-folder-open"
                 },
                 "bundles": {
@@ -154,9 +154,15 @@
                 "env_cache": {
                     "type": "string",
                     "description": "Where FLAIR environments are built and cached.",
-                    "help_text": "Defaults to <launchDir>/flair-env-cache. On PRISM set it on groups storage.",
+                    "help_text": "On phoenix (the default profile) this is the shared lab cache /private/groups/brookslab/flair-eval/env_cache. Elsewhere it defaults to <launchDir>/flair-env-cache.",
                     "format": "directory-path",
                     "fa_icon": "fas fa-archive"
+                },
+                "genomes": {
+                    "type": "object",
+                    "description": "Genome presets for --genome (set in nextflow.config).",
+                    "hidden": true,
+                    "fa_icon": "fas fa-book"
                 }
             }
         },

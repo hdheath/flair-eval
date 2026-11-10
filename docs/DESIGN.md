@@ -82,9 +82,13 @@ Later sections are only shown when their input exists:
 - quantification / spike-in / CDS / runtime
 
 ## Front end for new users
+Every user is on the lab's phoenix cluster (UCSC PRISM), so the defaults are phoenix's (CONTRACTS A25):
+SLURM + conda with no `-profile`, one shared FLAIR env cache for the lab, `--genome hg38` as a lab
+reference preset, and a required `--outdir` on groups or warm-archive storage.
+
 There are four ways in, all mapping onto the same params and schemas (see CONTRACTS.md §1):
 1. **One command, no files.**
-   `nextflow run hdheath/flair-eval --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 2.2.0,3.0.1,dev --outdir out`.
+   `nextflow run hdheath/flair-eval --reads r.fq.gz --genome hg38 --flair 2.2.0,3.0.1,dev --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name`.
 2. **`nextflow_schema.json`.** Gives `--help`, input validation with plain-English errors, a web
    launch form via `nf-core pipelines launch`, and a Seqera Platform launchpad.
 3. **Config-builder page** (`frontend/builder/`, GitHub Pages). It has a form for samples, plus run cards
@@ -92,7 +96,7 @@ There are four ways in, all mapping onto the same params and schemas (see CONTRA
    exact command, and downloads `samples.csv` / `runs.yaml`.
 4. **pip CLI** (`cli/`, package `flair-eval`):
    - `flair-eval init` is an interactive wizard that writes the config files.
-   - `flair-eval run` wraps `nextflow run`.
+   - `flair-eval run` wraps `nextflow run` and, on phoenix, submits the driver as a SLURM job.
    - `flair-eval report` gives report-only mode.
    - `flair-eval check` validates configs.
 

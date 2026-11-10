@@ -16,9 +16,10 @@ from .config import TRACK_COLUMNS, run_is_default
 from .tokens import token_for_run
 
 #: Pipeline params (CONTRACTS section 1) and their pipeline defaults. A param is only put on
-#: the command line when it differs from this default. `outdir` is always written.
+#: the command line when it differs from this default. `outdir` is always written; it has no
+#: default (the pipeline requires it), so a command built without one shows OUTDIR_PLACEHOLDER.
 PARAM_DEFAULTS = {
-    "outdir": "./flair-eval-results",
+    "outdir": None,
     "report_title": "FLAIR comparison",
     "baseline": None,
     "align_flair": "3.0.1",
@@ -26,6 +27,7 @@ PARAM_DEFAULTS = {
     "bundles": None,
     "env_cache": None,  # pipeline default is "${launchDir}/flair-env-cache"
 }
+OUTDIR_PLACEHOLDER = "<outdir>"
 PARAM_ORDER = ["bundles", "baseline", "report_title", "align_flair", "regions", "env_cache"]
 
 #: nextflow_schema.json params the CLI never writes, and why. tests/test_pipeline_params.py
@@ -65,7 +67,7 @@ def opt(name: str, value) -> list:
 class Options:
     ref: str = DEFAULT_REF
     profile: str | None = None
-    outdir: str = PARAM_DEFAULTS["outdir"]
+    outdir: str | None = None
     params: dict = field(default_factory=dict)  # other pipeline params from PARAM_ORDER
     resume: bool = False
     work_dir: str | None = None
@@ -130,7 +132,10 @@ def quick_form(samples: list[dict], runs: list[dict]) -> tuple[list | None, list
         args += ["--reads", s["reads"]]
     else:
         args += ["--bam", s["bam"]]
-    args += ["--genome", s["genome"], "--gtf", s["gtf"], "--sample", s["sample"]]
+    args += ["--genome", s["genome"]]
+    if s.get("gtf"):  # optional with a genome preset (--genome hg38)
+        args += ["--gtf", s["gtf"]]
+    args += ["--sample", s["sample"]]
     for k in ("platform", "library"):
         if s.get(k):
             args += [f"--{k}", s[k]]
@@ -148,7 +153,7 @@ def _tail(opts: Options) -> list:
         if v is None or v == "" or v == PARAM_DEFAULTS.get(k):
             continue
         args += opt(f"--{k}", "true" if v is True else v)
-    args += ["--outdir", opts.outdir or PARAM_DEFAULTS["outdir"]]
+    args += ["--outdir", opts.outdir or OUTDIR_PLACEHOLDER]
     if opts.work_dir:
         args += ["-work-dir", opts.work_dir]
     if opts.resume:

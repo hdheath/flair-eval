@@ -180,6 +180,34 @@ def splitCsvLine(String line) {
  * Check one sample (from a CSV row or the one-command flags). Returns the normalised sample map
  * with resolved file objects, or null when a required value is missing.
  */
+/*
+ * Genome presets (params.genomes, lab references on phoenix): a genome value that is a preset key
+ * becomes that preset's FASTA, and an empty gtf becomes the preset's GTF. Returns false on error.
+ */
+def genomePresetKeys() {
+    def g = params.genomes instanceof Map ? params.genomes : [:]
+    return g ? g.keySet().join(', ') : 'none'
+}
+
+def expandGenomePreset(Map row, String where, List errors) {
+    def presets = params.genomes instanceof Map ? params.genomes : [:]
+    def key = row.genome ? row.genome.toString() : ''
+    if (!presets.containsKey(key)) {
+        return true
+    }
+    def preset = presets[key]
+    ['fasta', 'gtf'].each { k ->
+        if (!file(preset[k].toString()).exists()) {
+            errors << "${where}: genome preset '${key}' needs ${preset[k]}, which is not on this machine. The presets are lab references on phoenix; elsewhere pass --genome and --gtf files."
+        }
+    }
+    row.genome = preset.fasta.toString()
+    if (!row.gtf) {
+        row.gtf = preset.gtf.toString()
+    }
+    return !errors.any { e -> e.startsWith("${where}: genome preset") }
+}
+
 def checkSample(Map row, String where, Object baseDir, List errors) {
     def ok = true
     if (!row.sample) {
@@ -194,9 +222,12 @@ def checkSample(Map row, String where, Object baseDir, List errors) {
         errors << "${where}: give 'reads' (FASTQ/FASTA) or 'bam' (sorted and indexed), or both."
         ok = false
     }
+    if (!expandGenomePreset(row, where, errors)) {
+        ok = false
+    }
     ['genome', 'gtf'].each { c ->
         if (!row[c]) {
-            errors << "${where}: '${c}' is required."
+            errors << "${where}: '${c}' is required" + (c == 'genome' ? " (a FASTA path, or a preset: ${genomePresetKeys()})." : '.')
             ok = false
         }
     }
@@ -213,7 +244,7 @@ def checkSample(Map row, String where, Object baseDir, List errors) {
         if (row[c]) {
             def f = resolveInputPath(row[c].toString(), baseDir)
             if (!f.exists()) {
-                errors << "${where}: ${c} file '${row[c]}' does not exist${isRelative(row[c].toString()) && baseDir ? " (looked next to the samples file and in the launch directory)" : ''}."
+                errors << "${where}: ${c} file '${row[c]}' does not exist${isRelative(row[c].toString()) && baseDir ? " (looked next to the samples file and in the launch directory)" : ''}${c == 'genome' && !row[c].toString().contains('/') ? "; genome presets: ${genomePresetKeys()}" : ''}."
                 ok = false
             }
             files[c] = f

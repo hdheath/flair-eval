@@ -11,8 +11,20 @@ from .test_validate import BUNDLE
 
 @pytest.fixture(autouse=True)
 def fixed_profile(monkeypatch):
-    """Profile detection depends on the machine; pin it."""
+    """Profile and phoenix detection depend on the machine; pin them (not phoenix)."""
     monkeypatch.setattr(cli.doctor, "suggest_profile", lambda which=None: "local,conda")
+    monkeypatch.setattr(cli.phoenix, "detect", lambda **k: False)
+    monkeypatch.setattr(cli.phoenix, "submit", _no_sbatch)
+
+
+def _no_sbatch(*a, **k):  # pragma: no cover - a test reaching this is a bug
+    raise AssertionError("tests must not submit SLURM jobs")
+
+
+@pytest.fixture
+def on_phoenix(monkeypatch):
+    monkeypatch.setattr(cli.phoenix, "detect", lambda **k: True)
+    monkeypatch.setattr(cli.doctor, "suggest_profile", lambda which=None: "")
 
 
 @pytest.fixture
@@ -59,12 +71,15 @@ def test_init_errors(here, capsys):
 
 
 def test_init_interactive(here, monkeypatch, capsys):
-    answers = iter(["n", "r.fq.gz", "", "g.fa", "a.gtf", "", "", "n", "3.0.1", "", "n"])
+    answers = iter(["n", "r.fq.gz", "", "g.fa", "a.gtf", "", "", "n", "3.0.1", "", "n",
+                    "/groups/out"])
     monkeypatch.setattr("builtins.input", lambda p="": next(answers))
     assert cli.main(["init", "--dir", "cfg"]) == 0
     assert (here / "cfg" / "samples.csv").exists()
     out = capsys.readouterr().out
     assert "flair-eval check --samples cfg/samples.csv --runs cfg/runs.yaml" in out
+    assert "flair-eval run --samples cfg/samples.csv --runs cfg/runs.yaml --outdir /groups/out" \
+        in out
 
 
 def test_check_reports_errors_and_strict(here, capsys):
@@ -114,7 +129,7 @@ def test_run_files_dry_run_picks_up_cwd_files(here, capsys, sample, two_runs):
     (here / "samples.csv").write_text(samples_csv([dict(sample, reads="r.fq.gz",
                                                         genome="g.fa", gtf="a.gtf")]))
     (here / "runs.yaml").write_text(runs_yaml(two_runs))
-    assert cli.main(["run", "--dry-run", "-r", "1.2.3", "--resume"]) == 0
+    assert cli.main(["run", "--dry-run", "-r", "1.2.3", "--resume", "--outdir", "out"]) == 0
     got = lines_of(capsys.readouterr().out)
     assert "nextflow run hdheath/flair-eval -r 1.2.3" in got
     assert "--input samples.csv" in got and "--runs runs.yaml" in got and "-resume" in got
@@ -123,7 +138,7 @@ def test_run_files_dry_run_picks_up_cwd_files(here, capsys, sample, two_runs):
 def test_run_mixed_sources(here, capsys, two_runs):
     (here / "runs.yaml").write_text(runs_yaml(two_runs))
     assert cli.main(["run", "--reads", "r.fq.gz", "--genome", "g.fa", "--gtf", "a.gtf",
-                     "--runs", "runs.yaml", "--dry-run"]) == 0
+                     "--runs", "runs.yaml", "--dry-run", "--outdir", "out"]) == 0
     got = lines_of(capsys.readouterr().out)
     assert "--reads r.fq.gz" in got and "--runs runs.yaml" in got
     assert not any(x.startswith("--input") for x in got)
@@ -131,10 +146,10 @@ def test_run_mixed_sources(here, capsys, two_runs):
 
 def test_run_refuses_bad_input(here, capsys, two_runs):
     assert cli.main(["run", "--reads", "r.fq.gz", "--genome", "g.fa", "--gtf", "a.gtf",
-                     "--flair", "3.0.1", "--baseline", "nope", "--dry-run"]) == 1
+                     "--flair", "3.0.1", "--baseline", "nope", "--dry-run", "--outdir", "o"]) == 1
     assert "--baseline 'nope' is not a run id (flair-3.0.1)" in capsys.readouterr().err
     assert cli.main(["run", "--reads", "r.fq.gz", "--genome", "g.fa", "--gtf", "a.gtf",
-                     "--flair", "master", "--dry-run"]) == 1
+                     "--flair", "master", "--dry-run", "--outdir", "o"]) == 1
     assert cli.main(["run", "--dry-run", "--flair", "3.0.1"]) == 2  # no samples
     assert cli.main(["run", "--dry-run", "--reads", "r.fq.gz", "--genome", "g.fa",
                      "--gtf", "a.gtf"]) == 2  # no runs
@@ -147,7 +162,8 @@ def test_run_refuses_bad_input(here, capsys, two_runs):
 
 
 def test_run_checks_tools_and_launches(here, monkeypatch, capsys):
-    args = ["run", "--reads", "r.fq.gz", "--genome", "g.fa", "--gtf", "a.gtf", "--flair", "3.0.1"]
+    args = ["run", "--reads", "r.fq.gz", "--genome", "g.fa", "--gtf", "a.gtf", "--flair", "3.0.1",
+            "--outdir", "out"]
     monkeypatch.setattr(env_check, "check_tools", lambda: (["nextflow is not on PATH"], []))
     assert cli.main(args) == 2
     assert "nextflow is not on PATH" in capsys.readouterr().err
@@ -180,25 +196,45 @@ def test_init_test_data_choice(here, monkeypatch, capsys):
     assert not (here / "samples.csv").exists()
 
 
-def test_auto_profile_and_default_outdir(here, capsys, sample, two_runs):
+def test_auto_profile(here, capsys, sample, two_runs):
     (here / "samples.csv").write_text(samples_csv([dict(sample, reads="r.fq.gz",
                                                         genome="g.fa", gtf="a.gtf")]))
     (here / "runs.yaml").write_text(runs_yaml(two_runs))
-    assert cli.main(["run", "--dry-run"]) == 0
+    assert cli.main(["run", "--dry-run", "--outdir", "/big/out"]) == 0
     out = capsys.readouterr().out
     assert "Using -profile local,conda (picked for this machine" in out
     assert "-profile local,conda" in lines_of(out)
-    assert "--outdir ./flair-eval-results" in lines_of(out)
+    assert "--outdir /big/out" in lines_of(out)
+
+
+@pytest.mark.parametrize("argv", [
+    ["run", "--reads", "r.fq.gz", "--genome", "g.fa", "--gtf", "a.gtf", "--flair", "3.0.1"],
+    ["run", "--test"],
+    ["report", "out1"],
+])
+def test_outdir_is_required(here, capsys, argv):
+    from flair_eval import phoenix
+    assert cli.main(argv + ["--dry-run"]) == 2
+    err = capsys.readouterr().err
+    assert "--outdir is required" in err and phoenix.OUTDIR_EXAMPLE in err
+
+
+def test_outdir_in_home_warns(here, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(here))
+    assert cli.main(["run", "--test", "--dry-run", "--outdir", "results"]) == 0
+    assert "is in your home folder" in capsys.readouterr().err
+    assert cli.main(["run", "--test", "--dry-run", "--outdir", "/elsewhere/results"]) == 0
+    assert "home folder" not in capsys.readouterr().err
 
 
 def test_run_test_data(here, capsys):
-    assert cli.main(["run", "--test", "--dry-run"]) == 0
+    assert cli.main(["run", "--test", "--dry-run", "--outdir", "t"]) == 0
     got = lines_of(capsys.readouterr().out)
-    assert "-profile test,local,conda" in got and "--outdir ./flair-eval-test" in got
+    assert "-profile test,local,conda" in got and "--outdir t" in got
     assert not any(x.startswith("--input") or x.startswith("--runs") for x in got)
-    assert cli.main(["run", "--test", "--profile", "slurm", "--dry-run"]) == 0
+    assert cli.main(["run", "--test", "--profile", "slurm", "--dry-run", "--outdir", "t"]) == 0
     assert "-profile test,slurm" in lines_of(capsys.readouterr().out)
-    assert cli.main(["run", "--test", "--flair", "3.0.1", "--dry-run"]) == 2
+    assert cli.main(["run", "--test", "--flair", "3.0.1", "--dry-run", "--outdir", "t"]) == 2
 
 
 def test_doctor_command(here, monkeypatch, capsys):
@@ -214,6 +250,164 @@ def test_doctor_command(here, monkeypatch, capsys):
 
 def test_run_local_checkout(here, capsys):
     assert cli.main(["run", "--pipeline", "./flair-eval", "--reads", "r.fq.gz", "--genome", "g.fa",
-                     "--gtf", "a.gtf", "--flair", "3.0.1", "--dry-run", "--", "-stub"]) == 0
+                     "--gtf", "a.gtf", "--flair", "3.0.1", "--dry-run", "--outdir", "o",
+                     "--", "-stub"]) == 0
     got = lines_of(capsys.readouterr().out)
     assert "nextflow run ./flair-eval" in got and "-stub" in got
+
+
+# ---------------------------------------------------------------- genome presets
+def test_genome_preset_quick_run(here, capsys):
+    assert cli.main(["run", "--reads", "r.fq.gz", "--genome", "hg38", "--flair", "2.2.0,3.0.1,dev",
+                     "--outdir", "/big/out", "--dry-run"]) == 0
+    cap = capsys.readouterr()
+    got = lines_of(cap.out)
+    assert "--genome hg38" in got and not any(x.startswith("--gtf") for x in got)
+    assert "file not found" not in cap.err
+
+
+def test_genome_preset_in_samples_csv(here, capsys, two_runs):
+    (here / "samples.csv").write_text("sample,reads,genome,gtf\ns1,r.fq.gz,hg38,\n")
+    (here / "runs.yaml").write_text(runs_yaml(two_runs))
+    assert cli.main(["check"]) == 0
+    out = capsys.readouterr().out
+    assert "missing required column 'gtf'" not in out and "file not found: hg38" not in out
+    # without a preset the gtf is still required
+    (here / "samples.csv").write_text("sample,reads,genome,gtf\ns1,r.fq.gz,g.fa,\n")
+    assert cli.main(["check"]) == 1
+    assert "missing required column 'gtf'" in capsys.readouterr().out
+
+
+def test_init_with_genome_preset(here, capsys):
+    assert cli.main(["init", "--reads", "r.fq.gz", "--genome", "hg38", "--flair", "3.0.1",
+                     "--outdir", "/groups/x"]) == 0
+    out = capsys.readouterr().out
+    assert "--outdir /groups/x" in out
+    assert (here / "samples.csv").read_text().splitlines()[1] == "r,r.fq.gz,,hg38,,,"
+
+
+def test_cli_genome_presets_match_nextflow_config(repo):
+    """flair_eval.phoenix.GENOME_PRESETS must equal params.genomes in nextflow.config."""
+    import re
+    from flair_eval import phoenix
+    p = repo / "nextflow.config"
+    if not p.exists():
+        pytest.skip("not in the pipeline repository")
+    text = p.read_text()
+    m = re.search(r"^\s*genomes\s*=\s*\[", text, re.M)
+    assert m, "params.genomes not found in nextflow.config"
+    depth, i = 1, m.end()
+    while depth:  # the matching ] of `genomes = [`
+        depth += {"[": 1, "]": -1}.get(text[i], 0)
+        i += 1
+    block = text[m.end():i - 1]
+    nf = {}
+    for key, body in re.findall(r"^\s*([A-Za-z0-9_.-]+)\s*:\s*\[(.*?)\]", block, re.S | re.M):
+        nf[key] = dict(re.findall(r"(\w+)\s*:\s*'([^']*)'", body))
+    assert sorted(nf) == sorted(phoenix.GENOME_PRESETS)
+    for key, preset in phoenix.GENOME_PRESETS.items():
+        assert nf[key]["fasta"] == preset["fasta"], key
+        assert nf[key]["gtf"] == preset["gtf"], key
+
+
+# ---------------------------------------------------------------- phoenix launch
+def test_phoenix_run_dry_run_prints_sbatch_script(here, on_phoenix, capsys):
+    out_abs = str(here / "res")
+    assert cli.main(["run", "--reads", "r.fq.gz", "--genome", "hg38", "--flair", "3.0.1,dev",
+                     "--outdir", "res", "--regions", "x.bed", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "phoenix detected" in out
+    assert f"would be {out_abs}/pipeline_info/launch.sbatch" in out
+    for line in ("#SBATCH --job-name=flair-eval", "#SBATCH --partition=long",
+                 "#SBATCH --cpus-per-task=2", "#SBATCH --mem=8G", "#SBATCH --time=7-00:00:00",
+                 f"#SBATCH --output={out_abs}/pipeline_info/nextflow-%j.log", f"cd {out_abs}"):
+        assert line in out.splitlines(), line
+    got = lines_of(out)
+    assert f"--reads {here}/r.fq.gz" in got and "--genome hg38" in got  # preset kept as is
+    assert f"--outdir {out_abs}" in got and f"--regions {here}/x.bed" in got
+    assert not any(x.startswith("-profile") or " -profile " in x for x in got)
+    assert not (here / "res").exists()  # dry run writes nothing
+
+
+def test_phoenix_run_submits(here, on_phoenix, monkeypatch, capsys, two_runs):
+    (here / "samples.csv").write_text("sample,reads,genome,gtf\ns1,r.fq.gz,g.fa,a.gtf\n")
+    (here / "runs.yaml").write_text(runs_yaml(two_runs))
+    monkeypatch.setattr(env_check, "check_tools", lambda: ([], []))
+    submitted = []
+    monkeypatch.setattr(cli.phoenix, "submit", lambda path: submitted.append(path) or "4242")
+    monkeypatch.setattr(cli.subprocess, "call", _no_sbatch)
+    assert cli.main(["run", "--outdir", "res", "--resume"]) == 0
+    script = here / "res" / "pipeline_info" / "launch.sbatch"
+    assert submitted == [script]
+    text = script.read_text()
+    assert text.startswith("#!/bin/bash\n#SBATCH")
+    assert f"umask 002\ncd {here}/res\n" in text
+    got = lines_of(text)
+    assert f"--input {here}/samples.csv" in got and f"--runs {here}/runs.yaml" in got
+    assert "-resume" in got
+    out = capsys.readouterr().out
+    assert "SLURM job 4242" in out and "squeue -j 4242" in out
+    assert f"{here}/res/pipeline_info/nextflow-4242.log" in out
+    assert f"{here}/res/report/report.html" in out
+
+
+def test_phoenix_sbatch_error(here, on_phoenix, monkeypatch, capsys):
+    monkeypatch.setattr(env_check, "check_tools", lambda: ([], []))
+
+    def fail(path):
+        raise RuntimeError("sbatch failed: invalid partition")
+    monkeypatch.setattr(cli.phoenix, "submit", fail)
+    assert cli.main(["run", "--test", "--outdir", "res"]) == 1
+    err = capsys.readouterr().err
+    assert "invalid partition" in err and "launch.sbatch" in err
+
+
+def test_phoenix_foreground(here, on_phoenix, monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(env_check, "check_tools", lambda: ([], []))
+    monkeypatch.setattr(cli.subprocess, "call", lambda argv: calls.append(argv) or 0)
+    assert cli.main(["run", "--reads", "r.fq.gz", "--genome", "hg38", "--flair", "3.0.1",
+                     "--outdir", "res", "--foreground"]) == 0
+    assert calls and "-profile" not in calls[0]
+    assert calls[0][calls[0].index("--reads") + 1] == "r.fq.gz"  # as typed, no job script
+    assert not (here / "res").exists()
+
+
+def test_phoenix_test_profile_and_report(here, on_phoenix, capsys):
+    assert cli.main(["run", "--test", "--outdir", "t", "--dry-run"]) == 0
+    assert "-profile test,phoenix" in lines_of(capsys.readouterr().out)
+    assert cli.main(["report", "b1", "--outdir", "rep", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "#SBATCH --partition=medium" in out
+    assert f"--bundles {here}/b1" in lines_of(out)
+
+
+def test_phoenix_cwd_relative_paths_in_samples_csv(here, on_phoenix, capsys, two_runs):
+    (here / "cfg").mkdir()
+    (here / "cfg" / "samples.csv").write_text("sample,reads,genome,gtf\ns1,r.fq.gz,g.fa,a.gtf\n")
+    (here / "runs.yaml").write_text(runs_yaml(two_runs))
+    assert cli.main(["run", "--samples", "cfg/samples.csv", "--outdir", "o", "--dry-run"]) == 1
+    assert "the SLURM job launches in --outdir" in capsys.readouterr().err
+    assert cli.main(["run", "--samples", "cfg/samples.csv", "--outdir", "o", "--dry-run",
+                     "--foreground"]) == 0
+
+
+def test_phoenix_doctor(here, on_phoenix, monkeypatch, capsys):
+    from flair_eval import doctor
+    monkeypatch.setattr(doctor, "run_checks", lambda outdir=None: [
+        doctor.Check("ok", "Java", "version 17")])
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "phoenix (UCSC PRISM) detected: no -profile needed" in out
+    assert "shared lab cache" in out and "-profile local" not in out
+
+
+def test_phoenix_init_wizard_defaults(here, on_phoenix, monkeypatch, capsys):
+    answers = iter(["n", "r.fq.gz", "", "", "", "", "", "n", "3.0.1", "", "n", ""])
+    monkeypatch.setattr("builtins.input", lambda p="": next(answers))
+    monkeypatch.setattr(cli, "suggested_outdir", lambda: "/groups/u/flair-eval/10_11_26_x")
+    assert cli.main(["init"]) == 0
+    assert "r,r.fq.gz,,hg38,,," in (here / "samples.csv").read_text()
+    out = capsys.readouterr().out
+    assert "flair-eval run --outdir /groups/u/flair-eval/10_11_26_x" in out
+    assert "in a SLURM job, not on the login node" in out

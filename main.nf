@@ -4,7 +4,8 @@
  * write one self-contained HTML report.
  *
  *   nextflow run hdheath/flair-eval --input samples.csv --runs runs.yaml --outdir results
- *   nextflow run hdheath/flair-eval --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 3.0.1,dev --outdir results
+ *   nextflow run hdheath/flair-eval --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 2.2.0,3.0.1,dev --outdir results
+ *   nextflow run hdheath/flair-eval --reads r.fq.gz --genome hg38 --flair 2.2.0,3.0.1,dev --outdir results   (phoenix)
  *   nextflow run hdheath/flair-eval --report_only --bundles 'results/bundles' --outdir results
  *
  * Interfaces: docs/CONTRACTS.md. Design: docs/DESIGN.md. Outputs: docs/output.md.
@@ -18,11 +19,14 @@ include { REPORT                               } from './modules/report/main'
 workflow {
     if (params.help && params.help.toString() != 'false') {
         // --help lists all params; --help <param> explains one.
-        def helpOpts = [command: 'nextflow run hdheath/flair-eval --reads reads.fq.gz --genome genome.fa --gtf annotation.gtf --flair 3.0.1,dev --outdir results']
+        def helpOpts = [command: 'nextflow run hdheath/flair-eval --reads reads.fq.gz --genome hg38 --flair 2.2.0,3.0.1,dev --outdir /path/on/groups-or-warm-archive']
         def topic = params.help.toString()
         log.info(topic == 'true' ? paramsHelp(helpOpts) : paramsHelp(helpOpts, topic))
     }
     else {
+        if (!params.outdir) {
+            error("--outdir is required: give a folder for this comparison, e.g. --outdir /private/groups/brookslab/\$USER/flair-eval/dd_mm_yy_name (groups or warm-archive storage; home is too small). On phoenix the Nextflow work dir goes inside it.")
+        }
         checkFlairArgs(params.flair_args)
         validateParameters()
         log.info(paramsSummaryLog(workflow))

@@ -31,6 +31,8 @@ process.stdin.on("end", function () {
   });
   out.presets = FE.PRESETS;
   out.meta = { not_exposed: FE.NOT_EXPOSED, launch_options: FE.LAUNCH_OPTIONS,
-    param_defaults: FE.PARAM_DEFAULTS, param_order: FE.PARAM_ORDER };
+    param_defaults: FE.PARAM_DEFAULTS, param_order: FE.PARAM_ORDER,
+    genome_presets: FE.GENOME_PRESETS, outdir_placeholder: FE.OUTDIR_PLACEHOLDER,
+    outdir_example: FE.OUTDIR_EXAMPLE };
   process.stdout.write(JSON.stringify(out));
 });

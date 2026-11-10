@@ -11,13 +11,31 @@ same `nextflow run` command and the same config files, and all follow the rules 
 | [Config-builder page](#config-builder-page) | Filling in a form, then copying the command or downloading the files |
 | [`flair-eval` CLI](#the-flair-eval-cli) | A guided setup in the terminal, checking configs, launching |
 
+flair-eval assumes you work on the UCSC PRISM **phoenix** cluster (login node `mustard`,
+compute nodes `phoenix-*`). There:
+- no `-profile` is needed: the pipeline's default profile is phoenix (every step is a SLURM job,
+  FLAIR is installed with conda, and FLAIR envs come from the shared lab cache
+  `/private/groups/brookslab/flair-eval/env_cache`, so each version is built once for everyone);
+- `--genome hg38` picks the lab reference (GRCh38 primary assembly + GENCODE v49 basic) and
+  fills `--gtf` unless you give one;
+- `flair-eval run` submits the Nextflow driver itself as a SLURM job, so nothing long runs on
+  the login node.
+
+Elsewhere (a laptop, CI) add `-profile local,conda` (or let `flair-eval` pick one) and give
+`--genome`/`--gtf` files.
+
+**`--outdir` is always required.** On phoenix put it on groups or warm-archive storage, never in
+your home folder (about 100 GB quota), e.g.
+`--outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name`. On phoenix Nextflow's work
+directory goes inside it.
+
 ## First time? Start here
 ```bash
 conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
 conda activate nextflow
 pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"
-flair-eval doctor          # checks Java, Nextflow, conda, containers, disk; suggests a profile
-flair-eval run --test      # a small run on the bundled test data
+flair-eval doctor          # checks Java, Nextflow, conda, disk; says whether phoenix was found
+flair-eval run --test --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_test
 flair-eval init            # then set up your own data
 ```
 Nextflow needs Java 17+; flair-eval needs Nextflow 25.04+. `flair-eval doctor` says what is
@@ -25,13 +43,21 @@ missing and how to fix it. To install the CLI from a clone instead: `pip install
 
 ## One command, no files
 ```bash
-nextflow run hdheath/flair-eval -r v2 \
-  --reads /data/HG002.fq.gz --genome /ref/GRCh38.fa --gtf /ref/gencode.gtf \
+flair-eval run --reads /data/HG002.fq.gz --genome hg38 \
   --flair 2.2.0,3.0.1,dev \
-  --outdir /big/storage/flair-eval-results
+  --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_hg002
 ```
 This makes one sample (named after the reads file, or `--sample NAME`) and one run per
 `--flair` token. Add `--platform pacbio|ont` and `--library cDNA|dRNA` if you know them.
+With your own reference, give `--genome /ref/genome.fa --gtf /ref/annotation.gtf` instead.
+
+The same with Nextflow directly (on phoenix, inside an `sbatch` job rather than on `mustard`):
+```bash
+nextflow run hdheath/flair-eval -r v2 \
+  --reads /data/HG002.fq.gz --genome hg38 \
+  --flair 2.2.0,3.0.1,dev \
+  --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_hg002
+```
 
 ### `--flair` tokens
 | token | FLAIR used | run id |
@@ -75,9 +101,15 @@ HG002,/data/HG002.fq.gz,,/ref/GRCh38.fa,/ref/gencode.gtf,pacbio,cDNA
 WTC11,,/data/WTC11.bam,/ref/GRCh38.fa,/ref/gencode.gtf,ont,dRNA
 ```
 Each row needs `sample`, `genome`, `gtf`, and `reads` or `bam` (a sorted BAM with its `.bai`
-next to it). Optional columns `cage`, `pas`, `junctions` and `spikein_gtf` are read now and used
+next to it). `genome` may be a preset (`hg38` on phoenix); then the `gtf` cell may be left empty
+and the preset's GTF is used:
+```csv
+sample,reads,bam,genome,gtf,platform,library
+HG002,/data/HG002.fq.gz,,hg38,,pacbio,cDNA
+``` Optional columns `cage`, `pas`, `junctions` and `spikein_gtf` are read now and used
 by later report sections. A relative path is looked up next to `samples.csv` first, then in the
-folder you launch from. Full paths avoid any doubt.
+folder you launch from. Full paths avoid any doubt (and `flair-eval run` on phoenix launches in
+`--outdir`, so a path that only works from your current folder is refused there).
 
 `runs.yaml` has one entry per FLAIR configuration:
 ```yaml
@@ -103,7 +135,9 @@ Put version numbers in quotes: YAML reads `release: 3.0` as the number 3, not th
 
 Launch with:
 ```bash
-nextflow run hdheath/flair-eval -r v2 --input samples.csv --runs runs.yaml --outdir /big/storage/out
+flair-eval run --samples samples.csv --runs runs.yaml --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
+# or, inside a SLURM job:
+nextflow run hdheath/flair-eval -r v2 --input samples.csv --runs runs.yaml --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
 ```
 
 ## Config-builder page
@@ -119,9 +153,14 @@ the builder at `/builder/`, and a demo report built from `tests/fixtures/bundles
 - The panel on the right checks everything against the pipeline's schemas as you type and shows
   the exact command. It uses the one-command form whenever that says exactly the same thing,
   and otherwise tells you why it needs `samples.csv` and `runs.yaml`.
-- Pick where jobs run (this computer or a SLURM cluster) and how FLAIR gets installed (conda,
-  Singularity/Apptainer, Docker); the page turns that into `-profile`.
-- Copy the command, and download or copy the two files.
+- Each sample's genome is `hg38 (lab preset)` (the default; the GTF is then optional) or a
+  custom FASTA with its GTF.
+- The output folder is required; the placeholder shows the phoenix layout. Type your user name:
+  the page quotes paths, so `$USER` would not be expanded.
+- Where it runs: `phoenix (default)` writes no `-profile`; `This computer (local)` adds
+  `-profile local,<conda|singularity|docker>`. A custom profile replaces both.
+- Copy the command, and download or copy the two files. On phoenix run the command inside an
+  `sbatch` job, or give the same flags to `flair-eval run`, which submits it for you.
 
 ## The `flair-eval` CLI
 Python 3.10+. Install it straight from GitHub, or from a clone:
@@ -133,20 +172,23 @@ pip install -e cli/
 ### `flair-eval doctor`
 Checks this machine and prints a fix for each problem:
 ```text
-$ flair-eval doctor --outdir /big/storage/out
+$ flair-eval doctor --outdir /private/groups/brookslab/$USER/flair-eval
   ok    Java: version 17
   FAIL  Nextflow: not found
         Nextflow is not on PATH. Install one of:
             conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
   ok    conda: found: FLAIR releases and git branches can be built
   WARN  Containers: no singularity, apptainer or docker: container: runs will not work
-  ok    Cluster: SLURM found (sbatch): jobs can run on the cluster
-  ok    Disk: 2,310 GB free at /big/storage
+  ok    Cluster: phoenix (UCSC PRISM) detected: SLURM jobs, conda, no -profile needed
+  ok    FLAIR envs: shared lab cache /private/groups/brookslab/flair-eval/env_cache
+  ok    Disk: 61,200 GB free at /private/groups/brookslab
 
-Suggested profile for this machine: -profile slurm,conda
+phoenix (UCSC PRISM) detected: no -profile needed. ...
 ```
-It also checks the Nextflow version (25.04+), git (for git runs), and warns when `--outdir` is in
-your home folder.
+Phoenix is recognised by `sbatch` on PATH plus `/private/groups/brookslab`. Elsewhere doctor
+suggests a profile instead (`local` or `slurm`, plus conda, else Singularity/Apptainer, else
+Docker). It also checks the Nextflow version (25.04+), git (for git runs), and warns when
+`--outdir` is in your home folder.
 
 ### `flair-eval init`
 Asks a few questions and writes `samples.csv` and `runs.yaml`:
@@ -155,7 +197,8 @@ $ flair-eval init
 Sample 1
   Reads (FASTQ/FASTA, .gz is fine) or a sorted, indexed BAM: /data/HG002.fq.gz
   Sample name [HG002]:
-  Genome FASTA: /ref/GRCh38.fa
+  Genome FASTA (or a lab preset: hg38) [hg38]:
+  Reference annotation GTF (Enter to use the preset's: GRCh38 primary assembly + GENCODE v49 basic):
   ...
 Runs: which FLAIR builds do you want to compare?
   FLAIR [3.0.1]: 2.2.0,3.0.1,dev
@@ -163,11 +206,17 @@ Runs: which FLAIR builds do you want to compare?
     1) FLAIR defaults
     2) Stringent  (--stringent)
     ...
+Output folder for this comparison: ...
+  Output folder (--outdir) [/private/groups/brookslab/<you>/flair-eval/10_11_26_flair-eval]:
 ```
 The first question offers the bundled test data instead (answer `y` and nothing is written).
 Platform and library default to a guess from the file name (`…_ONT_cDNA.fq.gz` gives ont and
 cDNA); type `-` to leave one unset.
-Without questions: `flair-eval init --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 2.2.0,3.0.1,dev`.
+On phoenix the genome defaults to `hg38` and the output folder to a dated folder on groups
+storage; elsewhere both must be typed. The output folder is not written to a file: init prints
+the `flair-eval run … --outdir …` command to use next.
+Without questions: `flair-eval init --reads r.fq.gz --genome hg38 --flair 2.2.0,3.0.1,dev`
+(`--outdir` optional, used in the printed command).
 `--dir DIR` writes elsewhere; `--force` overwrites existing files.
 
 ### `flair-eval check`
@@ -182,22 +231,48 @@ runs.yaml: 1 problem(s)
   warning: samples.csv row 1: reads: file not found: /data/HG002.fq.gz
 ```
 Input files that do not exist here are warnings, since configs are often written on one machine
-and run on another. `--strict` turns warnings into errors; `--no-files` skips the file checks.
+and run on another. A genome preset is checked as its lab files (a warning off phoenix).
+`--strict` turns warnings into errors; `--no-files` skips the file checks.
 `--bundles DIR …` validates every `bundle.json` under those folders.
 
 ### `flair-eval run`
-Checks the configs and Java/Nextflow, prints the command, and runs it:
+Checks the configs and Java/Nextflow, then launches. `--outdir` is required.
 ```bash
-flair-eval run --outdir /big/storage/out --profile slurm             # uses ./samples.csv + ./runs.yaml
-flair-eval run --samples cfg/samples.csv --runs cfg/runs.yaml --outdir out
-flair-eval run --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 2.2.0,3.0.1,dev --outdir out
-flair-eval run --test                                                 # bundled test data, -profile test
-flair-eval run ... --dry-run                                          # print the command only
-flair-eval run ... -- -with-tower                                     # after --: passed to nextflow
+OUT=/private/groups/brookslab/$USER/flair-eval/10_11_26_hg002
+flair-eval run --outdir $OUT                                      # uses ./samples.csv + ./runs.yaml
+flair-eval run --samples cfg/samples.csv --runs cfg/runs.yaml --outdir $OUT
+flair-eval run --reads r.fq.gz --genome hg38 --flair 2.2.0,3.0.1,dev --outdir $OUT
+flair-eval run --test --outdir $OUT                               # bundled test data, -profile test
+flair-eval run ... --dry-run                                      # print only (on phoenix: the job script)
+flair-eval run ... --foreground                                   # on phoenix: run in this shell
+flair-eval run ... -- -with-tower                                 # after --: passed to nextflow
 ```
-Without `--profile`, `run` and `report` use the profile `flair-eval doctor` suggests for this
-machine (SLURM if `sbatch` exists, else local; plus conda, else Singularity/Apptainer, else
-Docker) and say so. `--test` adds `test` in front and writes to `./flair-eval-test`.
+**On phoenix** `run` does not run Nextflow on the login node. It writes
+`<outdir>/pipeline_info/launch.sbatch` and submits it with `sbatch`:
+```text
+Submitted the Nextflow driver as SLURM job 812345 (partition long, 2 CPUs, 8G, up to 7-00:00:00).
+  script:  /private/groups/brookslab/<you>/flair-eval/10_11_26_hg002/pipeline_info/launch.sbatch
+  log:     /private/groups/brookslab/<you>/flair-eval/10_11_26_hg002/pipeline_info/nextflow-812345.log
+  status:  squeue -j 812345
+  cancel:  scancel 812345
+The report will be at /private/groups/brookslab/<you>/flair-eval/10_11_26_hg002/report/report.html when the job finishes.
+```
+The job (`flair-eval`, partition `long`, 2 CPUs, 8 GB, 7 days) only schedules the pipeline;
+every step is its own SLURM job. It sets `umask 002` (other lab members must be able to write
+lock files in the shared env and conda caches) and `cd`s into `--outdir` first, so `.nextflow/` (the `-resume`
+cache) and `.nextflow.log` live with the results, not in your home folder; to resume, run the
+same `flair-eval run … --resume` again (or `sbatch` the script after adding `-resume`). Every
+path in the script is made absolute, since the job starts in `--outdir`. A relative path in
+`samples.csv` must therefore be relative to `samples.csv` itself (or be a full path); one that
+only works from your current folder is refused with a message. The job inherits your shell's
+environment (activate the Nextflow conda env before launching). `--foreground` runs Nextflow in
+the current shell instead, as off phoenix; `--dry-run` prints the job script without writing or
+submitting it.
+
+Without `--profile`, `run` and `report` pick the profile: none on phoenix (the default profile is
+phoenix), otherwise the one `flair-eval doctor` suggests (SLURM if `sbatch` exists, else local;
+plus conda, else Singularity/Apptainer, else Docker), and say so. `--test` adds `test` in front
+(`test,phoenix` on phoenix, since naming any profile replaces the default one).
 `--pipeline` runs another copy of the pipeline: a GitHub fork (`--pipeline me/flair-eval -r my-branch`)
 or a local checkout (`--pipeline ~/flair-eval`; `-r` is not used then). Add `-- -stub` to run the
 whole graph with placeholder outputs, a quick way to test configs end to end.
@@ -208,18 +283,26 @@ Options: `-r/--ref` (pipeline revision, default `v2`), `--profile`, `--outdir`, 
 ### `flair-eval report`
 Builds a report from bundles you already have, without running FLAIR:
 ```bash
-flair-eval report out_nov/bundles out_dec/bundles --title "Nov vs Dec" --outdir report_out
+flair-eval report out_nov/bundles out_dec/bundles --title "Nov vs Dec" \
+  --outdir /private/groups/brookslab/$USER/flair-eval/10_11_26_nov_vs_dec
 ```
 This runs `nextflow run hdheath/flair-eval --report_only true --bundles out_nov/bundles,out_dec/bundles …`.
+`--outdir` is required. On phoenix it is submitted the same way as `run`, as a smaller job
+(partition `medium`, 2 CPUs, 8 GB, 12 hours); `--foreground` and `--dry-run` work as for `run`.
 If two bundles share a sample and run id, the newest one is used.
 
-## On a shared cluster
+## On another cluster
 - Point `--outdir` (and `--work-dir`) at project or scratch storage, not your home folder.
-- Use the cluster profile (`--profile slurm`) so each step is its own job.
+- Give a profile (`--profile slurm,conda`): with no profile the pipeline uses the phoenix one.
+  `conf/slurm.config` uses phoenix's partition names (short, medium, long); adapt it if yours differ.
 - Set `--env_cache` to shared storage so each FLAIR version is built once and reused.
+- Genome presets are phoenix paths; give `--genome` and `--gtf` files instead.
+- `flair-eval run` only submits the driver itself on phoenix; elsewhere it runs Nextflow in the
+  current shell, so start it from a batch job or `tmux`.
 
 ## Keeping the front ends in step
 The page (`frontend/builder/logic.js`) and the CLI (`cli/src/flair_eval/`) implement the same
-rules. `cli/tests/test_builder_parity.py` runs both on the same cases (needs Node) and fails if
+rules. Genome presets are kept in `cli/src/flair_eval/phoenix.py` (`GENOME_PRESETS`); tests
+check that they match `params.genomes` in `nextflow.config` and the copy in `logic.js`. `cli/tests/test_builder_parity.py` runs both on the same cases (needs Node) and fails if
 they disagree. Both read copies of `assets/schema/*.json`; after a schema change run
 `python cli/tools/sync_schemas.py` (CI runs it with `--check`).

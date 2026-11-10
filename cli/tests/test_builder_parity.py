@@ -49,6 +49,9 @@ SAMPLE_SETS = [
     {"rows": [{"sample": "s", "bam": "x.bam", "genome": "g", "gtf": "a", "platform": "ont",
                "library": "dRNA", "cage": "c", "pas": "p", "junctions": "j",
                "spikein_gtf": "sirv.gtf"}]},
+    {"rows": [{"sample": "s", "reads": "r", "genome": "hg38"}]},             # preset: gtf optional
+    {"rows": [{"sample": "s", "reads": "r", "genome": "hg38", "gtf": "own.gtf"}]},
+    {"rows": [{"sample": "s", "reads": "r", "genome": "HG38"}]},             # not a preset
 ]
 RUN_DOCS = [
     {"runs": [R1, R2]}, {}, {"runs": []}, [R1], "x", {"runs": [], "extra": 1},
@@ -94,6 +97,10 @@ COMMANDS = [
                {"id": "flair-x", "flair": {"git": "https://github.com/me/flair", "ref": "x"},
                 "transcriptome_args": "--ted"}]),
     cmd([S1], [R1], params={"report_title": "-dash first"}),
+    cmd([{"sample": "s1", "reads": "/d/s1.fq.gz", "genome": "hg38"}], [R1, R2],
+        outdir="/private/groups/brookslab/me/flair-eval/10_11_26_x"),
+    cmd([{"sample": "s1", "reads": "/d/s1.fq.gz", "genome": "hg38"}], [R1, R2],
+        prefer_files=True),
 ]
 
 
@@ -191,3 +198,12 @@ def test_same_issues(js, py, key):
 @pytest.mark.parametrize("i", range(len(COMMANDS)))
 def test_same_command_and_files(js, py, i):
     assert js["commands"][i] == py["commands"][i]
+
+
+def test_same_genome_presets_and_outdir_rules(js):
+    from flair_eval import phoenix
+    from flair_eval.command import OUTDIR_PLACEHOLDER
+    meta = js["meta"]
+    assert meta["genome_presets"] == phoenix.GENOME_PRESETS
+    assert meta["outdir_placeholder"] == OUTDIR_PLACEHOLDER
+    assert meta["outdir_example"] == phoenix.OUTDIR_EXAMPLE

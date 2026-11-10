@@ -118,14 +118,16 @@ flair-eval doctor</pre><button type="button" data-copy="c2">Copy</button></div>
       <li>
         <h3>Try the test data</h3>
         <p>A small run on bundled test data shows the whole thing working before you point it at your own files.</p>
-        <div class="snip"><pre id="c3">flair-eval run --test</pre><button type="button" data-copy="c3">Copy</button></div>
-        <p>The report lands in <code>flair-eval-test/report/report.html</code>.</p>
+        <div class="snip"><pre id="c3">flair-eval run --test --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_test</pre><button type="button" data-copy="c3">Copy</button></div>
+        <p>On phoenix (UCSC PRISM) this submits the Nextflow driver as a SLURM job and prints its job id and log.
+          The report lands in <code>&lt;outdir&gt;/report/report.html</code>. <code>--outdir</code> is always required:
+          use groups or warm-archive storage, not your home folder.</p>
       </li>
       <li>
         <h3>Describe your data</h3>
         <p>Fill in the <a href="builder/">config builder</a> and copy its command, or answer a few questions in the terminal:</p>
         <div class="snip"><pre id="c4">flair-eval init
-flair-eval run --outdir /big/storage/flair-eval-results</pre><button type="button" data-copy="c4">Copy</button></div>
+flair-eval run --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name</pre><button type="button" data-copy="c4">Copy</button></div>
       </li>
     </ol>
   </section>
@@ -147,10 +149,16 @@ flair-eval run --outdir /big/storage/flair-eval-results</pre><button type="butto
 
   <section class="section" aria-labelledby="h-one">
     <h2 id="h-one">No files needed for a quick look</h2>
-    <p>One sample against two FLAIR builds, in one command. Each <code>--flair</code> token becomes a run.</p>
-    <div class="snip"><pre id="c5">nextflow run hdheath/flair-eval -r v2 -profile local,conda \
-  --reads sample.fq.gz --genome genome.fa --gtf annotation.gtf \
-  --flair 2.2.0,3.0.1,dev --outdir flair-eval-results</pre><button type="button" data-copy="c5">Copy</button></div>
+    <p>One sample against three FLAIR builds, in one command. Each <code>--flair</code> token becomes a run.
+      On phoenix no <code>-profile</code> is needed and <code>--genome hg38</code> picks the lab reference
+      (GRCh38 + GENCODE v49 basic), so <code>--gtf</code> can be left out. <code>flair-eval run</code> takes the same flags
+      and submits the Nextflow driver as a SLURM job.</p>
+    <div class="snip"><pre id="c5">flair-eval run --reads sample.fq.gz --genome hg38 \
+  --flair 2.2.0,3.0.1,dev --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name</pre><button type="button" data-copy="c5">Copy</button></div>
+    <p>The same with Nextflow directly (inside an <code>sbatch</code> job on phoenix; add <code>-profile local,conda</code> elsewhere):</p>
+    <div class="snip"><pre id="c6">nextflow run hdheath/flair-eval -r v2 \
+  --reads sample.fq.gz --genome hg38 \
+  --flair 2.2.0,3.0.1,dev --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name</pre><button type="button" data-copy="c6">Copy</button></div>
     <div class="tablewrap">
       <table>
         <thead><tr><th>Token</th><th>FLAIR used</th><th>Run id</th></tr></thead>

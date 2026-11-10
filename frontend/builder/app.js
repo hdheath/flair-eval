@@ -2,20 +2,23 @@
 (function () {
   "use strict";
   var FE = window.FlairEval;
-  var STORE_KEY = "flair-eval-builder-v1";
+  var STORE_KEY = "flair-eval-builder-v2"; // v2: phoenix defaults, genome presets, required outdir
   var RELEASES = ["3.0.1", "2.2.0"];
   var SOURCES = [["release", "Release"], ["git", "Git branch"], ["env", "Conda env"], ["container", "Container"]];
   var SAMPLE_LABELS = { sample: "sample name", reads: "reads or BAM file", bam: "BAM file", genome: "genome FASTA",
     gtf: "annotation GTF", platform: "platform", library: "library", cage: "CAGE", pas: "PAS", junctions: "junctions",
-    spikein_gtf: "spike-in GTF" };
+    spikein_gtf: "spike-in GTF", outdir: "output folder" };
+  var GENOME_KINDS = Object.keys(FE.GENOME_PRESETS).map(function (k) { return [k, k + " (lab preset)"]; })
+    .concat([["custom", "Custom FASTA"]]);
   var uidN = 0;
   function uid() { uidN += 1; return "u" + uidN; }
 
   /* ------------------------------------------------------------ state */
   function blankSample(prev) {
     prev = prev || {};
-    return { uid: uid(), sample: "", nameAuto: true, kind: "reads", path: "", genome: prev.genome || "",
-      gtf: prev.gtf || "", platform: prev.platform || "", library: prev.library || "",
+    return { uid: uid(), sample: "", nameAuto: true, kind: "reads", path: "",
+      genomeKind: prev.genomeKind || "hg38", genome: prev.genome || "", gtf: prev.gtf || "",
+      platform: prev.platform || "", library: prev.library || "",
       cage: "", pas: "", junctions: "", spikein_gtf: "" };
   }
   function blankRun(source) {
@@ -24,16 +27,18 @@
       preset: "default", args: "", label: "", tags: "", quantify: true, productivity: true, own_align: false };
   }
   function defaultOpts() {
-    return { outdir: "", executor: "local", software: "conda", profile: "", ref: "", report_title: "", baseline: "", align_flair: "", regions: "",
+    return { outdir: "", executor: "phoenix", software: "conda", profile: "", ref: "", report_title: "", baseline: "", align_flair: "", regions: "",
       bundles: "", env_cache: "", resume: false, prefer_files: false };
   }
   function exampleState() {
     var s = blankSample();
-    s.path = "/data/HG002_cdna.fq.gz"; s.genome = "/ref/GRCh38.primary.fa";
-    s.gtf = "/ref/gencode.v47.annotation.gtf"; s.platform = "pacbio"; s.library = "cDNA";
+    s.path = "/data/HG002_cdna.fq.gz"; s.genomeKind = "hg38";
+    s.platform = "pacbio"; s.library = "cDNA";
     var a = blankRun("release");
     var b = blankRun("git");
-    return { samples: [s], runs: [a, b], opts: defaultOpts(), example: true, tab: "samples", touched: {} };
+    var opts = defaultOpts();
+    opts.outdir = "/private/groups/brookslab/your-user/flair-eval/10_11_26_hg002";
+    return { samples: [s], runs: [a, b], opts: opts, example: true, tab: "samples", touched: {} };
   }
   function blankState() {
     return { samples: [blankSample()], runs: [blankRun("release")], opts: defaultOpts(), example: false, tab: "samples", touched: {} };
@@ -65,7 +70,7 @@
     return FE.ID_RE.test(n) ? n : n.replace(/[^A-Za-z0-9._-]/g, "-").replace(/^[^A-Za-z0-9]+/, "");
   }
   function toSample(s) {
-    var row = { sample: sampleName(s), genome: s.genome, gtf: s.gtf, platform: s.platform, library: s.library,
+    var row = { sample: sampleName(s), genome: s.genomeKind === "custom" ? s.genome : s.genomeKind, gtf: s.gtf, platform: s.platform, library: s.library,
       cage: s.cage, pas: s.pas, junctions: s.junctions, spikein_gtf: s.spikein_gtf };
     row[s.kind] = s.path;
     var clean = FE.cleanSample(row), out = {};
@@ -123,7 +128,8 @@
     var o = state.opts;
     var ids = runs.map(function (r) { return r.id; });
     var baseline = o.baseline && ids.indexOf(o.baseline) > 0 ? o.baseline : null; // first run is the default
-    var profile = o.profile.trim() || [o.executor, o.software].filter(Boolean).join(",");
+    // phoenix is the pipeline's default profile, so it needs no -profile at all
+    var profile = o.profile.trim() || (o.executor === "local" ? ["local", o.software].filter(Boolean).join(",") : "");
     return { ref: o.ref.trim(), profile: profile, outdir: o.outdir.trim(), resume: o.resume,
       prefer_files: o.prefer_files,
       params: { baseline: baseline, report_title: o.report_title.trim(), align_flair: o.align_flair.trim(),
@@ -152,6 +158,7 @@
       var f = p[2] === "bam" || p[2] === "reads" ? "path" : p[2];
       return "s:" + state.samples[p[1]].uid + ":" + f;
     }
+    if (p[0] === "opts") return "o:" + p[1];
     if (p[0] === "runs" && typeof p[1] === "number") {
       var r = state.runs[p[1]];
       if (!r) return null;
@@ -171,6 +178,7 @@
       var id = runIds()[p[1]];
       return "Run " + (p[1] + 1) + (id ? " (" + id + ")" : "");
     }
+    if (p[0] === "opts") return "Launch options";
     return p[0] === "samples" ? "Samples" : "Runs";
   }
   function collectIssues(samples, runs) {
@@ -198,6 +206,24 @@
           message: "this does not end in .bam; choose Reads if it is a FASTQ/FASTA file" });
       }
     });
+    var out = state.opts.outdir.trim();
+    if (!out) {
+      list.push({ path: ["opts", "outdir"], code: "required", level: "error", message: "missing output folder" });
+    } else if (/[$~]/.test(out)) {
+      list.push({ path: ["opts", "outdir"], code: "outdir_var", level: "warning",
+        message: "the command quotes this path, so $USER or ~ is not expanded; type the full path" });
+    } else if (/^\/(private\/)?home\//.test(out)) {
+      list.push({ path: ["opts", "outdir"], code: "outdir_home", level: "warning",
+        message: "this is in your home folder, which has a small quota; use groups or warm-archive storage" });
+    }
+    if (state.opts.executor === "local" && !state.opts.profile.trim()) {
+      state.samples.forEach(function (s, i) {
+        if (s.genomeKind !== "custom") {
+          list.push({ path: ["samples", i, "genomeKind"], code: "preset_local", level: "warning",
+            message: "the " + s.genomeKind + " preset uses lab files on phoenix; on another computer give a genome FASTA and GTF" });
+        }
+      });
+    }
     var seen = {};
     runs.forEach(function (r, i) {
       var key = JSON.stringify([r.flair, r.transcriptome_args, r.quantify, r.productivity, r.own_align]);
@@ -291,10 +317,19 @@
             mono: true, wide: true, value: s.path, placeholder: s.kind === "bam" ? "/data/HG002.bam" : "/data/HG002.fq.gz",
             set: function (v) { s.path = v; } })
         ]),
+        h("div", { class: "field wide" }, [
+          h("span", { class: "label", text: "Genome" }),
+          seg("Genome", GENOME_KINDS, s.genomeKind, function (v) { s.genomeKind = v; }),
+          s.genomeKind !== "custom" ? h("span", { class: "hint", text: FE.GENOME_PRESETS[s.genomeKind].note +
+            " (lab reference on phoenix). The GTF below is optional." }) : null,
+          h("span", { class: "err", "data-err": k + "genomeKind", hidden: true })
+        ]),
         h("div", { class: "grid pair" }, [
-          textField({ key: k + "genome", label: "Genome FASTA", mono: true, value: s.genome, placeholder: "/ref/GRCh38.fa",
-            set: function (v) { s.genome = v; } }),
-          textField({ key: k + "gtf", label: "Reference annotation GTF", mono: true, value: s.gtf, placeholder: "/ref/gencode.gtf",
+          s.genomeKind === "custom" ? textField({ key: k + "genome", label: "Genome FASTA", mono: true, value: s.genome,
+            placeholder: "/ref/GRCh38.fa", set: function (v) { s.genome = v; } }) : null,
+          textField({ key: k + "gtf", label: s.genomeKind === "custom" ? "Reference annotation GTF" : "Annotation GTF (optional)",
+            mono: true, value: s.gtf,
+            placeholder: s.genomeKind === "custom" ? "/ref/gencode.gtf" : "from the preset: GENCODE v49 basic",
             set: function (v) { s.gtf = v; } })
         ]),
         h("div", { class: "grid" }, [
@@ -417,6 +452,9 @@
       if (el.type === "checkbox") el.checked = !!state.opts[k];
       else if (el.id !== "o-baseline") el.value = state.opts[k] || "";
     });
+    var local = state.opts.executor === "local";
+    $("software-field").hidden = !local;
+    $("o-envcache").placeholder = local ? "./flair-env-cache" : "/private/groups/brookslab/flair-eval/env_cache (shared)";
   }
   function renderBaseline(ids) {
     var sel = $("o-baseline");
@@ -495,13 +533,14 @@
       if (!y.reads && !y.bam) y[state.samples[i].kind] = state.samples[i].kind === "bam" ? "<aligned.bam>" : "<reads.fq.gz>";
       if (!y.sample) y.sample = "<sample-name>";
       if (!y.genome) y.genome = "<genome.fa>";
-      if (!y.gtf) y.gtf = "<annotation.gtf>";
+      if (!y.gtf && !FE.isGenomePreset(y.genome)) y.gtf = "<annotation.gtf>";
       return y;
     });
     var c = FE.buildCommand(shown, runs, cmdOptions(runs));
     $("cmd").textContent = FE.formatCommand(c.argv);
     var why = $("why");
     why.textContent = "";
+    $("launch-hint").hidden = state.opts.executor === "local";
     if (c.mode === "quick") {
       $("mode").textContent = "One command, no files needed";
       $("mode-sub").textContent = "Run it where the paths exist.";
@@ -618,8 +657,12 @@
     var k = el.getAttribute("data-opt");
     el.addEventListener(el.type === "checkbox" || el.tagName === "SELECT" ? "change" : "input", function () {
       state.opts[k] = el.type === "checkbox" ? el.checked : el.value;
+      if (k === "executor") renderOptions();
       onEdit();
     });
+    if (el.getAttribute("data-key")) {
+      el.addEventListener("blur", function () { state.touched[el.getAttribute("data-key")] = true; refreshOutputs(); });
+    }
   });
   function reset(toExample) {
     state = toExample ? exampleState() : blankState();

@@ -9,20 +9,22 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import DEFAULT_REF, PIPELINE, __version__, config, doctor, env_check
-from .command import Command, Options, opt, build_command, files_command, quick_command, \
-    report_command, split_extra
+from . import DEFAULT_REF, PIPELINE, __version__, config, doctor, env_check, phoenix
+from .command import Command, Options, opt, build_command, files_command, is_local_pipeline, \
+    quick_command, report_command, split_extra
 from .tokens import TokenError, parse_tokens, runs_from_tokens
-from .validate import Issue, check_files, check_paths, errors, validate_bundle, \
+from .validate import Issue, check_files, check_paths, cwd_only_paths, errors, validate_bundle, \
     validate_runs, validate_samples
-from .wizard import Abort, Wizard, write_configs
+from .wizard import Abort, Wizard, suggested_outdir, write_configs
 
 EPILOG = f"""New here? Three steps:
   flair-eval doctor      check Java, Nextflow, conda and disk space
   flair-eval init        answer a few questions; writes samples.csv and runs.yaml
-  flair-eval run --outdir /big/storage/flair-eval-results
+  flair-eval run --outdir {phoenix.OUTDIR_EXAMPLE}
 
-Try it on the bundled test data first: flair-eval run --test
+On phoenix (UCSC PRISM) no -profile is needed, --genome hg38 picks the lab reference, and
+`run` submits the Nextflow driver as a SLURM job (--foreground runs it in this shell).
+Try it on the bundled test data first: flair-eval run --test --outdir <folder>
 Guide: https://github.com/{PIPELINE}/blob/v2/docs/usage_cli.md"""
 
 
@@ -32,8 +34,10 @@ def _quick_sample_args(p: argparse.ArgumentParser) -> None:
     x = g.add_mutually_exclusive_group()
     x.add_argument("--reads", help="reads FASTQ/FASTA(.gz)")
     x.add_argument("--bam", help="sorted, indexed BAM")
-    g.add_argument("--genome", help="genome FASTA")
-    g.add_argument("--gtf", help="reference annotation GTF")
+    g.add_argument("--genome", help="genome FASTA, or a lab preset on phoenix: "
+                   + ", ".join(phoenix.GENOME_PRESETS) + " (then --gtf is optional)")
+    g.add_argument("--gtf", help="reference annotation GTF (default with a --genome preset: "
+                   "the preset's GTF)")
     g.add_argument("--sample", help="sample name (default: reads/BAM file name)")
     g.add_argument("--platform", choices=["pacbio", "ont"])
     g.add_argument("--library", choices=["cDNA", "dRNA"])
@@ -51,14 +55,18 @@ def _launch_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("-r", "--ref", default=DEFAULT_REF,
                    help=f"pipeline revision: branch, tag or SHA (default {DEFAULT_REF})")
     g.add_argument("--profile", "-profile",
-                   help="Nextflow profile(s), e.g. slurm,conda (default: picked for this machine, "
-                        "see `flair-eval doctor`)")
+                   help="Nextflow profile(s), e.g. local,conda (default: none on phoenix, else "
+                        "picked for this machine; see `flair-eval doctor`)")
     g.add_argument("--outdir", default=None,
-                   help="output folder (default ./flair-eval-results); use big storage")
+                   help=f"output folder (required), e.g. {phoenix.OUTDIR_EXAMPLE}; "
+                        "not in your home folder")
     g.add_argument("--work-dir", "-w", dest="work_dir", help="Nextflow work directory")
     g.add_argument("--resume", "-resume", action="store_true", help="resume a previous launch")
+    g.add_argument("--foreground", action="store_true",
+                   help="on phoenix, run Nextflow in this shell instead of submitting it as a "
+                        "SLURM job")
     g.add_argument("--dry-run", "-n", action="store_true",
-                   help="print the command without running it")
+                   help="print the command (on phoenix: the SLURM job script) without running it")
     g.add_argument("--skip-checks", action="store_true",
                    help="do not check that java and nextflow are installed")
 
@@ -94,6 +102,7 @@ def make_parser() -> argparse.ArgumentParser:
                                    "the questions.")
     p.add_argument("--dir", default=".", help="where to write the files (default: here)")
     p.add_argument("--force", action="store_true", help="overwrite existing files")
+    p.add_argument("--outdir", help="output folder for the launch command it prints")
     _quick_sample_args(p)
 
     p = sub.add_parser("check", help="validate samples.csv, runs.yaml and bundles",
@@ -127,8 +136,7 @@ def make_parser() -> argparse.ArgumentParser:
     return ap
 
 
-DEFAULT_OUTDIR = "./flair-eval-results"
-TEST_OUTDIR = "./flair-eval-test"
+OUTDIR_HINT = "<folder on groups or warm-archive storage>"
 
 
 # ---------------------------------------------------------------- helpers
@@ -150,7 +158,8 @@ def _quick_sample(a) -> dict | None:
 
 def _sample_flag_args(s: dict) -> list:
     args = ["--reads", s["reads"]] if s.get("reads") else ["--bam", s["bam"]]
-    args += ["--genome", s["genome"], "--gtf", s["gtf"], "--sample", s["sample"]]
+    args += ["--genome", s["genome"]] + (["--gtf", s["gtf"]] if s.get("gtf") else [])
+    args += ["--sample", s["sample"]]
     for k in ("platform", "library"):
         if s.get(k):
             args += [f"--{k}", s[k]]
@@ -160,18 +169,26 @@ def _sample_flag_args(s: dict) -> list:
 def _options(a, extra: list) -> Options:
     params = {k: getattr(a, k, None) for k in
               ("bundles", "baseline", "report_title", "align_flair", "regions", "env_cache")}
-    return Options(ref=a.ref, profile=a.profile, outdir=a.outdir or DEFAULT_OUTDIR,
+    return Options(ref=a.ref, profile=a.profile, outdir=a.outdir,
                    params=params,
                    resume=a.resume, work_dir=a.work_dir, extra=extra, pipeline=a.pipeline,
                    samples_path=getattr(a, "samples", None) or "samples.csv",
                    runs_path=getattr(a, "runs", None) or "runs.yaml")
 
 
-def _auto_profile(a, extra: str = "") -> None:
-    """Fill a.profile from this machine when --profile was not given."""
+def _auto_profile(a, extra: str = "", on_phoenix: bool = False) -> None:
+    """Fill a.profile from this machine when --profile was not given.
+
+    On phoenix no profile is needed (the pipeline's standard profile is phoenix); `extra`
+    (e.g. test) then goes with the phoenix alias, because naming any profile drops standard."""
     if a.profile:
         if extra and extra not in a.profile.split(","):
             a.profile = f"{extra},{a.profile}"
+        return
+    if on_phoenix:
+        a.profile = f"{extra},phoenix" if extra else None
+        print("phoenix detected: using the pipeline's phoenix profile (SLURM, conda, shared "
+              "FLAIR env cache); set --profile to change.", flush=True)
         return
     found = doctor.suggest_profile()
     a.profile = ",".join(p for p in (extra, found) if p) or None
@@ -180,23 +197,102 @@ def _auto_profile(a, extra: str = "") -> None:
               flush=True)
 
 
-def _launch(cmd, a) -> int:
+def _require_outdir(a, on_phoenix: bool = False) -> bool:
+    """--outdir is required (the pipeline has no default). Warn when it is in the home folder,
+    or (on phoenix) on storage the compute nodes cannot see."""
+    if not a.outdir:
+        print("error: --outdir is required: a folder for this comparison's bundles, report and "
+              f"work files, e.g.\n  --outdir {phoenix.OUTDIR_EXAMPLE}\n"
+              "(on phoenix use groups or warm-archive storage; elsewhere any big disk).",
+              file=sys.stderr)
+        return False
+    if phoenix.in_home(a.outdir):
+        print(f"warning: --outdir {a.outdir} is in your home folder, which has a small quota "
+              "(about 100 GB on phoenix); results and work files can be much bigger. Prefer "
+              f"e.g. {phoenix.OUTDIR_EXAMPLE}", file=sys.stderr)
+    if on_phoenix and phoenix.node_local(a.outdir):
+        print(f"warning: --outdir {a.outdir} is local to this machine; SLURM jobs on the "
+              "compute nodes cannot see it. Use groups or warm-archive storage, e.g. "
+              f"{phoenix.OUTDIR_EXAMPLE}", file=sys.stderr)
+    return True
+
+
+def _absolute_launch_paths(a) -> None:
+    """Make every path the launch uses absolute: the SLURM job starts in --outdir, while the
+    paths were given relative to where flair-eval was run."""
+    for k in ("outdir", "work_dir", "regions", "env_cache", "samples", "runs",
+              "reads", "bam", "genome", "gtf"):
+        if getattr(a, k, None):
+            setattr(a, k, phoenix.absolute(getattr(a, k)))
+    if isinstance(getattr(a, "bundles", None), str):
+        a.bundles = phoenix.absolute_list(a.bundles)
+    elif isinstance(getattr(a, "bundles", None), list):
+        a.bundles = [phoenix.absolute(b) for b in a.bundles]
+    if a.pipeline and is_local_pipeline(a.pipeline):
+        a.pipeline = phoenix.absolute(a.pipeline)
+
+
+def _check_tools(a) -> int:
+    if a.skip_checks:
+        return 0
+    errs, warns = env_check.check_tools()
+    for w in warns:
+        print("warning: " + w, file=sys.stderr)
+    if errs:
+        for e in errs:
+            print("error: " + e, file=sys.stderr)
+        print("Fix the above, or use --dry-run to only print the command.", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _launch(cmd, a, job: dict | None = None) -> int:
+    """Run the command here, or (with `job`, on phoenix) submit it as a SLURM job."""
+    if job is not None:
+        return _submit(cmd, a, job)
     print("Command:\n" + cmd.pretty() + "\n", flush=True)  # before nextflow's own output
     if a.dry_run:
         return 0
-    if not a.skip_checks:
-        errs, warns = env_check.check_tools()
-        for w in warns:
-            print("warning: " + w, file=sys.stderr)
-        if errs:
-            for e in errs:
-                print("error: " + e, file=sys.stderr)
-            print("Fix the above, or use --dry-run to only print the command.", file=sys.stderr)
-            return 2
+    rc = _check_tools(a)
+    if rc:
+        return rc
     try:
         return subprocess.call(cmd.argv)
     except KeyboardInterrupt:
         return 130
+
+
+def _submit(cmd, a, job: dict) -> int:
+    script = phoenix.script_path(a.outdir)
+    text = phoenix.sbatch_script(cmd.pretty(), a.outdir, job, version=__version__)
+    if a.dry_run:
+        print(f"SLURM job script (not written; would be {script}):\n\n{text}", flush=True)
+        return 0
+    rc = _check_tools(a)
+    if rc:
+        return rc
+    try:
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text(text, encoding="utf-8")
+    except OSError as e:
+        print(f"error: cannot write {script}: {e}", file=sys.stderr)
+        return 1
+    try:
+        job_id = phoenix.submit(script)
+    except RuntimeError as e:
+        print(f"error: {e}\nThe script is at {script}; fix the problem and run: sbatch {script}",
+              file=sys.stderr)
+        return 1
+    log = phoenix.log_pattern(a.outdir).replace("%j", job_id)
+    report = Path(a.outdir) / "report" / "report.html"
+    print(f"Submitted the Nextflow driver as SLURM job {job_id} (partition {job['partition']}, "
+          f"{job['cpus']} CPUs, {job['mem']}, up to {job['time']}).\n"
+          f"  script:  {script}\n"
+          f"  log:     {log}   (follow it with: tail -f {log})\n"
+          f"  status:  squeue -j {job_id}\n"
+          f"  cancel:  scancel {job_id}\n"
+          f"The report will be at {report} when the job finishes.", flush=True)
+    return 0
 
 
 # ---------------------------------------------------------------- commands
@@ -205,7 +301,8 @@ def cmd_init(a) -> int:
     if a.flair or a.reads or a.bam:
         s = _quick_sample(a)
         if not s or not a.flair:
-            print("error: without questions, init needs --reads or --bam, --genome, --gtf "
+            print("error: without questions, init needs --reads or --bam, --genome (a FASTA, "
+                  f"or a preset: {phoenix.preset_names()}), --gtf (optional with a preset) "
                   "and --flair", file=sys.stderr)
             return 2
         try:
@@ -214,19 +311,23 @@ def cmd_init(a) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 2
         samples = [s]
+        outdir = a.outdir
     else:
+        on_phoenix = phoenix.detect()
         try:
-            answers = Wizard().run()
+            answers = Wizard(on_phoenix=on_phoenix, default_outdir=a.outdir or (
+                suggested_outdir() if on_phoenix else None)).run()
         except (Abort, KeyboardInterrupt) as e:
             print(f"\nStopped ({e or 'interrupted'}); nothing written.", file=sys.stderr)
             return 1
         if answers is None:
+            out = a.outdir or (phoenix.OUTDIR_EXAMPLE if on_phoenix else OUTDIR_HINT)
             print("\nNo files needed for the test data. Check this machine, then launch:")
             print("  flair-eval doctor")
-            print("  flair-eval run --test")
-            print("Results land in ./flair-eval-test (report: report/report.html).")
+            print(f"  flair-eval run --test --outdir {out}")
+            print("The report lands in <outdir>/report/report.html.")
             return 0
-        samples, runs = answers
+        samples, runs, outdir = answers
     issues = errors(validate_samples(samples) + validate_runs({"runs": runs}))
     if issues:
         print("error: these answers do not make a valid config:", file=sys.stderr)
@@ -246,9 +347,13 @@ def cmd_init(a) -> int:
     print("\nNext:")
     print("  flair-eval doctor")
     print("  " + " ".join(["flair-eval check"] + flags))
-    print("  " + " ".join(["flair-eval run"] + flags + ["--outdir", "<folder on big storage>"]))
-    cmd = build_command(samples, runs, Options(samples_path=str(sp), runs_path=str(rp)))
-    print("\nOr run Nextflow directly:\n" + cmd.pretty())
+    print("  " + " ".join(["flair-eval run"] + flags + ["--outdir", outdir or OUTDIR_HINT]))
+    if outdir and phoenix.in_home(outdir):
+        print(f"  (warning: {outdir} is in your home folder, which has a small quota)")
+    cmd = build_command(samples, runs, Options(samples_path=str(sp), runs_path=str(rp),
+                                               outdir=outdir or None))
+    where = " (in a SLURM job, not on the login node)" if phoenix.detect() else ""
+    print(f"\nOr run Nextflow directly{where}:\n" + cmd.pretty())
     return 0
 
 
@@ -298,7 +403,9 @@ def files_command_test(opts: Options) -> Command:
 
 
 def cmd_doctor(a) -> int:
-    return doctor.report(doctor.run_checks(a.outdir), doctor.suggest_profile())
+    on_phoenix = phoenix.detect()
+    return doctor.report(doctor.run_checks(a.outdir), doctor.suggest_profile(),
+                         on_phoenix=on_phoenix)
 
 
 def cmd_run(a, extra: list) -> int:
@@ -307,9 +414,14 @@ def cmd_run(a, extra: list) -> int:
             print("error: --test brings its own samples and runs; drop the other inputs",
                   file=sys.stderr)
             return 2
-        _auto_profile(a, "test")
-        a.outdir = a.outdir or TEST_OUTDIR
-        return _launch(files_command_test(_options(a, extra)), a)
+        on_phoenix = phoenix.detect()
+        if not _require_outdir(a, on_phoenix):
+            return 2
+        job = phoenix.RUN_JOB if on_phoenix and not a.foreground else None
+        _auto_profile(a, "test", on_phoenix)
+        if job:
+            _absolute_launch_paths(a)
+        return _launch(files_command_test(_options(a, extra)), a, job)
     quick = _quick_sample(a)
     if quick is not None and a.samples:
         print("error: use either --samples or --reads/--bam/--genome/--gtf, not both",
@@ -330,12 +442,19 @@ def cmd_run(a, extra: list) -> int:
         print("error: no runs. Give --runs runs.yaml or --flair 2.2.0,3.0.1,dev "
               "(or run `flair-eval init`).", file=sys.stderr)
         return 2
+    on_phoenix = phoenix.detect()
+    if not _require_outdir(a, on_phoenix):
+        return 2
+    job = phoenix.RUN_JOB if on_phoenix and not a.foreground else None
 
     issues: list[Issue] = []
     if quick is not None:
         issues += validate_samples([quick]) + check_paths([quick])
     else:
         issues += check_files(a.samples, None)
+        if job and Path(a.samples).exists():
+            sp = Path(a.samples)
+            issues += cwd_only_paths(config.read_samples(sp)[1], sp.resolve().parent)
     run_ids: list[str] = []
     if a.flair:
         try:
@@ -358,7 +477,10 @@ def cmd_run(a, extra: list) -> int:
         print("Fix the errors above first (`flair-eval check` explains them).", file=sys.stderr)
         return 1
 
-    _auto_profile(a)
+    _auto_profile(a, on_phoenix=on_phoenix)
+    if job:
+        _absolute_launch_paths(a)
+        quick = _quick_sample(a)
     opts = _options(a, extra)
     if quick is not None and a.flair:
         cmd = quick_command(_sample_flag_args(quick), a.flair, a.flair_args, opts)
@@ -375,7 +497,7 @@ def cmd_run(a, extra: list) -> int:
             argv[j:j + 2] = ["--flair", a.flair] + (opt("--flair_args", a.flair_args)
                                                      if a.flair_args else [])
         cmd = Command(argv, "mixed", [])
-    return _launch(cmd, a)
+    return _launch(cmd, a, job)
 
 
 def cmd_report(a, extra: list) -> int:
@@ -383,12 +505,18 @@ def cmd_report(a, extra: list) -> int:
     for b in missing:
         print(f"warning: {b} does not exist here (fine if it is a path on the cluster)",
               file=sys.stderr)
-    _auto_profile(a)
-    opts = Options(ref=a.ref, profile=a.profile, outdir=a.outdir or DEFAULT_OUTDIR,
+    on_phoenix = phoenix.detect()
+    if not _require_outdir(a, on_phoenix):
+        return 2
+    job = phoenix.REPORT_JOB if on_phoenix and not a.foreground else None
+    _auto_profile(a, on_phoenix=on_phoenix)
+    if job:
+        _absolute_launch_paths(a)
+    opts = Options(ref=a.ref, profile=a.profile, outdir=a.outdir,
                    resume=a.resume, pipeline=a.pipeline,
                    work_dir=a.work_dir, extra=extra,
                    params={"baseline": a.baseline, "report_title": a.report_title})
-    return _launch(report_command(a.bundles, opts), a)
+    return _launch(report_command(a.bundles, opts), a, job)
 
 
 #: Options whose value is itself flags (e.g. --flair_args "--stringent"). argparse would read

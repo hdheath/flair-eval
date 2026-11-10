@@ -39,10 +39,23 @@
       note: "Detect transcripts from the genome alignment only. Faster, less accurate." }
   ];
 
+  /* outdir has no default (the pipeline requires it); a command without one shows the placeholder. */
   var PARAM_DEFAULTS = {
-    outdir: "./flair-eval-results", report_title: "FLAIR comparison", baseline: null,
+    outdir: null, report_title: "FLAIR comparison", baseline: null,
     align_flair: "3.0.1", regions: null, bundles: null, env_cache: null
   };
+  var OUTDIR_PLACEHOLDER = "<outdir>";
+  /* --genome presets: lab references on phoenix (UCSC PRISM). Same keys and files as
+   * params.genomes in nextflow.config and GENOME_PRESETS in cli/src/flair_eval/phoenix.py. */
+  var GENOME_PRESETS = {
+    hg38: {
+      fasta: "/private/groups/brookslab/reference_sequence/GRCh38.primary_assembly.genome.fa",
+      gtf: "/private/groups/brookslab/reference_annotations/gencode.v49.basic.annotation.gtf",
+      note: "GRCh38 primary assembly + GENCODE v49 basic"
+    }
+  };
+  var OUTDIR_EXAMPLE = "/private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name";
+  function isGenomePreset(v) { return typeof v === "string" && Object.prototype.hasOwnProperty.call(GENOME_PRESETS, v); }
   var PARAM_ORDER = ["bundles", "baseline", "report_title", "align_flair", "regions", "env_cache"];
   /* nextflow_schema.json params the page never writes, and why (checked by
    * cli/tests/test_pipeline_params.py), and the page's launch options that are Nextflow
@@ -402,6 +415,10 @@
     var sch = schemas().samples;
     rows.forEach(function (r, i) {
       var iss = issuesFromSchema(r, sch, ["samples", i], "column");
+      if (isObj(r) && isGenomePreset(r.genome)) {
+        // a genome preset (e.g. hg38) brings its own GTF; the pipeline fills it in
+        iss = iss.filter(function (x) { return !(x.code === "required" && x.path.length === 3 && x.path[2] === "gtf"); });
+      }
       if (header) iss = iss.filter(function (x) { return x.code !== "unknown_key"; });
       out = out.concat(iss);
     });
@@ -461,7 +478,9 @@
 
     var s = samples[0];
     var args = s.reads ? ["--reads", s.reads] : ["--bam", s.bam];
-    args = args.concat(["--genome", s.genome, "--gtf", s.gtf, "--sample", s.sample]);
+    args.push("--genome", s.genome);
+    if (s.gtf) args.push("--gtf", s.gtf); // optional with a genome preset (--genome hg38)
+    args.push("--sample", s.sample);
     ["platform", "library"].forEach(function (k) { if (s[k]) args.push("--" + k, s[k]); });
     args.push("--flair", tokens.join(","));
     if (argSet[0]) args = args.concat(opt("--flair_args", argSet[0]));
@@ -471,7 +490,7 @@
   function options(o) {
     o = o || {};
     return {
-      ref: o.ref || DEFAULT_REF, profile: o.profile || null, outdir: o.outdir || PARAM_DEFAULTS.outdir,
+      ref: o.ref || DEFAULT_REF, profile: o.profile || null, outdir: o.outdir || null,
       params: o.params || {}, resume: !!o.resume, work_dir: o.work_dir || null,
       samples_path: o.samples_path || "samples.csv", runs_path: o.runs_path || "runs.yaml",
       prefer_files: !!o.prefer_files, extra: o.extra || []
@@ -489,7 +508,7 @@
       if (v === undefined || v === null || v === "" || v === PARAM_DEFAULTS[k]) return;
       args = args.concat(opt("--" + k, v === true ? "true" : v));
     });
-    args.push("--outdir", o.outdir || PARAM_DEFAULTS.outdir);
+    args.push("--outdir", o.outdir || OUTDIR_PLACEHOLDER);
     if (o.work_dir) args.push("-work-dir", o.work_dir);
     if (o.resume) args.push("-resume");
     return args.concat(o.extra);
@@ -527,6 +546,8 @@
     NAME_HINT: NAME_HINT, PRESETS: PRESETS, SAMPLE_COLUMNS: SAMPLE_COLUMNS, TRACK_COLUMNS: TRACK_COLUMNS,
     ALL_SAMPLE_COLUMNS: ALL_SAMPLE_COLUMNS, PARAM_DEFAULTS: PARAM_DEFAULTS, RUN_DEFAULTS: RUN_DEFAULTS,
     PARAM_ORDER: PARAM_ORDER, NOT_EXPOSED: NOT_EXPOSED, LAUNCH_OPTIONS: LAUNCH_OPTIONS,
+    OUTDIR_PLACEHOLDER: OUTDIR_PLACEHOLDER, OUTDIR_EXAMPLE: OUTDIR_EXAMPLE,
+    GENOME_PRESETS: GENOME_PRESETS, isGenomePreset: isGenomePreset,
     TokenError: TokenError, parseToken: parseToken, parseTokens: parseTokens,
     tokenForFlair: tokenForFlair, tokenForRun: tokenForRun,
     defaultSampleName: defaultSampleName, cleanSample: cleanSample, samplesCsv: samplesCsv, runsYaml: runsYaml,

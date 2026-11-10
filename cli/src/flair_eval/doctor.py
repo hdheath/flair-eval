@@ -1,7 +1,8 @@
 """`flair-eval doctor`: check this machine before a first launch, with a fix for each problem.
 
 Also picks a Nextflow profile that suits the machine (`suggest_profile`), which
-`flair-eval run` uses when no --profile is given.
+`flair-eval run` uses when no --profile is given. On phoenix (UCSC PRISM) that is no profile
+at all: the pipeline's default profile is phoenix.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import phoenix
 from .env_check import JAVA_HINT, MIN_JAVA, NEXTFLOW_HINT, java_major
 
 MIN_NEXTFLOW = (25, 4)
@@ -33,8 +35,14 @@ def nextflow_version(text: str) -> tuple | None:
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
-def suggest_profile(which=shutil.which) -> str:
-    """Executor + software profile for this machine, e.g. 'slurm,conda' or 'local,singularity'."""
+def suggest_profile(which=shutil.which, on_phoenix: bool | None = None) -> str:
+    """Executor + software profile for this machine, e.g. 'slurm,conda' or 'local,singularity'.
+
+    '' on phoenix: no -profile is needed there (the pipeline's standard profile is phoenix)."""
+    if on_phoenix is None:
+        on_phoenix = phoenix.detect(which=which)
+    if on_phoenix:
+        return ""
     executor = "slurm" if which("sbatch") else "local"
     if which("conda"):
         software = "conda"
@@ -56,7 +64,8 @@ def _version_of(cmd: list, run) -> str:
 
 
 def run_checks(outdir: str | None = None, which=shutil.which, run=subprocess.run,
-               disk_usage=shutil.disk_usage, home: str | None = None) -> list[Check]:
+               disk_usage=shutil.disk_usage, home: str | None = None,
+               on_phoenix: bool | None = None, is_dir=os.path.isdir) -> list[Check]:
     checks: list[Check] = []
     v = sys.version_info
     checks.append(Check("ok", "Python", f"{v.major}.{v.minor}.{v.micro}"))
@@ -105,7 +114,18 @@ def run_checks(outdir: str | None = None, which=shutil.which, run=subprocess.run
     if not which("git"):
         checks.append(Check("warn", "git", "not found: git runs (dev, main, git:...) need it",
                             "conda install -c conda-forge git"))
-    if which("sbatch"):
+    if on_phoenix is None:
+        on_phoenix = phoenix.detect(which=which, is_dir=is_dir)
+    if on_phoenix:
+        checks.append(Check("ok", "Cluster", "phoenix (UCSC PRISM) detected: SLURM jobs, conda, "
+                            "no -profile needed"))
+        if is_dir(phoenix.ENV_CACHE):
+            checks.append(Check("ok", "FLAIR envs", f"shared lab cache {phoenix.ENV_CACHE}"))
+        else:
+            checks.append(Check("warn", "FLAIR envs", f"shared lab cache {phoenix.ENV_CACHE} "
+                                "not found; the first run creates it",
+                                "Ask the lab if it was moved; otherwise nothing to do."))
+    elif which("sbatch"):
         checks.append(Check("ok", "Cluster", "SLURM found (sbatch): jobs can run on the cluster"))
     else:
         checks.append(Check("ok", "Cluster", "no SLURM: jobs run on this machine"))
@@ -126,13 +146,14 @@ def run_checks(outdir: str | None = None, which=shutil.which, run=subprocess.run
         checks.append(Check("warn", "Disk", f"could not read free space at {probe}"))
     home = home if home is not None else os.path.expanduser("~")
     if home and (str(target) + "/").startswith(home.rstrip("/") + "/"):
+        where = (f"e.g. --outdir {phoenix.OUTDIR_EXAMPLE} (groups or warm-archive storage)"
+                 if on_phoenix else "on project or scratch storage")
         checks.append(Check("warn", "Output folder", f"{target} is in your home folder, which often "
-                            "has a small quota", "Pass --outdir and --work-dir on project or "
-                            "scratch storage."))
+                            "has a small quota", f"Pass --outdir {where}."))
     return checks
 
 
-def report(checks: list[Check], profile: str, out=print) -> int:
+def report(checks: list[Check], profile: str, out=print, on_phoenix: bool = False) -> int:
     mark = {"ok": "ok  ", "warn": "WARN", "fail": "FAIL"}
     out("flair-eval doctor\n")
     for c in checks:
@@ -141,10 +162,20 @@ def report(checks: list[Check], profile: str, out=print) -> int:
             out(f"        {line}")
     fails = [c for c in checks if c.status == "fail"]
     out("")
-    out(f"Suggested profile for this machine: -profile {profile}" if profile else
-        "No container or conda found; install conda to build FLAIR envs.")
+    if on_phoenix:
+        out("phoenix (UCSC PRISM) detected: no -profile needed. The default profile runs every "
+            "step as a SLURM job with conda,")
+        out(f"and FLAIR envs come from the shared lab cache {phoenix.ENV_CACHE}.")
+        out("`flair-eval run` submits the Nextflow driver itself as a SLURM job "
+            "(--foreground to run it here).")
+        out(f"Put --outdir on groups or warm-archive storage, e.g. {phoenix.OUTDIR_EXAMPLE}")
+    elif profile:
+        out(f"Suggested profile for this machine: -profile {profile}")
+    else:
+        out("No container or conda found; install conda to build FLAIR envs.")
     if fails:
         out(f"\n{len(fails)} problem(s) to fix before launching.")
         return 1
-    out("\nReady. Next: flair-eval init (or try the test data: flair-eval run --test)")
+    test = f"flair-eval run --test --outdir {phoenix.OUTDIR_EXAMPLE if on_phoenix else '<folder>'}"
+    out(f"\nReady. Next: flair-eval init (or try the test data: {test})")
     return 0

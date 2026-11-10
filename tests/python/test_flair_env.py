@@ -437,3 +437,13 @@ def test_tools_called_by(tmp_path):
     assert flair_env.tools_called_by(str(tmp_path), ["ucsc-bedtobigbed=473"]) == ["intron-prospector"]
     assert flair_env.merge_extras(["intron-prospector>=1.5"], ["intron-prospector", "x"]) == \
         ["intron-prospector>=1.5", "x"]
+
+
+def test_shared_cache_stays_group_writable(world):
+    """A25: a lab-wide cache must stay writable for other group members (locks, rebuilds)."""
+    p, rec = world.resolve({"id": "flair-3.0.1", "flair": {"release": "3.0.1"}})
+    assert p.returncode == 0, p.stderr
+    for d in (world.cache, world.cache / "locks", world.cache / "envs"):
+        assert os.stat(d).st_mode & stat.S_IWGRP, d
+    lock = next((world.cache / "locks").iterdir())
+    assert os.stat(lock).st_mode & stat.S_IWGRP

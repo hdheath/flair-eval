@@ -265,3 +265,11 @@ Each section is optional and has its own panel. It is computed only when its inp
   - `bundle.json` gains optional `pipeline.launch`, which is Nextflow's `workflow.sessionId`. Core's BUNDLE writes it, and it is the same for every bundle from one launch. A `-resume`d launch reuses its session id, so it counts as the same launch.
   - The report groups bundles into launches by `pipeline.launch` when present. It falls back to the A22 time-and-`run_index` heuristic for bundles without it.
   - "Earliest launch" means the launch whose earliest `pipeline.created` is oldest.
+
+## 10. Amendments — phoenix defaults (2026-11-10)
+- A25 [core, adapter, frontend] **phoenix is the default platform.** All users run on the lab's phoenix cluster (UCSC PRISM).
+  - No `-profile` = `standard` = `conf/phoenix.config`: `conf/slurm.config` + conda + `params.env_cache = /private/groups/brookslab/flair-eval/env_cache` (one cache for the lab) + `conda.cacheDir = /private/groups/brookslab/flair-eval/conda_cache` (Nextflow's own envs, also shared) + `workDir = <outdir>/work`. Launch with umask 002. `phoenix` is an alias. `local`, `docker`, `singularity` and `test` are unchanged.
+  - `--outdir` is required everywhere (no default). Without it the run stops before any task.
+  - `params.genomes` (hidden) maps preset keys to `{fasta, gtf, note}`; today only `hg38` = GRCh38 primary assembly + GENCODE v49 basic from the lab reference folders. A `genome` value (flag or samples.csv cell) equal to a key becomes the preset FASTA, and an empty `gtf` becomes the preset GTF. Presets are explicit: no genome is still an error.
+  - `flair_env.py resolve` sets umask 002 so a shared cache stays group-writable. The cache root is setgid, group brookslab.
+  - Front ends assume phoenix: no profile, `--outdir` required, `hg38` offered as the genome, and the CLI submits the Nextflow driver as a SLURM job.
