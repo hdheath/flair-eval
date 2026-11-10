@@ -30,5 +30,7 @@ process.stdin.on("end", function () {
       line: FE.oneLine(r.argv), csv: FE.samplesCsv(k.samples), yaml: FE.runsYaml(k.runs) };
   });
   out.presets = FE.PRESETS;
+  out.meta = { not_exposed: FE.NOT_EXPOSED, launch_options: FE.LAUNCH_OPTIONS,
+    param_defaults: FE.PARAM_DEFAULTS, param_order: FE.PARAM_ORDER };
   process.stdout.write(JSON.stringify(out));
 });

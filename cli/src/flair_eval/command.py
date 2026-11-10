@@ -28,6 +28,12 @@ PARAM_DEFAULTS = {
 }
 PARAM_ORDER = ["bundles", "baseline", "report_title", "align_flair", "regions", "env_cache"]
 
+#: nextflow_schema.json params the CLI never writes, and why. tests/test_pipeline_params.py
+#: fails when the pipeline gains a param that is neither written nor listed here.
+NOT_EXPOSED = {
+    "help": "Nextflow prints the pipeline help itself: nextflow run hdheath/flair-eval --help",
+}
+
 _SAFE = re.compile(r"^[A-Za-z0-9_@%+=:,./-]+$")
 
 
@@ -67,6 +73,7 @@ class Options:
     runs_path: str = "runs.yaml"
     prefer_files: bool = False
     extra: list = field(default_factory=list)  # passed through verbatim
+    pipeline: str = PIPELINE  # GitHub repo, or a local checkout (then no -r)
 
 
 @dataclass
@@ -149,8 +156,16 @@ def _tail(opts: Options) -> list:
     return args + list(opts.extra)
 
 
+def is_local_pipeline(pipeline: str) -> bool:
+    return pipeline.startswith(("/", ".", "~")) or pipeline in (".", "..")
+
+
 def _head(opts: Options) -> list:
-    argv = ["nextflow", "run", PIPELINE, "-r", opts.ref or DEFAULT_REF]
+    pipeline = opts.pipeline or PIPELINE
+    if is_local_pipeline(pipeline):
+        argv = ["nextflow", "run", pipeline]
+    else:
+        argv = ["nextflow", "run", pipeline, "-r", opts.ref or DEFAULT_REF]
     if opts.profile:
         argv += ["-profile", opts.profile]
     return argv
@@ -200,8 +215,9 @@ def format_command(argv: list) -> str:
     """Multi-line display: `nextflow run X -r REF` on the first line, then one option
     (with its value) per line, joined with ` \\`. Same layout as logic.js."""
     q = [quote(a) for a in argv]
-    lines = [" ".join(q[:5])]
-    i = 5
+    n = 5 if len(argv) > 4 and argv[3] == "-r" else 3
+    lines = [" ".join(q[:n])]
+    i = n
     while i < len(argv):
         a = argv[i]
         takes_value = a not in NO_VALUE and "=" not in a and (a.startswith("--")

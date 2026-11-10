@@ -198,6 +198,9 @@ flair-eval run ... -- -with-tower                                     # after --
 Without `--profile`, `run` and `report` use the profile `flair-eval doctor` suggests for this
 machine (SLURM if `sbatch` exists, else local; plus conda, else Singularity/Apptainer, else
 Docker) and say so. `--test` adds `test` in front and writes to `./flair-eval-test`.
+`--pipeline` runs another copy of the pipeline: a GitHub fork (`--pipeline me/flair-eval -r my-branch`)
+or a local checkout (`--pipeline ~/flair-eval`; `-r` is not used then). Add `-- -stub` to run the
+whole graph with placeholder outputs, a quick way to test configs end to end.
 Options: `-r/--ref` (pipeline revision, default `v2`), `--profile`, `--outdir`, `--work-dir`,
 `--resume`, and the pipeline params `--baseline`, `--report_title`, `--align_flair`,
 `--regions`, `--bundles`, `--env_cache`. Pipeline params equal to their default are left off.
