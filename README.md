@@ -6,7 +6,11 @@ runs to compare them.
 
 > **Status:** v2 is under construction on the `v2` branch. See [docs/DESIGN.md](docs/DESIGN.md)
 > and [docs/CONTRACTS.md](docs/CONTRACTS.md). The previous multi-assembler pipeline is in `legacy/`
-> for reference, and on the `wip/2026-11-09-snapshot` branch.
+> for reference.
+
+**Supported FLAIR versions:** 2.2.0, 3.0.1 and `dev` (the tip of BrooksLabUCSC/flair `dev`,
+resolved to a commit at launch). Other releases, branches, envs and containers can be named too,
+but are not tested. See [docs/flair_versions.md](docs/flair_versions.md).
 
 ## Usage
 
@@ -17,7 +21,7 @@ You need Nextflow ≥ 25.04 and Java 17+. FLAIR itself is fetched per run (see "
 ```bash
 nextflow run hdheath/flair-eval -profile local,conda \
   --reads sample.fq.gz --genome genome.fa --gtf annotation.gtf \
-  --flair 3.0.1,dev --outdir results
+  --flair 2.2.0,3.0.1,dev --outdir results
 # -> results/report/report.html
 ```
 
@@ -47,6 +51,8 @@ WTC11_ont,,WTC11.bam,hg38.fa,gencode.gtf,ont,cDNA
 
 ```yaml
 runs:
+  - id: flair-2.2.0
+    flair: { release: "2.2.0" }
   - id: flair-3.0.1
     flair: { release: "3.0.1" }
   - id: dev-stringent

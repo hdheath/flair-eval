@@ -109,8 +109,8 @@ jobs:
             test "$(find stub-out/bundles -name bundle.json | wc -l)" -eq 6
           else
             nextflow run . -stub -profile local --reads $D/sampleB.fq.gz --genome $D/genome.fa \
-              --gtf $D/annotation.gtf --flair 3.0.1,dev --flair_args='--stringent' --outdir stub-out
-            test "$(find stub-out/bundles -name bundle.json | wc -l)" -eq 2
+              --gtf $D/annotation.gtf --flair 2.2.0,3.0.1,dev --flair_args='--stringent' --outdir stub-out
+            test "$(find stub-out/bundles -name bundle.json | wc -l)" -eq 3
           fi
           test -s stub-out/report/report.html
           test -s stub-out/pipeline_info/execution_trace.txt

@@ -43,7 +43,7 @@ PRODUCTIVITY_CLASSES = ("PRO", "PTC", "NST", "NGO")
 # in these, and the normalised counts.tsv does not carry them, so the real sample name is only
 # recorded in adapter_log.json.
 QUANT_SID, QUANT_COND, QUANT_BATCH = "s1", "c1", "b1"
-# The flair4_ted / CLAUDE.md rule: without these, TED byregion deadlocks.
+# Without these thread caps, FLAIR byregion runs can deadlock in BLAS/xgboost threads.
 THREAD_ENV = {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1",
               "XGBOOST_NTHREAD": "1"}
 
@@ -753,7 +753,7 @@ def run_transcriptome(a, log, prof, flair, work, bam, genome, gtf, user_toks):
     if tp["needs_sample_name"] and not has_flag(user_toks, "--sample_name"):
         cmd += ["--sample_name", safe_name(a.sample)]
     if tp["parallel_flag"] and not has_flag(user_toks, "--parallel_mode", "--parallelmode"):
-        cmd += [tp["parallel_flag"], "byregion"]      # CLAUDE.md / A20: byregion, never bychrom
+        cmd += [tp["parallel_flag"], "byregion"]      # A20: byregion, never bychrom
     elif not tp["parallel_flag"]:
         log.note("this FLAIR's transcriptome has no --parallel_mode/--parallelmode option "
                  "(dev 389748e removed it), so no parallel mode is passed")

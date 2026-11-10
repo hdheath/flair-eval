@@ -27,7 +27,7 @@ missing and how to fix it. To install the CLI from a clone instead: `pip install
 ```bash
 nextflow run hdheath/flair-eval -r v2 \
   --reads /data/HG002.fq.gz --genome /ref/GRCh38.fa --gtf /ref/gencode.gtf \
-  --flair 3.0.1,dev \
+  --flair 2.2.0,3.0.1,dev \
   --outdir /big/storage/flair-eval-results
 ```
 This makes one sample (named after the reads file, or `--sample NAME`) and one run per
@@ -158,7 +158,7 @@ Sample 1
   Genome FASTA: /ref/GRCh38.fa
   ...
 Runs: which FLAIR builds do you want to compare?
-  FLAIR [3.0.1]: 3.0.1,dev
+  FLAIR [3.0.1]: 2.2.0,3.0.1,dev
   Settings for flair-3.0.1:
     1) FLAIR defaults
     2) Stringent  (--stringent)
@@ -167,7 +167,7 @@ Runs: which FLAIR builds do you want to compare?
 The first question offers the bundled test data instead (answer `y` and nothing is written).
 Platform and library default to a guess from the file name (`…_ONT_cDNA.fq.gz` gives ont and
 cDNA); type `-` to leave one unset.
-Without questions: `flair-eval init --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 3.0.1,dev`.
+Without questions: `flair-eval init --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 2.2.0,3.0.1,dev`.
 `--dir DIR` writes elsewhere; `--force` overwrites existing files.
 
 ### `flair-eval check`
@@ -190,7 +190,7 @@ Checks the configs and Java/Nextflow, prints the command, and runs it:
 ```bash
 flair-eval run --outdir /big/storage/out --profile slurm             # uses ./samples.csv + ./runs.yaml
 flair-eval run --samples cfg/samples.csv --runs cfg/runs.yaml --outdir out
-flair-eval run --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 3.0.1,dev --outdir out
+flair-eval run --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 2.2.0,3.0.1,dev --outdir out
 flair-eval run --test                                                 # bundled test data, -profile test
 flair-eval run ... --dry-run                                          # print the command only
 flair-eval run ... -- -with-tower                                     # after --: passed to nextflow

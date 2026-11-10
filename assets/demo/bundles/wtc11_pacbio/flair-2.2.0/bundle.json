@@ -1,0 +1,239 @@
+{
+ "schema": "flair-eval/bundle/1",
+ "sample": "wtc11_pacbio",
+ "run_id": "flair-2.2.0",
+ "label": "FLAIR 2.2.0",
+ "tags": {
+  "version": "2.2.0",
+  "source": "release",
+  "line": "release"
+ },
+ "flair": {
+  "source": "release",
+  "requested": "2.2.0",
+  "version": "2.2.0",
+  "commit": null
+ },
+ "pipeline": {
+  "version": "2.0.0dev",
+  "commit": "dc8f54dc228fc7f5edcc6b6d3900314e2b77c1ca",
+  "created": "2026-11-10T07:07:29+00:00"
+ },
+ "inputs": {
+  "genome": "GRCh38.primary_assembly.genome.fa",
+  "gtf": "gencode.v49.basic.annotation.gtf",
+  "reads": "wtc11_pb.tp53.fa.gz",
+  "bam": "wtc11_pb.tp53.bam",
+  "regions": "regions.bed",
+  "regions_intervals": [
+   [
+    "chr17",
+    7400000,
+    9400000
+   ]
+  ],
+  "isoforms_in_file": 280,
+  "isoforms_dropped_contigs": 0,
+  "isoforms_outside_regions": 0,
+  "fsm_end_window": 50,
+  "transcriptome_args": "",
+  "platform": "pacbio",
+  "library": "cDNA",
+  "reference_cut_to_regions": true
+ },
+ "summary": {
+  "isoforms": 280,
+  "genes": 92,
+  "loci": 71,
+  "mono_exon": 38,
+  "multi_exon": 242,
+  "ref_transcripts_total": 558,
+  "ref_transcripts_fsm": 127,
+  "ref_transcripts_cim": 71,
+  "ref_genes_detected": 62,
+  "ref_genes_total": 145
+ },
+ "categories": {
+  "FSM": 129,
+  "ISM": 8,
+  "NIC": 117,
+  "NNC": 2,
+  "genic": 7,
+  "genic_intron": 6,
+  "antisense": 5,
+  "intergenic": 6,
+  "fusion": 0
+ },
+ "fsm_subcategories": {
+  "CIM": 71,
+  "FSM5": 13,
+  "FSM3": 34,
+  "FSMTE": 11
+ },
+ "junctions": {
+  "total": 583,
+  "known": 552,
+  "novel_canonical": 29,
+  "novel_noncanonical": 2,
+  "novel": 31,
+  "motif_checked": true
+ },
+ "histograms": {
+  "isoforms_per_gene": {
+   "edges": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    11,
+    16,
+    21
+   ],
+   "counts": [
+    53,
+    12,
+    6,
+    6,
+    3,
+    3,
+    5,
+    2,
+    0,
+    2
+   ]
+  },
+  "transcript_length": {
+   "edges": [
+    0,
+    250,
+    500,
+    750,
+    1000,
+    1500,
+    2000,
+    3000,
+    4000,
+    6000,
+    10000
+   ],
+   "counts": [
+    0,
+    8,
+    13,
+    19,
+    34,
+    30,
+    51,
+    35,
+    47,
+    41,
+    2
+   ]
+  },
+  "exon_length": {
+   "edges": [
+    0,
+    50,
+    100,
+    150,
+    200,
+    300,
+    500,
+    1000,
+    2000,
+    5000
+   ],
+   "counts": [
+    174,
+    606,
+    1244,
+    689,
+    480,
+    139,
+    135,
+    117,
+    47,
+    6
+   ]
+  },
+  "exons_per_isoform": {
+   "edges": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    8,
+    11,
+    16,
+    21,
+    31
+   ],
+   "counts": [
+    38,
+    12,
+    8,
+    21,
+    17,
+    22,
+    51,
+    29,
+    16,
+    36,
+    30
+   ]
+  }
+ },
+ "compute": {
+  "cpu_hours": 0.1719,
+  "peak_rss_gb": 1.163,
+  "wall_minutes": 1.51
+ },
+ "sections": {
+  "quant": {
+   "isoforms_quantified": 280,
+   "reads_assigned": 17971,
+   "cpm_hist": {
+    "edges": [
+     0,
+     1,
+     3,
+     10,
+     30,
+     100,
+     300,
+     1000,
+     3000,
+     10000,
+     30000
+    ],
+    "counts": [
+     0,
+     0,
+     0,
+     0,
+     1,
+     89,
+     109,
+     42,
+     23,
+     10,
+     6
+    ]
+   },
+   "input": "reads"
+  },
+  "productivity": {
+   "class_counts": {
+    "NGO": 44,
+    "PRO": 161,
+    "PTC": 75
+   }
+  }
+ },
+ "run_index": 0
+}

@@ -4,6 +4,9 @@ flair-eval never patches FLAIR. Every version difference is handled in `bin/flai
 (the CLI) or `bin/flair_env.py` (the install). This page lists what differs, what the adapter does
 about it, and the FLAIR bugs we document instead of fixing.
 
+**Supported:** 2.2.0, 3.0.1 and dev (latest tip). The older dev commits and the TED fork below were
+checked while building the adapter and stay documented, but are not supported targets.
+
 Versions checked on 2026-11-09:
 
 | id here | what | `flair --version` |

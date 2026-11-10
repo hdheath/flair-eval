@@ -12,7 +12,7 @@ Design rationale is in [DESIGN.md](DESIGN.md).
 | **adapter** | `bin/flair_adapter.py`, `bin/flair_env.py`, `modules/flair_env/`, `tests/python/test_flair_adapter*.py`, `tests/python/test_flair_env*.py`, `docs/flair_versions.md` |
 | **testdata** | `tests/data/**`, `bin/fetch_test_data.sh`, `docs/test_data.md` |
 | **frontend** | `frontend/builder/` (static config-builder page), `cli/` (pip package `flair-eval`), `docs/usage_cli.md`, `.github/workflows/pages.yml` |
-| **integration (parent session, on `v2`)** | `docs/CONTRACTS.md`, `assets/schema/*.json`, `.gitignore`, `docs/DESIGN.md`, `CLAUDE.md`, merges |
+| **integration (parent session, on `v2`)** | `docs/CONTRACTS.md`, `assets/schema/*.json`, `.gitignore`, `docs/DESIGN.md`, merges |
 
 The placeholders are gone: the core, adapter, report and frontend branches were merged into `v2` on
 2026-11-09. Before starting new work, merge `v2` into your stream branch. **§7 (Amendments) overrides

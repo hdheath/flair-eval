@@ -36,11 +36,7 @@
     { key: "support5", label: "More read support (5)", args: "--support 5",
       note: "At least 5 supporting reads per isoform (default 3)." },
     { key: "noaligntoannot", label: "Skip annotation alignment", args: "--noaligntoannot",
-      note: "Detect transcripts from the genome alignment only. Faster, less accurate." },
-    { key: "ted_pacbio", label: "TED ends, PacBio cDNA", args: "--ted --ted_chemistry pacbio_cdna",
-      note: "Transcript End Determination. Only for FLAIR builds with TED." },
-    { key: "ted_ont", label: "TED ends, ONT cDNA", args: "--ted --ted_chemistry ont_cdna",
-      note: "Transcript End Determination. Only for FLAIR builds with TED." }
+      note: "Detect transcripts from the genome alignment only. Faster, less accurate." }
   ];
 
   var PARAM_DEFAULTS = {

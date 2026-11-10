@@ -38,7 +38,7 @@ def _quick_sample_args(p: argparse.ArgumentParser) -> None:
     g.add_argument("--platform", choices=["pacbio", "ont"])
     g.add_argument("--library", choices=["cDNA", "dRNA"])
     r = p.add_argument_group("runs from flags (instead of runs.yaml)")
-    r.add_argument("--flair", help="comma-separated tokens, e.g. 3.0.1,dev,env:/path/to/env")
+    r.add_argument("--flair", help="comma-separated tokens, e.g. 2.2.0,3.0.1,dev")
     r.add_argument("--flair_args", "--flair-args", default="",
                    help="flair transcriptome arguments for every --flair run")
 
@@ -327,7 +327,7 @@ def cmd_run(a, extra: list) -> int:
               "and --gtf (or run `flair-eval init`).", file=sys.stderr)
         return 2
     if not a.flair and not a.runs:
-        print("error: no runs. Give --runs runs.yaml or --flair 3.0.1,dev "
+        print("error: no runs. Give --runs runs.yaml or --flair 2.2.0,3.0.1,dev "
               "(or run `flair-eval init`).", file=sys.stderr)
         return 2
 

@@ -66,7 +66,7 @@ productivity panel yet. Concordance and these panels are the report stream's rou
 | reference | GRCh38 primary assembly, GENCODE v49 basic |
 | runs | `release 2.2.0`, `release 3.0.1`, `git dev` (@389748e), `env flair-ted-52826` (@20c0f47) |
 | command | `nextflow run <repo> -profile slurm,conda --input samples.csv --runs runs.yaml --regions regions.bed` |
-| location | `/private/groups/brookslab/hdheath/claude-tmp/09_11_26_flair_eval_e2e/` (`inputs/prep.sh`, `run_e2e.sbatch`, `results/`) |
+| location | `<e2e dir>/` (`inputs/prep.sh`, `run_e2e.sbatch`, `results/`) |
 | tasks | 27: 4 FLAIR_ENV, 1 PREP_REFERENCE, 4 × (ASSEMBLE, QUANTIFY, PRODUCTIVITY, EVALUATE_STRUCTURE, BUNDLE), 1 REPORT; no ALIGN (BAM given) |
 | env builds | release 2.2.0 2.2 min, release 3.0.1 2.7 min, git dev 3.3 min, env 1 s |
 | assemble | 2.2.0 2.0 min, 3.0.1 1.6 min, dev 1.6 min, TED 11.3 min (see above) |
@@ -130,7 +130,7 @@ Launch with only `release: 3.0.0` (`inputs/runs_add.yaml`) and
   possible amendment: when `--bundles` is given and no `--baseline`, use the baseline recorded in
   the earlier bundles, or let the report choose by `run_index`.
 
-Paths: `/private/groups/brookslab/hdheath/claude-tmp/09_11_26_flair_eval_e2e/`
+Paths: `<e2e dir>/`
 (`inputs/runs_final.yaml`, `inputs/runs_add.yaml`, `run_final.sbatch`, `results_final/`,
 `results_add/`, `driver_final_<jobid>.log`).
 
@@ -154,5 +154,5 @@ Paths: `/private/groups/brookslab/hdheath/claude-tmp/09_11_26_flair_eval_e2e/`
 - Headless Chromium: header reads "baseline FLAIR 2.2.0, first run of the earliest of 2
   launches"; runs listed FLAIR 2.2.0, FLAIR 3.0.0, FLAIR 3.0.1, dev (tip), dev @425b260, TED
   (baseline first, then run_index, then id); no console errors.
-- Report: `/private/groups/brookslab/hdheath/claude-tmp/09_11_26_flair_eval_e2e/results_add/report/report.html`
+- Report: `<e2e dir>/results_add/report/report.html`
   (the round-4 version is kept beside it as `report.round4.html`).

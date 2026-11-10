@@ -3,7 +3,7 @@
   "use strict";
   var FE = window.FlairEval;
   var STORE_KEY = "flair-eval-builder-v1";
-  var RELEASES = ["3.0.1", "3.0.0", "2.2.0", "2.0.0"];
+  var RELEASES = ["3.0.1", "2.2.0"];
   var SOURCES = [["release", "Release"], ["git", "Git branch"], ["env", "Conda env"], ["container", "Container"]];
   var SAMPLE_LABELS = { sample: "sample name", reads: "reads or BAM file", bam: "BAM file", genome: "genome FASTA",
     gtf: "annotation GTF", platform: "platform", library: "library", cage: "CAGE", pas: "PAS", junctions: "junctions",

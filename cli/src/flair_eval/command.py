@@ -1,6 +1,6 @@
 """Build the `nextflow run hdheath/flair-eval ...` command line.
 
-`build_command()` picks the one-command form (`--reads ... --flair 3.0.1,dev`) when the
+`build_command()` picks the one-command form (`--reads ... --flair 2.2.0,3.0.1,dev`) when the
 samples and runs can be expressed that way exactly, and otherwise the file form
 (`--input samples.csv --runs runs.yaml`). frontend/builder/logic.js mirrors this module;
 the tests feed both the same cases and compare the output.

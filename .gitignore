@@ -50,3 +50,8 @@ analysis/
 .nf-test/
 .claude/
 .nf-test-*.nf
+
+# Local agent and integration files (not published)
+CLAUDE.md
+docs/streams/
+legacy/materials/

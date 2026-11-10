@@ -84,7 +84,7 @@ Later sections are only shown when their input exists:
 ## Front end for new users
 There are four ways in, all mapping onto the same params and schemas (see CONTRACTS.md §1):
 1. **One command, no files.**
-   `nextflow run hdheath/flair-eval --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 3.0.1,dev --outdir out`.
+   `nextflow run hdheath/flair-eval --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 2.2.0,3.0.1,dev --outdir out`.
 2. **`nextflow_schema.json`.** Gives `--help`, input validation with plain-English errors, a web
    launch form via `nf-core pipelines launch`, and a Seqera Platform launchpad.
 3. **Config-builder page** (`frontend/builder/`, GitHub Pages). It has a form for samples, plus run cards
