@@ -20,7 +20,6 @@ from .annotation import Transcript, keep_contig, merge_loci, read_bed12
 
 MONO_MIN_OVERLAP = 0.5
 TOP_LOCI = 20
-MAX_GENE_NAMES = 40
 GRID_BINS = 20
 _DETECTING = {"FSM", "ISM", "NIC", "NNC", "fusion"}
 
@@ -177,9 +176,12 @@ def _r(v: Optional[float]) -> Optional[float]:
 
 
 # ---------------------------------------------------------------- concordance
-def concordance(runs: Sequence[RunModels], baseline: Optional[str],
-                gene_names: Dict[str, str]) -> Optional[dict]:
-    """Section-8 concordance for one sample. None when fewer than two runs have isoforms.bed."""
+def concordance(runs: Sequence[RunModels], gene_names: Dict[str, str]) -> Optional[dict]:
+    """Section-8 concordance for one sample. None when fewer than two runs have isoforms.bed.
+
+    Nothing here depends on the baseline, so the report can switch it in the page (A22):
+    `genes_detected` lists, per run, the reference genes it detects among the genes that not
+    every run detects; gained/lost against any baseline follow from those lists."""
     runs = [r for r in runs if r is not None]
     if len(runs) < 2:
         return None
@@ -201,18 +203,12 @@ def concordance(runs: Sequence[RunModels], baseline: Optional[str],
     def label(g):
         return gene_label(g, gene_names)
 
-    genes = None
-    if baseline in sets:
-        base_genes = next(r for r in runs if r.run_id == baseline).detected_genes()
-        genes = {}
-        for r in runs:
-            if r.run_id == baseline:
-                continue
-            g = r.detected_genes()
-            gained, lost = sorted(g - base_genes, key=label), sorted(base_genes - g, key=label)
-            genes[r.run_id] = {"gained": len(gained), "lost": len(lost),
-                               "gained_names": [label(x) for x in gained[:MAX_GENE_NAMES]],
-                               "lost_names": [label(x) for x in lost[:MAX_GENE_NAMES]]}
+    detected = {r.run_id: r.detected_genes() for r in runs}
+    in_all = set.intersection(*detected.values())
+    varying = sorted(set().union(*detected.values()) - in_all, key=lambda g: (label(g), g))
+    pos = {g: i for i, g in enumerate(varying)}
+    genes = {"in_all": len(in_all), "names": [label(g) for g in varying],
+             "runs": {k: sorted(pos[g] for g in v - in_all) for k, v in detected.items()}}
 
     return {
         "runs": ids,
@@ -220,8 +216,7 @@ def concordance(runs: Sequence[RunModels], baseline: Optional[str],
         "union": len(union_all),
         "shared_by_all": len(shared_all),
         "pairs": pairs,
-        "genes_vs_baseline": genes,
-        "baseline": baseline if baseline in sets else None,
+        "genes_detected": genes,
         "top_loci": top_loci(runs, sid, gene_names),
         "mono_min_overlap": MONO_MIN_OVERLAP,
     }
@@ -286,10 +281,11 @@ def read_counts(path: str) -> Dict[str, float]:
     return out
 
 
-def quant_agreement(runs: Sequence[RunModels], cpm: Dict[str, Dict[str, float]],
-                    baseline: Optional[str]) -> Optional[dict]:
+def quant_agreement(runs: Sequence[RunModels], cpm: Dict[str, Dict[str, float]]) -> Optional[dict]:
     """CPM agreement between runs, matching isoforms by structure (summed per structure).
-    Correlations use log10(CPM + 1) over structures present in both runs."""
+    Correlations use log10(CPM + 1) over structures present in both runs. Every pair gets a
+    density grid, grid[j][i] with i = bin of run a and j = bin of run b, so any run can be
+    the baseline in the page."""
     runs = [r for r in runs if r is not None and r.run_id in cpm]
     if len(runs) < 2:
         return None
@@ -318,15 +314,11 @@ def quant_agreement(runs: Sequence[RunModels], cpm: Dict[str, Dict[str, float]],
                     "spearman": _r(spearman(x, y)),
                     "cpm_shared_a": round(sum(per[a][s] for s in common) / tot_a, 4),
                     "cpm_shared_b": round(sum(per[b][s] for s in common) / tot_b, 4)}
-            if baseline in (a, b):
-                # density grid: x = baseline, y = the other run
-                bx, by = (x, y) if a == baseline else (y, x)
-                grid = [[0] * GRID_BINS for _ in range(GRID_BINS)]
-                for u, v in zip(bx, by):
-                    i_ = min(GRID_BINS - 1, int(u / top * GRID_BINS))
-                    j_ = min(GRID_BINS - 1, int(v / top * GRID_BINS))
-                    grid[j_][i_] += 1
-                pair["grid"] = grid
+            grid = [[0] * GRID_BINS for _ in range(GRID_BINS)]
+            for u, v in zip(x, y):
+                i_ = min(GRID_BINS - 1, int(u / top * GRID_BINS))
+                j_ = min(GRID_BINS - 1, int(v / top * GRID_BINS))
+                grid[j_][i_] += 1
+            pair["grid"] = grid
             pairs.append(pair)
-    return {"runs": ids, "baseline": baseline if baseline in ids else None,
-            "log_max": top, "grid_bins": GRID_BINS, "pairs": pairs}
+    return {"runs": ids, "log_max": top, "grid_bins": GRID_BINS, "pairs": pairs}

@@ -151,6 +151,10 @@ select {
 .span-2 { grid-column: 1 / -1; }
 .callout { font-size: 13px; color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin: 0 0 20px; max-width: 860px; }
 .callout strong { font-weight: 600; }
+.basenote { font-size: 13px; color: var(--ink-2); margin: -4px 0 16px; max-width: 860px; line-height: 1.5; }
+.basenote .label { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-right: 8px; }
+.linkbtn { font: inherit; font-size: 13px; color: var(--ink); background: none; border: 0; padding: 0 0 0 8px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.linkbtn:focus-visible { outline: 2px solid var(--focus, currentColor); outline-offset: 2px; border-radius: 3px; }
 .empty { padding: 40px 16px; text-align: center; color: var(--ink-2); }
 
 /* ---------- overview */

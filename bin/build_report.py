@@ -6,8 +6,11 @@ of bundles, a bundle.json file or a glob). When two bundles share (sample, run_i
 with the newest pipeline.created wins. The HTML inlines its CSS/JS and embeds the bundle
 data as JSON, so it opens offline. Per-isoform tables are not embedded.
 
-The baseline is --baseline (core always passes the first run of runs.yaml). Without it, the
-first run id in name order is used (CONTRACTS A5). Runs are ordered baseline first, then by
+The baseline is --baseline when given. Without it (CONTRACTS A22) it is the first run of the
+earliest launch: bundles are split into launches where run_index starts over, and the run with
+the lowest run_index in the launch holding the oldest pipeline.created wins, ties by id. With no
+run_index at all, the first run id in name order is used (A5). The page says which rule picked
+the baseline and lets the reader switch it. Runs are ordered baseline first, then by
 bundle.json run_index, then by id (A17), and keep that colour throughout the report.
 
 Round-2 sections (CONTRACTS section 8) are computed here when their inputs sit beside each
@@ -52,7 +55,7 @@ def parse_args(argv=None):
     p.add_argument("--out", required=True, help="output HTML path")
     p.add_argument("--title", default="FLAIR comparison", help="report heading")
     p.add_argument("--baseline", help="run id to compute differences against "
-                                      "(default: first run)")
+                                      "(default: first run of the earliest launch)")
     return p.parse_args(argv)
 
 
@@ -119,7 +122,7 @@ def load_bundles(files):
     return [chosen[k] for k in order]
 
 
-def sample_sections(entries, baseline):
+def sample_sections(entries):
     """Section-8 data computed across the runs of each sample: {sample: {...}}."""
     out = {}
     samples = []
@@ -146,10 +149,10 @@ def sample_sections(entries, baseline):
                 except (ValueError, OSError) as e:
                     print(f"build_report.py: warning: {counts}: skipped ({e})", file=sys.stderr)
         entry = {}
-        conc = concordance(models, baseline, names)
+        conc = concordance(models, names)
         if conc:
             entry["concordance"] = conc
-        quant = quant_agreement(models, cpm, baseline)
+        quant = quant_agreement(models, cpm)
         if quant:
             entry["quant"] = quant
         if entry:
@@ -190,6 +193,43 @@ def run_order(bundles, baseline):
     return ids
 
 
+def _run_index(b):
+    ri = b.get("run_index")
+    return ri if isinstance(ri, int) and not isinstance(ri, bool) else None
+
+
+def launches(bundles):
+    """Bundles grouped by pipeline launch, earliest first.
+
+    Bundles carry no launch id, and pipeline.created is stamped per bundle, so a launch is
+    recovered from time order: walking the bundles oldest first, a new launch starts when a
+    (sample, run_index) pair repeats, since run_index counts runs.yaml from 0 in every launch.
+    Bundles without run_index join the launch they fall in. Limit: a later launch whose run
+    indexes do not repeat any of the earlier launch's (say its run 0 failed in every sample)
+    is merged into it; only a launch id in the bundle would tell them apart."""
+    out, seen = [], None
+    for b in sorted(bundles, key=lambda b: (_created_key(b), b["run_id"], b["sample"])):
+        ri = _run_index(b)
+        key = (b["sample"], ri)
+        if out and (ri is None or key not in seen):
+            out[-1].append(b)
+        else:
+            out.append([b])
+            seen = set()
+        if ri is not None:
+            seen.add(key)
+    return out
+
+
+def default_baseline(bundles):
+    """(run_id, reason) for the A22 default baseline. reason: earliest_launch | name_order."""
+    if not any(_run_index(b) is not None for b in bundles):
+        return sorted({b["run_id"] for b in bundles})[0], "name_order"
+    first = [b for b in launches(bundles)[0] if _run_index(b) is not None]
+    best = min(first, key=lambda b: (_run_index(b), b["run_id"]))
+    return best["run_id"], "earliest_launch"
+
+
 def report_data(entries, title, baseline=None):
     bundles = [b for b, _ in entries]
     seen, samples = [], []
@@ -202,7 +242,10 @@ def report_data(entries, title, baseline=None):
         raise ReportError(f"--baseline {baseline!r} is not a run in these bundles "
                           f"(runs: {', '.join(seen)})")
     if baseline is None:
-        baseline = sorted(seen)[0]          # A5: name order only when no baseline is given
+        baseline, rule = default_baseline(bundles)
+    else:
+        rule = "given"
+    n_launches = len(launches(bundles))
     fill_quant_input(entries)
     runs = run_order(bundles, baseline)
     ordered = sorted(bundles, key=lambda b: (samples.index(b["sample"]), runs.index(b["run_id"])))
@@ -211,10 +254,11 @@ def report_data(entries, title, baseline=None):
         "generated": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
         "tool_version": __version__,
         "baseline": baseline,
+        "baseline_rule": {"rule": rule, "launches": n_launches},
         "runs": runs,
         "samples": samples,
         "bundles": [slim(b) for b in ordered],
-        "by_sample": sample_sections(entries, baseline),
+        "by_sample": sample_sections(entries),
     }
 
 

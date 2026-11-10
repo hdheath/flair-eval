@@ -28,6 +28,14 @@ absent (no `isoforms.bed`, no quantification, no `compute`) is not shown.
 `by_sample.<sample>.concordance` and `.quant` (CONTRACTS section 8), computed from
 `isoforms.bed`, `tables/isoforms.tsv`, `tables/genes.tsv` (optional, for gene names) and
 `counts.tsv` beside each `bundle.json`. See `bin/flair_eval_lib/concordance.py`.
+None of it depends on the baseline, so the reader can switch the baseline in the page (A22):
+`concordance.genes_detected` lists, per run, the reference genes it detects among those not every
+run detects (gained/lost against any run follow), and every `quant` pair carries a density grid
+(`grid[j][i]`, i = run a, j = run b; the page transposes it when the baseline is b).
+
+`baseline` and `baseline_rule` (`{"rule": "given" | "earliest_launch" | "name_order",
+"launches": n}`) record which run is the default baseline and why. The page shows it under the
+Overview heading and in the subtitle, and offers "Use default" after a switch.
 
 ## Later sections
 Register a panel in `SECTION_PANELS` in `report.js`, keyed by the `bundle.sections.<key>` it reads.
