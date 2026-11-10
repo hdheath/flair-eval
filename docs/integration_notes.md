@@ -133,3 +133,17 @@ Launch with only `release: 3.0.0` (`inputs/runs_add.yaml`) and
 Paths: `/private/groups/brookslab/hdheath/claude-tmp/09_11_26_flair_eval_e2e/`
 (`inputs/runs_final.yaml`, `inputs/runs_add.yaml`, `run_final.sbatch`, `results_final/`,
 `results_add/`, `driver_final_<jobid>.log`).
+
+## Round 5: A22 (baseline across launches), core side
+
+- Core passes `--baseline` only when the user gave one, or when there are no `--bundles`
+  (then this launch's first run, A5). With `--bundles` and no `--baseline` it passes none.
+- Pending: re-run REPORT for `results_add/` once the report stream's A22 lands in `v2`
+  (`build_report.py` picks the first run of the earliest launch). At aac4602 it still falls back
+  to name order without `--baseline`, so the re-run would not show the intended baseline yet.
+  Command, from `09_11_26_flair_eval_e2e/`:
+
+  ```
+  sbatch --export=ALL,RUNS=$PWD/inputs/runs_add.yaml,OUT=$PWD/results_add,EXTRA="--bundles $PWD/results_final/bundles -resume" run_final.sbatch
+  ```
+  Only REPORT re-runs (its baseline input changes); FLAIR tasks come from the cache.
