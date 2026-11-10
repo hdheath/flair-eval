@@ -1,0 +1,13 @@
+category	subcategory	n
+FSM	CIM	101
+FSM	FSM5	3
+FSM	FSM3	4
+FSM	FSMTE	2
+ISM		12
+NIC		40
+NNC		15
+genic		7
+genic_intron		8
+antisense		13
+intergenic		16
+fusion		0
