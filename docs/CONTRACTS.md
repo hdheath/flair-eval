@@ -255,3 +255,9 @@ Each section is optional and has its own panel. It is computed only when its inp
   - dev counts from the genome BAM.
 
   The adapter records `quantify_input: reads|bam` in `adapter_log.json`, core copies it to `sections.quant.input`, and the report notes it wherever reads-assigned numbers are compared.
+- A22 [core, report] **Baseline across launches.**
+  - When `--baseline` is not given and `--bundles` is non-empty, core does **not** pass `--baseline`.
+  - `build_report.py` then picks the baseline as the run with the lowest `run_index` among the bundles with the oldest `pipeline.created`, i.e. the first run of the first launch. Ties are broken by id.
+  - With no `--bundles`, A5 still applies: the first run of this launch.
+  - The report shows which run is the baseline and why ("first run of the earliest launch"), and the user can switch it in the page.
+- A23 [core, adapter] **Stage `<genome>.fai`** next to the genome for every FLAIR and evaluation step. dev quantify workers race to build it otherwise (seen as `KeyError: sequence 'chr17' not present`). That is a FLAIR dev bug; document it in `docs/flair_versions.md`.
