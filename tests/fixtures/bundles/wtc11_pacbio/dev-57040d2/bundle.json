@@ -2,6 +2,7 @@
  "schema": "flair-eval/bundle/1",
  "sample": "wtc11_pacbio",
  "run_id": "dev-57040d2",
+ "run_index": 2,
  "label": "dev 57040d2 (Aug 2026)",
  "tags": {
   "branch": "dev",
@@ -220,7 +221,8 @@
      9,
      8
     ]
-   }
+   },
+   "input": "bam"
   },
   "productivity": {
    "class_counts": {

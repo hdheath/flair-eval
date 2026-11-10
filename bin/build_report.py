@@ -7,8 +7,8 @@ with the newest pipeline.created wins. The HTML inlines its CSS/JS and embeds th
 data as JSON, so it opens offline. Per-isoform tables are not embedded.
 
 The baseline is --baseline (core always passes the first run of runs.yaml). Without it, the
-first run id in name order is used (CONTRACTS A5). Runs keep one colour throughout the report:
-the baseline first, then the other runs in the order they are first seen.
+first run id in name order is used (CONTRACTS A5). Runs are ordered baseline first, then by
+bundle.json run_index, then by id (A17), and keep that colour throughout the report.
 
 Round-2 sections (CONTRACTS section 8) are computed here when their inputs sit beside each
 bundle.json: run-vs-run concordance from isoforms.bed (+ tables/isoforms.tsv), and CPM
@@ -32,6 +32,7 @@ from flair_eval_lib import __version__  # noqa: E402
 from flair_eval_lib.concordance import (  # noqa: E402
     RunModels, concordance, quant_agreement, read_counts, read_gene_names)
 from flair_eval_lib.schema import load_schema, validate  # noqa: E402
+from flair_eval_lib.sections import quant_input_from_dir  # noqa: E402
 
 ASSET_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                           "..", "assets", "report"))
@@ -166,6 +167,29 @@ def slim(b):
     return out
 
 
+def fill_quant_input(entries):
+    """Older bundles lack sections.quant.input (A21); derive it from the adapter log beside them."""
+    for b, f in entries:
+        q = (b.get("sections") or {}).get("quant")
+        if isinstance(q, dict) and not q.get("input"):
+            qi = quant_input_from_dir(os.path.dirname(f))
+            if qi:
+                q["input"] = qi
+                q["input_inferred"] = True
+
+
+def run_order(bundles, baseline):
+    """A17: baseline first, then run_index, then id; runs without run_index after, by id."""
+    index = {}
+    for b in bundles:
+        ri = b.get("run_index")
+        if isinstance(ri, int) and not isinstance(ri, bool):
+            index[b["run_id"]] = min(ri, index.get(b["run_id"], ri))
+    ids = sorted({b["run_id"] for b in bundles},
+                 key=lambda r: (r != baseline, r not in index, index.get(r, 0), r))
+    return ids
+
+
 def report_data(entries, title, baseline=None):
     bundles = [b for b, _ in entries]
     seen, samples = [], []
@@ -179,7 +203,8 @@ def report_data(entries, title, baseline=None):
                           f"(runs: {', '.join(seen)})")
     if baseline is None:
         baseline = sorted(seen)[0]          # A5: name order only when no baseline is given
-    runs = [baseline] + [r for r in seen if r != baseline]
+    fill_quant_input(entries)
+    runs = run_order(bundles, baseline)
     ordered = sorted(bundles, key=lambda b: (samples.index(b["sample"]), runs.index(b["run_id"])))
     return {
         "title": title,

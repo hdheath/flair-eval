@@ -241,3 +241,88 @@ def test_structure_metrics_writes_gene_names():
                            ["gene_id", "gene_name"])
     names = {r["gene_name"] for r in rows}
     assert "TP53" in names
+
+
+# --------------------------------------------------------------------- round 3: A17, A21
+from flair_eval_lib.concordance import gene_label  # noqa: E402
+from flair_eval_lib.sections import quant_input_from_log  # noqa: E402
+
+
+def test_gene_label():
+    assert gene_label("ENSG00000141510.20", {"ENSG00000141510.20": "TP53"}) == "TP53"
+    assert gene_label("ENSG00000141510.20", {}) == "ENSG00000141510"
+    assert gene_label("novel_gene_3", {}) == "novel_gene_3"
+    assert gene_label("FLG0001.2", {}) == "FLG0001.2"
+
+
+@pytest.mark.parametrize("log,expected", [
+    ({"quantify_input": "bam"}, "bam"),
+    ({"quantify_input": "reads", "commands": [{"argv": ["flair", "quantify", "--manifest", "m"]}]}, "reads"),
+    ({"commands": [{"argv": ["/env/bin/flair", "quantify", "--manifest", "m.tsv", "-g", "g.fa"]}]}, "bam"),
+    ({"commands": [{"argv": ["/env/bin/flair", "quantify", "-r", "m.tsv", "-i", "iso.fa"]}]}, "reads"),
+    ({"commands": [{"argv": ["minimap2", "-a"]}]}, None),
+    ({}, None),
+])
+def test_quant_input_from_log(log, expected):
+    assert quant_input_from_log(log) == expected
+
+
+def test_fixtures_record_run_index_and_quant_input():
+    for f in os.listdir(FIXTURES):
+        sd = os.path.join(FIXTURES, f)
+        if not os.path.isdir(sd):
+            continue
+        for rid in os.listdir(sd):
+            b = json.load(open(os.path.join(sd, rid, "bundle.json")))
+            assert isinstance(b["run_index"], int)
+            assert b["sections"]["quant"]["input"] == ("bam" if rid.startswith("dev-") else "reads")
+
+
+def _bundle_copy(tmp_path, sample, rid, **changes):
+    d = tmp_path / "b" / sample / rid
+    shutil.copytree(os.path.join(FIXTURES, sample, rid), d)
+    b = json.load(open(d / "bundle.json"))
+    for k, v in changes.items():
+        if v is None:
+            b.pop(k, None)
+        else:
+            b[k] = v
+    json.dump(b, open(d / "bundle.json", "w"))
+    return d
+
+
+def test_a17_run_order(tmp_path):
+    s = "wtc11_pacbio"
+    _bundle_copy(tmp_path, s, "flair-2.2.0", run_index=2)
+    _bundle_copy(tmp_path, s, "flair-3.0.1", run_index=1)
+    _bundle_copy(tmp_path, s, "dev-57040d2", run_index=0)
+    _bundle_copy(tmp_path, s, "dev-425b260", run_index=None)          # old bundle: after indexed runs
+    _bundle_copy(tmp_path, s, "dev-425b260-normends", run_index=None)
+    out = tmp_path / "r.html"
+    assert build("--bundles", tmp_path / "b", "--out", out, "--baseline", "flair-2.2.0").returncode == 0
+    assert embedded(out)["runs"] == ["flair-2.2.0", "dev-57040d2", "flair-3.0.1", "dev-425b260", "dev-425b260-normends"]
+
+
+def test_a21_quant_input_filled_from_adapter_log(tmp_path):
+    s = "wtc11_ont"
+    for rid, argv in (("flair-3.0.1", ["flair", "quantify", "-r", "m", "-i", "f"]),
+                      ("dev-425b260", ["flair", "quantify", "--manifest", "m", "-g", "g"])):
+        d = _bundle_copy(tmp_path, s, rid)
+        b = json.load(open(d / "bundle.json"))
+        del b["sections"]["quant"]["input"]
+        json.dump(b, open(d / "bundle.json", "w"))
+        os.makedirs(d / "provenance")
+        json.dump({"step": "quantify", "commands": [{"argv": argv}]}, open(d / "provenance" / "adapter_quantify.json", "w"))
+    out = tmp_path / "r.html"
+    assert build("--bundles", tmp_path / "b", "--out", out).returncode == 0
+    got = {b["run_id"]: b["sections"]["quant"] for b in embedded(out)["bundles"]}
+    assert got["flair-3.0.1"]["input"] == "reads" and got["dev-425b260"]["input"] == "bam"
+    assert got["dev-425b260"]["input_inferred"] is True
+
+
+def test_sections_cli_records_quant_input(tmp_path):
+    d = _bundle_copy(tmp_path, "wtc11_ont", "flair-2.2.0")
+    res = subprocess.run([sys.executable, "-m", "flair_eval_lib.sections", str(d), "--quant-input", "reads"],
+                         capture_output=True, text=True, cwd=BIN)
+    assert res.returncode == 0, res.stderr
+    assert json.load(open(d / "bundle.json"))["sections"]["quant"]["input"] == "reads"
