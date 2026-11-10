@@ -218,7 +218,9 @@ open(opt("-o") + ".info.tsv", "w").write("#isoname\n")
 FAKE_SAMTOOLS = r'''
 import shutil, sys
 a = sys.argv[1:]
-if a[0] == "index":
+if a[0] == "faidx":
+    open(a[1] + ".fai", "w").write("chr1\t4\t6\t4\t5\n")
+elif a[0] == "index":
     open(a[1] + ".bai", "w").close()
 elif a[0] == "fastq":
     for name in open(a[-1]).read().split():
@@ -253,6 +255,7 @@ def fake(tmp_path):
     (inputs / "reads.fa").write_text(">readA x\nACGT\n>readB\nACGT\n>readC\nACGT\n")
     (inputs / "reads.fq").write_text("@readA\nACGT\n+\nIIII\n@readC\nACGT\n+\nIIII\n")
     (inputs / "genome.fa").write_text(">chr1\nACGT\n")
+    (inputs / "genome.fa.fai").write_text("chr1\t4\t6\t4\t5\n")    # core stages it (A23)
     (inputs / "annot.gtf").write_text('chr1\tx\texon\t1\t10\t.\t+\t.\tgene_id "g"; transcript_id "t";\n')
     (inputs / "shared.bam").write_text("readA\nreadB\nreadC\n")
     (inputs / "shared.bam.bai").write_text("")
@@ -811,3 +814,93 @@ def test_quantify_input_recorded(fake, gen, expected):
         *(["--bam", run.inputs / "shared.bam"]), check=0)
     assert json.load(open(out2 / "adapter_log.json"))["quantify_input"] == expected
     assert json.load(open(asm / "adapter_log.json"))["quantify_input"] is None
+
+
+def commands(out):
+    return json.load(open(out / "adapter_log.json"))["commands"]
+
+
+@pytest.mark.parametrize("gen", ["v2", "v301", "dev"])
+def test_assemble_builds_missing_fai_once(fake, gen):
+    """A23: a genome without .fai is indexed once with samtools faidx before FLAIR runs."""
+    run = fake(gen)
+    genome = run.inputs / "genome.fa"
+    os.remove(str(run.inputs / "genome.fa.fai"))
+    out = run.tmp / "asm"
+    assemble(run, out, check=0)
+    assert (run.inputs / "genome.fa.fai").exists()
+    labels = [c["label"] for c in commands(out)]
+    assert labels.count("samtools_faidx") == 1
+    first_flair = min(i for i, l in enumerate(labels) if l.startswith(("flair_", "bam2Bed12")))
+    assert labels.index("samtools_faidx") < first_flair
+    log = json.load(open(out / "adapter_log.json"))
+    assert log["genome_index"] == {"genome": str(genome), "fai": str(genome) + ".fai", "action": "built"}
+    assert any("A23" in n for n in log["notes"])
+    # a second step finds the index and does not rebuild it
+    out2 = run.tmp / "asm2"
+    assemble(run, out2, check=0)
+    assert "samtools_faidx" not in [c["label"] for c in commands(out2)]
+    assert json.load(open(out2 / "adapter_log.json"))["genome_index"]["action"] == "existing"
+
+
+def test_dev_quantify_indexes_genome_before_flair(fake):
+    run = fake("dev")
+    asm = run.tmp / "asm"
+    assemble(run, asm, check=0)
+    os.remove(str(run.inputs / "genome.fa.fai"))
+    out = run.tmp / "q"
+    run("quantify", "--isoforms-fa", asm / "isoforms.fa", "--sample", "s", "--bam", run.inputs / "shared.bam",
+        "--genome", run.inputs / "genome.fa", "--flair-bed", asm / "isoforms.flair.bed", "--out", out, check=0)
+    labels = [c["label"] for c in commands(out)]
+    assert labels == ["samtools_faidx", "flair_quantify"]
+    assert (run.inputs / "genome.fa.fai").exists()
+    assert json.load(open(out / "adapter_log.json"))["genome_index"]["action"] == "built"
+
+
+def test_reads_quantify_does_not_touch_genome(fake):
+    run = fake("v301")
+    asm = run.tmp / "asm"
+    assemble(run, asm, check=0)
+    os.remove(str(run.inputs / "genome.fa.fai"))
+    out = run.tmp / "q"
+    run("quantify", "--isoforms-fa", asm / "isoforms.fa", "--reads", run.inputs / "reads.fa", "--sample", "s",
+        "--genome", run.inputs / "genome.fa", "--out", out, check=0)
+    assert "samtools_faidx" not in [c["label"] for c in commands(out)]
+    assert json.load(open(out / "adapter_log.json"))["genome_index"] is None
+
+
+def test_fai_built_in_work_dir_when_genome_dir_read_only(fake, tmp_path):
+    run = fake("v301")
+    ro = tmp_path / "ro"
+    ro.mkdir()
+    (ro / "genome.fa").write_text(">chr1\nACGT\n")
+    os.chmod(str(ro), 0o555)
+    try:
+        if os.access(str(ro), os.W_OK):
+            pytest.skip("running as a user who can write anywhere")
+        i = run.inputs
+        out = tmp_path / "asm"
+        run("assemble", "--bam", i / "shared.bam", "--genome", ro / "genome.fa", "--gtf", i / "annot.gtf",
+            "--out", out, check=0)
+        log = json.load(open(out / "adapter_log.json"))
+        assert log["genome_index"]["action"] == "built_in_work_dir"
+        tx = [c for c in run.calls() if c[0] == "transcriptome"][0]
+        assert argval(tx, "-g", "--genome") == str(out / ".work" / "genome.fa")
+    finally:
+        os.chmod(str(ro), 0o755)
+
+
+def test_no_samtools_warns_and_continues(fake, tmp_path):
+    pybin = tmp_path / "pybin"
+    pybin.mkdir()
+    os.symlink(sys.executable, str(pybin / "python3"))
+    run = fake("v301", extra_env={"PATH": "%s:%s" % (tmp_path / "env_v301" / "bin", pybin)})
+    os.remove(str(run.tmp / "env_v301" / "bin" / "samtools"))
+    os.remove(str(run.inputs / "genome.fa.fai"))
+    out = run.tmp / "asm"
+    p = assemble(run, out)
+    if p.returncode != 0 or "samtools_faidx" in [c["label"] for c in commands(out)]:
+        pytest.skip("a system samtools is on PATH")
+    log = json.load(open(out / "adapter_log.json"))
+    assert log["genome_index"]["action"] == "missing"
+    assert any("no samtools" in w for w in log["warnings"])
