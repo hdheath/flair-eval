@@ -476,7 +476,7 @@
       wrap.appendChild(el('div', { class: 'row-label' }, row.label, row.sub ? el('span', { class: 'small', text: row.sub }) : null));
       var track = el('div', { class: 'row-track' });
       wrap.appendChild(track);
-      wrap.appendChild(el('div', { class: 'row-range', text: lo === hi ? row.fmt(lo) : row.fmt(lo) + ' – ' + row.fmt(hi) }));
+      wrap.appendChild(el('div', { class: 'row-range', text: lo === hi ? row.fmt(lo) : rangeText(row.fmt(lo), row.fmt(hi)) }));
       pending.push(function () {
         var width = Math.max(120, track.clientWidth), padX = 12;
         var span = hi - lo || Math.abs(hi) || 1;
@@ -536,6 +536,56 @@
     }
     return null;
   }
+  // Genes one run detects that another does not, from the per-run lists of varying genes.
+  var MAX_GENE_NAMES = 40;
+  function genesVsBase(conc, id, base) {
+    var gd = conc && conc.genes_detected;
+    if (!gd || !gd.runs || !gd.runs[id] || !gd.runs[base]) return null;
+    function minus(a, b) {
+      var has = {};
+      b.forEach(function (i) { has[i] = 1; });
+      return a.filter(function (i) { return !has[i]; });
+    }
+    var gained = minus(gd.runs[id], gd.runs[base]), lost = minus(gd.runs[base], gd.runs[id]);
+    var names = function (idx) { return idx.slice(0, MAX_GENE_NAMES).map(function (i) { return gd.names[i]; }); };
+    return { gained: gained.length, lost: lost.length, gained_names: names(gained), lost_names: names(lost) };
+  }
+  // Density grid of a pair with the baseline across (x) and the other run up (y).
+  function gridVsBase(p, base) {
+    if (!p || !p.grid) return null;
+    if (p.a === base) return p.grid;
+    return p.grid[0].map(function (_, i) { return p.grid.map(function (row) { return row[i]; }); });
+  }
+
+  // Why the baseline is the baseline (CONTRACTS A22).
+  var BASE_RULE = DATA.baseline_rule || {};
+  function baselineWhy(id) {
+    if (id !== DATA.baseline) return 'chosen in this page';
+    if (BASE_RULE.rule === 'given') return 'set when the report was built';
+    if (BASE_RULE.rule === 'earliest_launch') return BASE_RULE.launches > 1 ? 'first run of the earliest of ' + BASE_RULE.launches + ' launches' : 'first run of the launch';
+    if (BASE_RULE.rule === 'name_order') return 'first run id in name order';
+    return 'default';
+  }
+  function baselineNote() {
+    var switched = state.baseline !== DATA.baseline;
+    return el('p', { class: 'basenote' }, el('span', { class: 'label', text: 'Baseline' }), runName(state.baseline),
+      el('span', { text: ' · ' + baselineWhy(state.baseline) + (switched ? ' (default: ' + runLabel(DATA.baseline) + ', ' + baselineWhy(DATA.baseline) + ')' : '') +
+        '. Every difference is measured against it' + (state.printing ? '.' : '; change it with Baseline above.') }),
+      switched ? el('button', { class: 'linkbtn no-print', type: 'button', text: 'Use default', onclick: function () { state.baseline = DATA.baseline; render(); } }) : null);
+  }
+  function setSubtitle() {
+    var nR = runOrder.length, nS = samples.length;
+    var when = (DATA.generated || '').slice(0, 10);
+    document.getElementById('subtitle').textContent = nR + ' FLAIR ' + (nR === 1 ? 'run' : 'runs') + ' on ' + nS + ' ' + (nS === 1 ? 'sample' : 'samples') +
+      ' · baseline ' + runLabel(state.baseline) + ', ' + baselineWhy(state.baseline) + (when ? ' · built ' + when : '');
+  }
+
+  // "3.1 CPU-min – 12 CPU-min" -> "3.1–12 CPU-min" when both ends share a unit.
+  function rangeText(a, b) {
+    var ma = /^(\S+) (.+)$/.exec(a), mb = /^(\S+) (.+)$/.exec(b);
+    return ma && mb && ma[2] === mb[2] ? ma[1] + '–' + mb[1] + ' ' + ma[2] : a + ' – ' + b;
+  }
+
   function jaccardVsBase(b) {
     if (b.run_id === state.baseline) return null;
     var p = pairOf(concFor(b.sample), b.run_id, state.baseline);
@@ -642,8 +692,13 @@
     });
     bar.appendChild(el('div', { class: 'field' }, el('span', { class: 'label', text: 'Runs' }), chips));
     var more = el('div', { class: 'more' });
-    if (runOrder.length > 1) more.appendChild(selectField('Baseline', state.baseline, runOrder.map(function (r) { return [r, runLabel(r)]; }), function (v) { state.baseline = v; render(); }));
-    if (versions.length > 1 && versions.length < bundles.length) more.appendChild(selectField('FLAIR version', state.filters.version, [['', 'All']].concat(versions.map(function (x) { return [x, x.length > 18 ? x.slice(0, 17) + '…' : x]; })), function (v) { state.filters.version = v; render(); }));
+    if (runOrder.length > 1) {
+      var bsel = selectField('Baseline', state.baseline, runOrder.map(function (r) { return [r, runLabel(r) + (r === DATA.baseline ? ' (default)' : '')]; }), function (v) { state.baseline = v; render(); });
+      bsel.title = 'Run every difference is measured against. Default: ' + runLabel(DATA.baseline) + ', ' + baselineWhy(DATA.baseline) + '.';
+      more.appendChild(bsel);
+    }
+    // A "version" run tag (dev, ted, 3.0.1, ...) is finer than the version FLAIR reports, so it replaces that filter.
+    if (versions.length > 1 && versions.length < bundles.length && tagKeys.indexOf('version') < 0) more.appendChild(selectField('FLAIR version', state.filters.version, [['', 'All']].concat(versions.map(function (x) { return [x, x.length > 18 ? x.slice(0, 17) + '…' : x]; })), function (v) { state.filters.version = v; render(); }));
     tagKeys.forEach(function (k) {
       var vals = uniq(bundles.map(function (b) { return (b.tags || {})[k] || ''; }));
       if (vals.length < 2) return;
@@ -697,6 +752,7 @@
     var scope = fmtInt(b0.summary.ref_transcripts_total) + ' reference transcripts in scope' +
       (region && region.length ? ' (' + region.slice(0, 3).map(function (r) { return r[0] + ':' + fmtInt(r[1] + 1) + '–' + fmtInt(r[2]); }).join(', ') + (region.length > 3 ? ', …' : '') + ')' : '');
     root.appendChild(sectionHead('How do these runs differ?', list.length + ' of ' + all.length + ' runs on ' + state.sample + ' · ' + scope + '.'));
+    if (runOrder.length > 1) root.appendChild(baselineNote());
 
     var hl = highlights(list);
     if (hl.length) {
@@ -867,8 +923,9 @@
     }
     root.appendChild(grid(cards));
 
-    var gv = conc.genes_vs_baseline;
-    if (gv && conc.baseline === state.baseline) {
+    var gv = {};
+    others.forEach(function (id) { var g = genesVsBase(conc, id, state.baseline); if (g) gv[id] = g; });
+    if (ids.indexOf(state.baseline) >= 0) {
       var gids = others.filter(function (id) { return gv[id]; });
       if (gids.length) {
         var grows = gids.map(function (id) {
@@ -919,6 +976,12 @@
     if (!withQ.length && !quant) { root.appendChild(emptyCard('No quantification for these runs.')); return; }
     var qn = quantNote(list);
     if (qn) root.appendChild(noteBox(qn));
+    var noQ = list.filter(function (b) { return !get(b, 'sections.quant'); });
+    if (noQ.length) {
+      var baseNoQ = noQ.some(function (b) { return b.run_id === state.baseline; });
+      root.appendChild(el('p', { class: 'basenote' }, 'No quantification for ' + noQ.map(function (b) { return b.label; }).join(', ') +
+        ' (FLAIR quantify gave no counts; see that run’s provenance).' + (baseNoQ ? ' The baseline has none, so the per-run plots against it are left out; pick another baseline to see them.' : '')));
+    }
     var cards = [];
     if (withQ.length) {
       cards.push(card('Reads assigned', 'Reads that FLAIR quantify assigned to each run’s isoforms.', chartBox(function (box) {
@@ -945,15 +1008,16 @@
     }
     if (cards.length) root.appendChild(grid(cards));
 
-    if (quant && quant.baseline === state.baseline && qids.indexOf(state.baseline) >= 0) {
+    if (quant && qids.indexOf(state.baseline) >= 0) {
       var dcards = qids.filter(function (id) { return id !== state.baseline; }).map(function (id) {
         var p = pairOf(quant, id, state.baseline);
-        if (!p || !p.grid) return null;
+        var g = gridVsBase(p, state.baseline);
+        if (!g) return null;
         var mine = p.a === id ? p.cpm_shared_a : p.cpm_shared_b;
         return el('section', { class: 'card' },
           el('div', { class: 'card-head' }, el('div', null, el('h3', null, swatch(runColor(id)), ' ', runLabel(id)),
             el('p', { class: 'dek', text: 'r = ' + fmtNum(p.pearson) + ' over ' + fmtInt(p.n) + ' shared isoforms, which hold ' + fmtPct(100 * mine, 0) + ' of its CPM.' }))),
-          chartBox(function (box) { density(box, { name: runLabel(id) + ' against baseline CPM', grid: p.grid, logMax: quant.log_max }); }),
+          chartBox(function (box) { density(box, { name: runLabel(id) + ' against baseline CPM', grid: g, logMax: quant.log_max }); }),
           el('p', { class: 'small', text: 'Up: ' + runLabel(id) + ' CPM. Across: ' + runLabel(state.baseline) + ' CPM.' }));
       }).filter(Boolean);
       if (dcards.length) {
@@ -1175,6 +1239,7 @@
   var lastWidth = 0;
   function render() {
     hideTip();
+    setSubtitle();
     renderRunbar();
     renderTabs();
     var root = document.getElementById('view');
@@ -1212,10 +1277,6 @@
   }
 
   function init() {
-    var nR = runOrder.length, nS = samples.length;
-    var when = (DATA.generated || '').slice(0, 10);
-    document.getElementById('subtitle').textContent = nR + ' FLAIR ' + (nR === 1 ? 'run' : 'runs') + ' on ' + nS + ' ' + (nS === 1 ? 'sample' : 'samples') +
-      ' · baseline ' + runLabel(DATA.baseline) + (when ? ' · built ' + when : '');
     document.getElementById('footer').textContent = 'Made with flair-eval ' + (DATA.tool_version || '') + ' from ' + bundles.length + (bundles.length === 1 ? ' bundle' : ' bundles') + '. This file is self-contained and works offline.';
     initTheme();
     document.getElementById('print').addEventListener('click', function () {
