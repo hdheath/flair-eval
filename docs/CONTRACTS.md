@@ -261,3 +261,7 @@ Each section is optional and has its own panel. It is computed only when its inp
   - With no `--bundles`, A5 still applies: the first run of this launch.
   - The report shows which run is the baseline and why ("first run of the earliest launch"), and the user can switch it in the page.
 - A23 [core, adapter] **Stage `<genome>.fai`** next to the genome for every FLAIR and evaluation step. dev quantify workers race to build it otherwise (seen as `KeyError: sequence 'chr17' not present`). That is a FLAIR dev bug; document it in `docs/flair_versions.md`.
+- A24 [core, report] **Launch id.**
+  - `bundle.json` gains optional `pipeline.launch`, which is Nextflow's `workflow.sessionId`. Core's BUNDLE writes it, and it is the same for every bundle from one launch. A `-resume`d launch reuses its session id, so it counts as the same launch.
+  - The report groups bundles into launches by `pipeline.launch` when present. It falls back to the A22 time-and-`run_index` heuristic for bundles without it.
+  - "Earliest launch" means the launch whose earliest `pipeline.created` is oldest.

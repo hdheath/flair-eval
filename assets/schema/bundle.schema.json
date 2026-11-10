@@ -85,6 +85,12 @@
         },
         "created": {
           "type": "string"
+        },
+        "launch": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
