@@ -15,8 +15,8 @@
  },
  "pipeline": {
   "version": "2.0.0.dev0",
-  "commit": "9444b249375fcc93f83bb85d37b65dd2b524ff69",
-  "created": "2026-11-10T04:42:31+00:00"
+  "commit": "09311827ada7f4764ddbdb374f037e88a37f613f",
+  "created": "2026-11-10T05:28:09+00:00"
  },
  "inputs": {
   "genome": "GRCh38.primary_assembly.genome.fa",
@@ -185,9 +185,49 @@
   }
  },
  "compute": {
-  "cpu_hours": null,
-  "peak_rss_gb": null,
-  "wall_minutes": null
+  "cpu_hours": 0.02345,
+  "peak_rss_gb": 0.108,
+  "wall_minutes": 0.434
  },
- "sections": {}
+ "sections": {
+  "quant": {
+   "isoforms_quantified": 152,
+   "reads_assigned": 16060,
+   "cpm_hist": {
+    "edges": [
+     0,
+     1,
+     3,
+     10,
+     30,
+     100,
+     300,
+     1000,
+     3000,
+     10000,
+     30000
+    ],
+    "counts": [
+     0,
+     0,
+     0,
+     0,
+     45,
+     20,
+     36,
+     14,
+     19,
+     10,
+     8
+    ]
+   }
+  },
+  "productivity": {
+   "class_counts": {
+    "NGO": 38,
+    "PRO": 102,
+    "PTC": 12
+   }
+  }
+ }
 }

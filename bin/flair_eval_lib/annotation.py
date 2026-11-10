@@ -17,6 +17,7 @@ Exon = Tuple[int, int]
 _ATTR_RE = {
     "gene_id": re.compile(r'gene_id "([^"]*)"'),
     "transcript_id": re.compile(r'transcript_id "([^"]*)"'),
+    "gene_name": re.compile(r'gene_name "([^"]*)"'),
 }
 
 # Contigs that are never evaluated: mitochondria, unplaced/unlocalised scaffolds, alts,
@@ -48,6 +49,7 @@ class Transcript:
     chrom: str
     strand: str
     exons: Tuple[Exon, ...]
+    gene_name: str = ""
     introns: Tuple[Exon, ...] = field(init=False)
 
     def __post_init__(self):
@@ -85,6 +87,7 @@ def read_gtf_transcripts(path: str) -> List[Transcript]:
     """Every transcript in a GTF, from its `exon` lines. Order = first appearance."""
     exons: Dict[str, List[Exon]] = {}
     meta: Dict[str, Tuple[str, str, str]] = {}
+    names: Dict[str, str] = {}
     with _open(path) as fh:
         for n, line in enumerate(fh, 1):
             if not line.strip() or line.startswith("#"):
@@ -98,6 +101,8 @@ def read_gtf_transcripts(path: str) -> List[Transcript]:
             if tid is None:
                 raise InputError(f"{path}:{n}: exon line has no transcript_id")
             gene = _gtf_attr(parts[8], "gene_id") or ""
+            if gene and gene not in names:
+                names[gene] = _gtf_attr(parts[8], "gene_name") or ""
             try:
                 s, e = int(parts[3]) - 1, int(parts[4])
             except ValueError:
@@ -113,7 +118,8 @@ def read_gtf_transcripts(path: str) -> List[Transcript]:
                     meta[tid] = (parts[0], parts[6], gene)
                     exons[tid] = []
             exons[tid].append((s, e))
-    return [Transcript(t, meta[t][2], meta[t][0], meta[t][1], tuple(_merge_touching(exons[t])))
+    return [Transcript(t, meta[t][2], meta[t][0], meta[t][1], tuple(_merge_touching(exons[t])),
+                       names.get(meta[t][2], ""))
             for t in meta]
 
 

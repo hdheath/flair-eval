@@ -106,6 +106,21 @@ def summarise(isoforms: Sequence[Transcript], calls: Sequence[Call],
     }
 
 
+def write_gene_names(out_dir: str, calls: Sequence[Call], ref_tx: Sequence[Transcript]) -> None:
+    """tables/genes.tsv: gene_id -> gene_name for every reference gene named in ref_gene.
+    Optional extra table; the report uses it to label loci with readable names."""
+    used = {g for c in calls for g in c.ref_gene.split(",") if g}
+    names = {}
+    for t in ref_tx:
+        if t.gene in used and t.gene not in names:
+            names[t.gene] = t.gene_name
+    with open(os.path.join(out_dir, "tables", "genes.tsv"), "w", newline="") as fh:
+        w = csv.writer(fh, delimiter="\t", lineterminator="\n")
+        w.writerow(["gene_id", "gene_name"])
+        for g in sorted(names):
+            w.writerow([g, names[g]])
+
+
 def write_tables(out_dir: str, isoforms: Sequence[Transcript], calls: Sequence[Call]) -> None:
     tdir = os.path.join(out_dir, "tables")
     os.makedirs(tdir, exist_ok=True)

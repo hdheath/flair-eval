@@ -6,8 +6,14 @@ of bundles, a bundle.json file or a glob). When two bundles share (sample, run_i
 with the newest pipeline.created wins. The HTML inlines its CSS/JS and embeds the bundle
 data as JSON, so it opens offline. Per-isoform tables are not embedded.
 
-Run order (and so colours and the default baseline) is the order runs are first seen:
-path arguments in the order given, bundles inside a path sorted by name.
+The baseline is --baseline (core always passes the first run of runs.yaml). Without it, the
+first run id in name order is used (CONTRACTS A5). Runs keep one colour throughout the report:
+the baseline first, then the other runs in the order they are first seen.
+
+Round-2 sections (CONTRACTS section 8) are computed here when their inputs sit beside each
+bundle.json: run-vs-run concordance from isoforms.bed (+ tables/isoforms.tsv), and CPM
+agreement between runs from counts.tsv. Per-bundle sections (quant, productivity) and the
+compute block are passed through.
 """
 
 from __future__ import annotations
@@ -23,6 +29,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flair_eval_lib import __version__  # noqa: E402
+from flair_eval_lib.concordance import (  # noqa: E402
+    RunModels, concordance, quant_agreement, read_counts, read_gene_names)
 from flair_eval_lib.schema import load_schema, validate  # noqa: E402
 
 ASSET_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -107,7 +115,45 @@ def load_bundles(files):
             chosen[key] = (b, f)
         elif _created_key(b) > _created_key(chosen[key][0]):
             chosen[key] = (b, f)
-    return [chosen[k][0] for k in order]
+    return [chosen[k] for k in order]
+
+
+def sample_sections(entries, baseline):
+    """Section-8 data computed across the runs of each sample: {sample: {...}}."""
+    out = {}
+    samples = []
+    for b, _ in entries:
+        if b["sample"] not in samples:
+            samples.append(b["sample"])
+    for sample in samples:
+        rows = [(b, os.path.dirname(f)) for b, f in entries if b["sample"] == sample]
+        names = {}
+        models = []
+        cpm = {}
+        for b, d in rows:
+            names.update(read_gene_names(d))
+            try:
+                m = RunModels.from_bundle_dir(b["run_id"], d)
+            except (ValueError, OSError) as e:
+                print(f"build_report.py: warning: {d}: concordance skipped ({e})", file=sys.stderr)
+                m = None
+            models.append(m)
+            counts = os.path.join(d, "counts.tsv")
+            if m is not None and os.path.exists(counts):
+                try:
+                    cpm[b["run_id"]] = read_counts(counts)
+                except (ValueError, OSError) as e:
+                    print(f"build_report.py: warning: {counts}: skipped ({e})", file=sys.stderr)
+        entry = {}
+        conc = concordance(models, baseline, names)
+        if conc:
+            entry["concordance"] = conc
+        quant = quant_agreement(models, cpm, baseline)
+        if quant:
+            entry["quant"] = quant
+        if entry:
+            out[sample] = entry
+    return out
 
 
 def slim(b):
@@ -120,25 +166,30 @@ def slim(b):
     return out
 
 
-def report_data(bundles, title, baseline=None):
-    runs, samples = [], []
+def report_data(entries, title, baseline=None):
+    bundles = [b for b, _ in entries]
+    seen, samples = [], []
     for b in bundles:
-        if b["run_id"] not in runs:
-            runs.append(b["run_id"])
+        if b["run_id"] not in seen:
+            seen.append(b["run_id"])
         if b["sample"] not in samples:
             samples.append(b["sample"])
-    if baseline is not None and baseline not in runs:
+    if baseline is not None and baseline not in seen:
         raise ReportError(f"--baseline {baseline!r} is not a run in these bundles "
-                          f"(runs: {', '.join(runs)})")
+                          f"(runs: {', '.join(seen)})")
+    if baseline is None:
+        baseline = sorted(seen)[0]          # A5: name order only when no baseline is given
+    runs = [baseline] + [r for r in seen if r != baseline]
     ordered = sorted(bundles, key=lambda b: (samples.index(b["sample"]), runs.index(b["run_id"])))
     return {
         "title": title,
         "generated": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
         "tool_version": __version__,
-        "baseline": baseline or runs[0],
+        "baseline": baseline,
         "runs": runs,
         "samples": samples,
         "bundles": [slim(b) for b in ordered],
+        "by_sample": sample_sections(entries, baseline),
     }
 
 
@@ -163,8 +214,8 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     try:
         files = find_bundle_files(args.bundles)
-        bundles = load_bundles(files)
-        data = report_data(bundles, args.title, args.baseline)
+        entries = load_bundles(files)
+        data = report_data(entries, args.title, args.baseline)
         page = render_html(data)
     except ReportError as e:
         print(f"build_report.py: error: {e}", file=sys.stderr)
@@ -173,7 +224,7 @@ def main(argv=None) -> int:
     os.makedirs(out_dir, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(page)
-    print(f"build_report.py: {len(bundles)} bundles ({len(data['runs'])} runs, "
+    print(f"build_report.py: {len(entries)} bundles ({len(data['runs'])} runs, "
           f"{len(data['samples'])} samples) -> {args.out} "
           f"({os.path.getsize(args.out) / 1024:.0f} KB)", file=sys.stderr)
     return 0
