@@ -103,7 +103,7 @@ select {
 
 /* ---------- run key (sticky) */
 .runbar {
-  position: sticky; top: 0; z-index: 5; background: var(--page);
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--page);
   border-top: 1px solid var(--grid); border-bottom: 1px solid var(--grid); padding: 10px 0;
   display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center;
 }
