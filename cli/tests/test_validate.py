@@ -39,7 +39,8 @@ def test_duplicate_samples_and_header(sample):
                                                                 "gtf", "extra"])
     assert codes(issues) == [(("samples", 1, "sample"), "duplicate"),
                              (("samples", "header", "extra"), "unknown_key")]
-    assert "already used by sample 1" in [i for i in issues if i.code == "duplicate"][0].message
+    assert "used by both sample 1 and sample 2; give each sample its own name" in \
+        [i for i in issues if i.code == "duplicate"][0].message
     assert codes(V.validate_samples([])) == [(("samples",), "min_items")]
 
 
@@ -103,6 +104,19 @@ def test_check_paths(tmp_path, monkeypatch):
     (tmp_path / "x.bam.bai").write_text("")
     assert codes(V.check_paths(rows)) == [(("samples", 0, "gtf"), "missing_file")]
     assert all(i.level == "warning" for i in V.check_paths(rows))
+
+
+def test_relative_paths_next_to_csv_first(tmp_path, monkeypatch):
+    cfg, launch = tmp_path / "cfg", tmp_path / "launch"
+    cfg.mkdir()
+    launch.mkdir()
+    monkeypatch.chdir(launch)
+    (cfg / "g.fa").write_text("")
+    (launch / "a.gtf").write_text("")
+    (cfg / "samples.csv").write_text("sample,reads,genome,gtf\ns,r.fq,g.fa,a.gtf\n")
+    issues = V.check_files(cfg / "samples.csv", None)
+    assert codes(issues) == [(("samples", 0, "reads"), "missing_file")]
+    assert "looked next to samples.csv and in this folder" in issues[0].message
 
 
 def test_check_files(tmp_path):

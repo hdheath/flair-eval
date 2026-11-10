@@ -21,6 +21,7 @@ def scripted(answers):
 
 def test_two_samples_two_versions_plus_settings_run():
     w, prompts, said = scripted([
+        "n",                                                                         # test data?
         "/data/HG002.fq.gz", "", "/ref/hg38.fa", "/ref/gencode.gtf", "pacbio", "",  # sample 1
         "y",
         "/data/s2.bam", "", "", "", "ont", "dRNA",                                  # sample 2
@@ -46,7 +47,7 @@ def test_two_samples_two_versions_plus_settings_run():
 
 def test_reasks_on_bad_answers():
     w, prompts, said = scripted([
-        "/d/r.fq", "bad name", "ok", "", "g.fa", "a.gtf", "nanopore", "", "", "n",
+        "n", "/d/r.fq", "bad name", "ok", "", "g.fa", "a.gtf", "nanopore", "", "", "n",
         "master", "3.0.1", "--support 10", "n",
     ])
     samples, runs = w.run()
@@ -60,7 +61,7 @@ def test_reasks_on_bad_answers():
 
 
 def test_duplicate_run_id_rejected():
-    w, _, said = scripted(["r.fq", "", "g", "a", "", "", "n", "3.0.1", "", "y", "3.0.1", "1",
+    w, _, said = scripted(["n", "r.fq", "", "g", "a", "", "", "n", "3.0.1", "", "y", "3.0.1", "1",
                            "flair-3.0.1", "second", "", "n"])
     _, runs = w.run()
     assert [r["id"] for r in runs] == ["flair-3.0.1", "second"]
@@ -68,7 +69,7 @@ def test_duplicate_run_id_rejected():
 
 
 def test_eof_aborts():
-    w, _, _ = scripted(["r.fq"])
+    w, _, _ = scripted(["n", "r.fq"])
     with pytest.raises(Abort):
         w.run()
 
@@ -80,3 +81,24 @@ def test_write_configs(tmp_path, sample, two_runs):
     with pytest.raises(FileExistsError):
         write_configs(tmp_path / "cfg", [sample], two_runs)
     write_configs(tmp_path / "cfg", [sample], two_runs, force=True)
+
+
+def test_test_data_shortcut():
+    w, _, _ = scripted(["y"])
+    assert w.run() is None
+
+
+def test_platform_and_library_defaults_from_file_name():
+    from flair_eval.wizard import guess_library, guess_platform
+    assert guess_platform("/d/WTC11_ONT_cDNA.fq.gz") == "ont"
+    assert guess_platform("/d/sample.hifi_reads.bam") == "pacbio"
+    assert guess_platform("/d/montana.fq") == ""
+    assert guess_library("/d/WTC11_ONT_cDNA.fq.gz") == "cDNA"
+    assert guess_library("/d/x_dRNA.fastq") == "dRNA"
+    w, _, _ = scripted(["n", "/d/a549_nanopore_drna.fq.gz", "", "g", "a", "", "", "n",
+                        "3.0.1", "", "n"])
+    samples, _ = w.run()
+    assert samples[0]["platform"] == "ont" and samples[0]["library"] == "dRNA"
+    w, _, _ = scripted(["n", "/d/a549_nanopore.fq.gz", "", "g", "a", "-", "", "n", "3.0.1", "",
+                        "n"])
+    assert "platform" not in w.run()[0][0]

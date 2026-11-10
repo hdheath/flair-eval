@@ -367,8 +367,9 @@
       var v = isObj(it) ? it[key] : undefined;
       if (typeof v !== "string") return;
       if (has(first, v)) {
-        out.push(issue([prefix, i, key], "duplicate", what + " " + repr(v) + " is already used by " +
-          prefix.slice(0, -1) + " " + (first[v] + 1)));
+        var one = prefix.slice(0, -1), noun = what.split(" ").pop();
+        out.push(issue([prefix, i, key], "duplicate", what + " " + repr(v) + " is used by both " + one + " " +
+          (first[v] + 1) + " and " + one + " " + (i + 1) + "; give each " + one + " its own " + noun));
       } else first[v] = i;
     });
     return out;

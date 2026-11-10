@@ -24,7 +24,7 @@
       preset: "default", args: "", label: "", tags: "", quantify: true, productivity: true, own_align: false };
   }
   function defaultOpts() {
-    return { outdir: "", profile: "", ref: "", report_title: "", baseline: "", align_flair: "", regions: "",
+    return { outdir: "", executor: "local", software: "conda", profile: "", ref: "", report_title: "", baseline: "", align_flair: "", regions: "",
       bundles: "", env_cache: "", resume: false, prefer_files: false };
   }
   function exampleState() {
@@ -123,7 +123,8 @@
     var o = state.opts;
     var ids = runs.map(function (r) { return r.id; });
     var baseline = o.baseline && ids.indexOf(o.baseline) > 0 ? o.baseline : null; // first run is the default
-    return { ref: o.ref.trim(), profile: o.profile.trim(), outdir: o.outdir.trim(), resume: o.resume,
+    var profile = o.profile.trim() || [o.executor, o.software].filter(Boolean).join(",");
+    return { ref: o.ref.trim(), profile: profile, outdir: o.outdir.trim(), resume: o.resume,
       prefer_files: o.prefer_files,
       params: { baseline: baseline, report_title: o.report_title.trim(), align_flair: o.align_flair.trim(),
         regions: o.regions.trim(), bundles: o.bundles.trim(), env_cache: o.env_cache.trim() } };
@@ -173,7 +174,11 @@
     return p[0] === "samples" ? "Samples" : "Runs";
   }
   function collectIssues(samples, runs) {
-    var list = FE.validateSamples(samples).concat(FE.validateRuns({ runs: runs }));
+    var list = FE.validateSamples(samples).filter(function (x) {
+      // "fill in the sample name" adds nothing while the name still comes from an empty path
+      var s = typeof x.path[1] === "number" ? state.samples[x.path[1]] : null;
+      return !(x.code === "required" && x.path[2] === "sample" && s && s.nameAuto && !s.path.trim());
+    }).concat(FE.validateRuns({ runs: runs }));
     state.runs.forEach(function (r, i) {
       var bad = parseTags(r.tags).bad;
       if (bad.length) list.push({ path: ["runs", i, "tags"], code: "tag_format", level: "error",
@@ -284,14 +289,18 @@
           ]),
           textField({ key: k + "path", label: s.kind === "bam" ? "BAM file (sorted, with .bai next to it)" : "Reads file (.fq, .fa, .gz is fine)",
             mono: true, wide: true, value: s.path, placeholder: s.kind === "bam" ? "/data/HG002.bam" : "/data/HG002.fq.gz",
-            set: function (v) { s.path = v; } }),
-          nameInput,
-          selectField({ key: k + "platform", label: "Platform", value: s.platform,
-            options: [["", "Not set"], ["pacbio", "PacBio"], ["ont", "Oxford Nanopore"]], set: function (v) { s.platform = v; } }),
+            set: function (v) { s.path = v; } })
+        ]),
+        h("div", { class: "grid pair" }, [
           textField({ key: k + "genome", label: "Genome FASTA", mono: true, value: s.genome, placeholder: "/ref/GRCh38.fa",
             set: function (v) { s.genome = v; } }),
           textField({ key: k + "gtf", label: "Reference annotation GTF", mono: true, value: s.gtf, placeholder: "/ref/gencode.gtf",
-            set: function (v) { s.gtf = v; } }),
+            set: function (v) { s.gtf = v; } })
+        ]),
+        h("div", { class: "grid" }, [
+          nameInput,
+          selectField({ key: k + "platform", label: "Platform", value: s.platform,
+            options: [["", "Not set"], ["pacbio", "PacBio"], ["ont", "Oxford Nanopore"]], set: function (v) { s.platform = v; } }),
           selectField({ key: k + "library", label: "Library", value: s.library,
             options: [["", "Not set"], ["cDNA", "cDNA"], ["dRNA", "Direct RNA"]], set: function (v) { s.library = v; } })
         ]),
@@ -406,7 +415,7 @@
     Array.prototype.forEach.call(document.querySelectorAll("[data-opt]"), function (el) {
       var k = el.getAttribute("data-opt");
       if (el.type === "checkbox") el.checked = !!state.opts[k];
-      else if (el.tagName !== "SELECT") el.value = state.opts[k] || "";
+      else if (el.id !== "o-baseline") el.value = state.opts[k] || "";
     });
   }
   function renderBaseline(ids) {
@@ -574,6 +583,14 @@
       else fail();
     } catch (e) { fail(); }
   }
+  function copySnip(text, el, btn) {
+    var flash = function (msg) { btn.textContent = msg; setTimeout(function () { btn.textContent = "Copy"; }, 1500); };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () { flash("Copied"); }, function () { selectText(el); flash("Ctrl+C"); });
+      } else { selectText(el); flash("Ctrl+C"); }
+    } catch (e) { selectText(el); flash("Ctrl+C"); }
+  }
   function download(name, text) {
     try {
       var blob = new Blob([text], { type: name.slice(-4) === ".csv" ? "text/csv" : "text/yaml" });
@@ -620,9 +637,25 @@
     var tab = state.tab === "runs" ? "runs" : "samples";
     download(tab === "runs" ? "runs.yaml" : "samples.csv", lastFiles[tab]);
   });
+  $("dl-both").addEventListener("click", function () {
+    download("samples.csv", lastFiles.samples);
+    setTimeout(function () { download("runs.yaml", lastFiles.runs); }, 400);
+  });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-copy]"), function (b) {
+    b.addEventListener("click", function () {
+      var el = $(b.getAttribute("data-copy"));
+      copySnip(el.textContent, el, b);
+    });
+  });
   Array.prototype.forEach.call(document.querySelectorAll("[data-tab]"), function (b) {
     b.addEventListener("click", function () { state.tab = b.getAttribute("data-tab"); renderFile(); save(); });
   });
+
+  // On GitHub Pages the builder sits at /builder/ next to the landing page and demo report.
+  if (/^https?:$/.test(location.protocol) && /\/builder\/(index\.html)?$/.test(location.pathname)) {
+    $("home-link").hidden = false;
+    $("demo-link").hidden = false;
+  }
 
   renderAll();
 })();

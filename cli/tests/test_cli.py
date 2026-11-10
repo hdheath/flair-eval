@@ -9,6 +9,12 @@ from flair_eval.config import runs_yaml, samples_csv
 from .test_validate import BUNDLE
 
 
+@pytest.fixture(autouse=True)
+def fixed_profile(monkeypatch):
+    """Profile detection depends on the machine; pin it."""
+    monkeypatch.setattr(cli.doctor, "suggest_profile", lambda which=None: "local,conda")
+
+
 @pytest.fixture
 def here(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -53,7 +59,7 @@ def test_init_errors(here, capsys):
 
 
 def test_init_interactive(here, monkeypatch, capsys):
-    answers = iter(["r.fq.gz", "", "g.fa", "a.gtf", "", "", "n", "3.0.1", "", "n"])
+    answers = iter(["n", "r.fq.gz", "", "g.fa", "a.gtf", "", "", "n", "3.0.1", "", "n"])
     monkeypatch.setattr("builtins.input", lambda p="": next(answers))
     assert cli.main(["init", "--dir", "cfg"]) == 0
     assert (here / "cfg" / "samples.csv").exists()
@@ -165,3 +171,42 @@ def test_report(here, capsys):
 def test_extra_args_only_for_run_and_report(here):
     with pytest.raises(SystemExit):
         cli.main(["check", "--", "-x"])
+
+
+def test_init_test_data_choice(here, monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda p="": "y")
+    assert cli.main(["init"]) == 0
+    assert "flair-eval run --test" in capsys.readouterr().out
+    assert not (here / "samples.csv").exists()
+
+
+def test_auto_profile_and_default_outdir(here, capsys, sample, two_runs):
+    (here / "samples.csv").write_text(samples_csv([dict(sample, reads="r.fq.gz",
+                                                        genome="g.fa", gtf="a.gtf")]))
+    (here / "runs.yaml").write_text(runs_yaml(two_runs))
+    assert cli.main(["run", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "Using -profile local,conda (picked for this machine" in out
+    assert "-profile local,conda" in lines_of(out)
+    assert "--outdir ./flair-eval-results" in lines_of(out)
+
+
+def test_run_test_data(here, capsys):
+    assert cli.main(["run", "--test", "--dry-run"]) == 0
+    got = lines_of(capsys.readouterr().out)
+    assert "-profile test,local,conda" in got and "--outdir ./flair-eval-test" in got
+    assert not any(x.startswith("--input") or x.startswith("--runs") for x in got)
+    assert cli.main(["run", "--test", "--profile", "slurm", "--dry-run"]) == 0
+    assert "-profile test,slurm" in lines_of(capsys.readouterr().out)
+    assert cli.main(["run", "--test", "--flair", "3.0.1", "--dry-run"]) == 2
+
+
+def test_doctor_command(here, monkeypatch, capsys):
+    from flair_eval import doctor
+    monkeypatch.setattr(doctor, "run_checks", lambda outdir=None: [
+        doctor.Check("ok", "Java", "version 17"),
+        doctor.Check("fail", "Nextflow", "not found", "conda install -c bioconda nextflow")])
+    assert cli.main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "FAIL  Nextflow: not found" in out and "conda install -c bioconda nextflow" in out
+    assert "-profile local,conda" in out
