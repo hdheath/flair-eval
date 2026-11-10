@@ -123,3 +123,11 @@ def test_nextflow_reads_flair_args_value(tmp_path):
     argv = ["nextflow", "-q", "run", str(nf)] + opt("--flair_args", "--stringent --check_splice")
     out = subprocess.run(argv, capture_output=True, text=True, cwd=tmp_path, timeout=300).stdout
     assert "ARGS=[--stringent --check_splice]" in out
+
+
+def test_local_pipeline_has_no_revision(sample, two_runs):
+    c = build_command([sample], two_runs, Options(pipeline="/home/me/flair-eval", ref="9.9"))
+    assert c.argv[:4] == ["nextflow", "run", "/home/me/flair-eval", "--reads"]
+    assert format_command(c.argv).split(" \\\n")[0] == "nextflow run /home/me/flair-eval"
+    c = build_command([sample], two_runs, Options(pipeline="me/fork", ref="dev"))
+    assert c.argv[:5] == ["nextflow", "run", "me/fork", "-r", "dev"]

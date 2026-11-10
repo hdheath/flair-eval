@@ -48,6 +48,14 @@
     align_flair: "3.0.1", regions: null, bundles: null, env_cache: null
   };
   var PARAM_ORDER = ["bundles", "baseline", "report_title", "align_flair", "regions", "env_cache"];
+  /* nextflow_schema.json params the page never writes, and why (checked by
+   * cli/tests/test_pipeline_params.py), and the page's launch options that are Nextflow
+   * options rather than pipeline params. */
+  var NOT_EXPOSED = {
+    help: "Nextflow prints the pipeline help itself",
+    report_only: "the page sets up new runs; report-only mode is `flair-eval report`"
+  };
+  var LAUNCH_OPTIONS = ["executor", "software", "profile", "ref", "resume", "prefer_files"];
 
   function has(o, k) { return o !== null && typeof o === "object" && Object.prototype.hasOwnProperty.call(o, k); }
   function isObj(v) { return v !== null && typeof v === "object" && !Array.isArray(v); }
@@ -505,8 +513,9 @@
   var VALUE_FLAGS = ["-r", "-profile", "-work-dir"];
   function formatCommand(argv) {
     var qd = argv.map(quote);
-    var lines = [qd.slice(0, 5).join(" ")];
-    var i = 5;
+    var n = argv.length > 4 && argv[3] === "-r" ? 5 : 3;
+    var lines = [qd.slice(0, n).join(" ")];
+    var i = n;
     while (i < argv.length) {
       var a = argv[i];
       var takes = NO_VALUE.indexOf(a) < 0 && a.indexOf("=") < 0 && (a.indexOf("--") === 0 || VALUE_FLAGS.indexOf(a) >= 0);
@@ -521,6 +530,7 @@
     PIPELINE: PIPELINE, DEFAULT_REF: DEFAULT_REF, DEFAULT_GIT_URL: DEFAULT_GIT_URL, ID_RE: ID_RE,
     NAME_HINT: NAME_HINT, PRESETS: PRESETS, SAMPLE_COLUMNS: SAMPLE_COLUMNS, TRACK_COLUMNS: TRACK_COLUMNS,
     ALL_SAMPLE_COLUMNS: ALL_SAMPLE_COLUMNS, PARAM_DEFAULTS: PARAM_DEFAULTS, RUN_DEFAULTS: RUN_DEFAULTS,
+    PARAM_ORDER: PARAM_ORDER, NOT_EXPOSED: NOT_EXPOSED, LAUNCH_OPTIONS: LAUNCH_OPTIONS,
     TokenError: TokenError, parseToken: parseToken, parseTokens: parseTokens,
     tokenForFlair: tokenForFlair, tokenForRun: tokenForRun,
     defaultSampleName: defaultSampleName, cleanSample: cleanSample, samplesCsv: samplesCsv, runsYaml: runsYaml,

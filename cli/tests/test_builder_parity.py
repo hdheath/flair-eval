@@ -72,8 +72,10 @@ COMMANDS = [
     cmd([S1], [dict(R1, transcriptome_args="--stringent --check_splice"),
                dict(R2, transcriptome_args="--stringent --check_splice")],
         ref="2.0.0", profile="slurm", outdir="/big/out dir", resume=True, work_dir="/w",
-        params={"baseline": "flair-dev", "report_title": "It's mine", "align_flair": "3.0.1",
-                "regions": "/r.bed", "bundles": "", "env_cache": "/cache"}),
+        params={"baseline": "flair-dev", "report_title": "It's mine", "align_flair": "2.2.0",
+                "regions": "/r.bed", "bundles": "/old/bundles,/older/bundles",
+                "env_cache": "/cache"}),
+    cmd([S1], [R1, R2], params={"align_flair": "3.0.1", "bundles": ""}),  # defaults left off
     cmd([{"sample": "s1", "bam": "/b/s1.bam", "genome": "g", "gtf": "a", "platform": "pacbio",
           "library": "cDNA"}], [R1]),
     cmd([S1, dict(S1, sample="s2", reads='/d/a,"b".fq')], [R1, R2]),
@@ -132,12 +134,12 @@ def python_side():
     }
 
 
-@pytest.fixture(scope="module")
-def js(repo):
+def run_js(repo):
+    """Run logic.js on all cases under Node; None when Node or the page is not available."""
     node = shutil.which("node") or shutil.which("nodejs")
     logic = repo / "frontend" / "builder" / "logic.js"
     if node is None or not logic.exists():
-        pytest.skip("node or frontend/builder not available")
+        return None
     cases = {"tokens": TOKENS, "token_lists": TOKEN_LISTS, "flairs": FLAIRS, "paths": PATHS,
              "sample_sets": SAMPLE_SETS, "run_docs": RUN_DOCS, "commands": COMMANDS}
     p = subprocess.run([node, str(repo / "cli" / "tests" / "js_runner.js"), str(logic),
@@ -145,6 +147,14 @@ def js(repo):
                        input=json.dumps(cases), capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
+
+
+@pytest.fixture(scope="module")
+def js(repo):
+    out = run_js(repo)
+    if out is None:
+        pytest.skip("node or frontend/builder not available")
+    return out
 
 
 @pytest.fixture(scope="module")

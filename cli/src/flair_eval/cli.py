@@ -45,6 +45,9 @@ def _quick_sample_args(p: argparse.ArgumentParser) -> None:
 
 def _launch_args(p: argparse.ArgumentParser) -> None:
     g = p.add_argument_group("launch")
+    g.add_argument("--pipeline", default=PIPELINE,
+                   help=f"pipeline to run: a GitHub repo (default {PIPELINE}) or a local "
+                        "checkout, e.g. --pipeline ~/flair-eval (then -r is not used)")
     g.add_argument("-r", "--ref", default=DEFAULT_REF,
                    help=f"pipeline revision: branch, tag or SHA (default {DEFAULT_REF})")
     g.add_argument("--profile", "-profile",
@@ -159,7 +162,7 @@ def _options(a, extra: list) -> Options:
               ("bundles", "baseline", "report_title", "align_flair", "regions", "env_cache")}
     return Options(ref=a.ref, profile=a.profile, outdir=a.outdir or DEFAULT_OUTDIR,
                    params=params,
-                   resume=a.resume, work_dir=a.work_dir, extra=extra,
+                   resume=a.resume, work_dir=a.work_dir, extra=extra, pipeline=a.pipeline,
                    samples_path=getattr(a, "samples", None) or "samples.csv",
                    runs_path=getattr(a, "runs", None) or "runs.yaml")
 
@@ -173,11 +176,12 @@ def _auto_profile(a, extra: str = "") -> None:
     found = doctor.suggest_profile()
     a.profile = ",".join(p for p in (extra, found) if p) or None
     if found:
-        print(f"Using -profile {a.profile} (picked for this machine; set --profile to change).")
+        print(f"Using -profile {a.profile} (picked for this machine; set --profile to change).",
+              flush=True)
 
 
 def _launch(cmd, a) -> int:
-    print("Command:\n" + cmd.pretty() + "\n")
+    print("Command:\n" + cmd.pretty() + "\n", flush=True)  # before nextflow's own output
     if a.dry_run:
         return 0
     if not a.skip_checks:
@@ -381,7 +385,7 @@ def cmd_report(a, extra: list) -> int:
               file=sys.stderr)
     _auto_profile(a)
     opts = Options(ref=a.ref, profile=a.profile, outdir=a.outdir or DEFAULT_OUTDIR,
-                   resume=a.resume,
+                   resume=a.resume, pipeline=a.pipeline,
                    work_dir=a.work_dir, extra=extra,
                    params={"baseline": a.baseline, "report_title": a.report_title})
     return _launch(report_command(a.bundles, opts), a)

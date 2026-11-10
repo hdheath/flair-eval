@@ -210,3 +210,10 @@ def test_doctor_command(here, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "FAIL  Nextflow: not found" in out and "conda install -c bioconda nextflow" in out
     assert "-profile local,conda" in out
+
+
+def test_run_local_checkout(here, capsys):
+    assert cli.main(["run", "--pipeline", "./flair-eval", "--reads", "r.fq.gz", "--genome", "g.fa",
+                     "--gtf", "a.gtf", "--flair", "3.0.1", "--dry-run", "--", "-stub"]) == 0
+    got = lines_of(capsys.readouterr().out)
+    assert "nextflow run ./flair-eval" in got and "-stub" in got
