@@ -2,6 +2,8 @@
  * ASSEMBLE: flair transcriptome (>=3) or correct+collapse (2.x) through the adapter, inside the
  * run's FLAIR env. Writes the normalised files of CONTRACTS section 2 into assemble/.
  */
+include { adapterOptFlags } from '../adapter_opts'
+
 process ASSEMBLE {
     tag "${meta.id}"
     label 'process_high'
@@ -19,17 +21,20 @@ process ASSEMBLE {
     script:
     def prefix = flair_env.conda_prefix
     def args   = meta.run.transcriptome_args ?: ''
+    def opts   = adapterOptFlags('assemble', [['--sample', meta.sample], ['--platform', meta.platform], ['--library', meta.library]])
     """
     ${prefix ? "export PATH=\"${prefix}/bin:\$PATH\"" : ''}
+    ${opts}
     flair_adapter.py assemble \\
         --bam ${bam} \\
         ${reads ? "--reads ${reads}" : ''} \\
         --genome ${genome} \\
         --gtf ${gtf} \\
-        --args '${args.replace("'", "'\\''")}' \\
+        --args='${args.replace("'", "'\\''")}' \\
         --threads ${task.cpus} \\
         ${regions ? "--regions ${regions}" : ''} \\
-        --out assemble
+        --out assemble \\
+        \${OPT[@]+"\${OPT[@]}"}
 
     for f in isoforms.bed isoforms.gtf isoforms.fa; do
         if [ ! -s "assemble/\$f" ]; then

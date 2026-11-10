@@ -38,7 +38,8 @@ bundles/<sample>/<run_id>/
 ```
 
 `<step>` is `assemble`, `quantify`, `productivity`, `eval`, or `align` for runs with
-`own_align: true`.
+`own_align: true`. A FLAIR version that cannot run a step leaves `adapter_<step>_skipped.json`
+instead of that step's table.
 
 ### What fills `bundle.json`
 
@@ -50,14 +51,14 @@ pipeline knows:
 |---|---|
 | `pipeline.version` / `pipeline.commit` | the pipeline manifest version and git commit (null for a local checkout) |
 | `pipeline.created` | when the bundle was written (UTC). The newest bundle wins when the report sees the same (sample, run_id) twice |
-| `inputs` | absolute paths of `genome`, `gtf`, `reads`, `bam`, `regions`, plus `platform` and `library` |
+| `inputs` | absolute paths of the original `genome`, `gtf`, `reads`, `bam`, `regions`, plus `platform`, `library` and `reference_cut_to_regions` (below); other keys written by structure_metrics are kept |
 | `label`, `tags` | from the run, when structure_metrics left them empty |
 | `compute` | from this job's Nextflow task traces (below) |
 
 ### `compute` and `provenance/trace.tsv`
 
-`compute` is the cost of the FLAIR run itself: the job's `align` (own_align runs only),
-`assemble`, `quantify` and `productivity` tasks. The shared per-sample alignment and the
+`compute` is the cost of the FLAIR run itself: the job's `assemble`, `quantify` and
+`productivity` tasks (CONTRACTS section 7, A12). Alignment (shared or `own_align`) and the
 evaluation step are not counted, so runs on the same sample compare fairly.
 
 | field | meaning |
@@ -69,8 +70,39 @@ evaluation step are not counted, so runs on the same sample compare fairly.
 Values come from each task's `.command.trace`, which Nextflow writes because `nextflow.config`
 turns tracing on. A value is `null` when a trace could not be read.
 
-`trace.tsv` has one row per task of the job, with columns `step, counted, realtime_ms, pct_cpu,
-peak_rss_bytes, peak_vmem_bytes, rchar, wchar`.
+`trace.tsv` has one row per task of the job (all steps, including `align` for own_align runs and
+the evaluation), with the columns of CONTRACTS section 7, A15, in raw units:
+
+| column | meaning |
+|---|---|
+| `task_id` | the task's work-directory hash, as Nextflow prints it (`ab/cdef12`) |
+| `name` | process and tag, e.g. `FLAIR_EVAL:ASSEMBLE (sample/run)` |
+| `status`, `exit` | `COMPLETED` / `FAILED` and the exit code |
+| `realtime`, `duration` | ms; duration runs from task submission to completion |
+| `%cpu` | percent of one CPU |
+| `peak_rss`, `rss` | bytes |
+
+### `sections`
+
+BUNDLE adds two report sections (CONTRACTS section 8) when their files exist:
+
+| key | from | content |
+|---|---|---|
+| `sections.quant` | `counts.tsv` | `isoforms_quantified` (count > 0), `reads_assigned` (Σ count), `cpm_hist` |
+| `sections.productivity` | `productivity.tsv` | `class_counts`: isoforms per productivity class |
+
+`cpm_hist` uses fixed edges `0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000`
+over all isoforms in `counts.tsv`; like the other histograms the last bin is open-ended, so
+`len(counts) == len(edges)`.
+
+### `--regions` and the reference FLAIR sees
+
+With `--regions`, a PREP_REFERENCE step copies the genome and GTF cut down to the chromosomes
+named in the BED (whole chromosomes, so all coordinates stay the same). Assembly, quantify,
+productivity and the structure evaluation use that copy; the shared alignment still uses the
+full genome. This keeps a small test region fast: on the first real run some FLAIR builds
+otherwise re-read a 3 GB genome over shared storage for every region, or spent 20+ minutes
+building whole-genome annotation indexes. `inputs.reference_cut_to_regions` records it.
 
 ## Report
 

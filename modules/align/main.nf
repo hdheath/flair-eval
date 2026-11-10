@@ -3,6 +3,8 @@
  * Used twice: ALIGN_SHARED (once per sample, FLAIR = params.align_flair) and
  * ALIGN_OWN (per job, for runs with own_align: true, in that run's env).
  */
+include { adapterOptFlags } from '../adapter_opts'
+
 process ALIGN {
     tag "${meta.id}"
     label 'process_high'
@@ -19,14 +21,17 @@ process ALIGN {
 
     script:
     def prefix = flair_env.conda_prefix
+    def opts = adapterOptFlags('align', [['--platform', meta.platform], ['--library', meta.library]])
     """
     ${prefix ? "export PATH=\"${prefix}/bin:\$PATH\"" : ''}
+    ${opts}
     flair_adapter.py align \\
         --reads ${reads} \\
         --genome ${genome} \\
         --gtf ${gtf} \\
         --threads ${task.cpus} \\
-        --out align
+        --out align \\
+        \${OPT[@]+"\${OPT[@]}"}
     """
 
     stub:

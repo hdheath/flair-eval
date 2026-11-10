@@ -1,18 +1,18 @@
 // Process tests with a fake adapter on PATH (via conda_prefix), checking what core passes to
-// bin/flair_adapter.py (docs/CONTRACTS.md section 2).
+// bin/flair_adapter.py (CONTRACTS section 2 and section 7 A6-A9).
 nextflow_process {
 
     name "ASSEMBLE passes contract arguments"
     script "modules/assemble/main.nf"
     process "ASSEMBLE"
 
-    test("run args with quotes, reads and regions reach the adapter") {
+    test("run args with quotes, reads, regions, sample, platform and library reach the adapter") {
         when {
             process {
                 """
                 def d = "${projectDir}/tests/nf-test/inputs"
                 input[0] = [
-                    [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', transcriptome_args: "--stringent --note it's here"]],
+                    [id: 's/r', sample: 's', run_id: 'r', platform: 'ont', library: 'dRNA', run: [id: 'r', transcriptome_args: "--stringent --note it's here"]],
                     file("\${d}/sampleC.bam"), file("\${d}/sampleC.bam.bai"), file("\${d}/sampleA.fastq"),
                     file("\${d}/genome.fa"), file("\${d}/annotation.gtf"),
                     [conda_prefix: "\${d}/fake_flair_prefix", container: null],
@@ -23,25 +23,28 @@ nextflow_process {
         }
         then {
             assert process.success
-            def argv = path("${process.out.dir[0][1]}/argv.json").json
-            assert argv[0] == 'assemble'
-            def opt = { String k -> argv[argv.indexOf(k) + 1] }
-            assert opt('--args') == "--stringent --note it's here"
-            assert opt('--bam') == 'sampleC.bam'
-            assert opt('--reads') == 'sampleA.fastq'
-            assert opt('--regions') == 'regions.bed'
-            assert opt('--threads') ==~ /\d+/
-            assert opt('--out') == 'assemble'
+            def rec = path("${process.out.dir[0][1]}/argv.json").json
+            assert rec.argv[0] == 'assemble'
+            assert rec.argv.contains("--args=--stringent --note it's here")
+            assert rec.opts.args == "--stringent --note it's here"
+            assert rec.opts.bam == 'sampleC.bam'
+            assert rec.opts.reads == 'sampleA.fastq'
+            assert rec.opts.regions == 'regions.bed'
+            assert rec.opts.sample == 's'
+            assert rec.opts.platform == 'ont'
+            assert rec.opts.library == 'dRNA'
+            assert rec.opts.threads ==~ /\d+/
+            assert rec.opts.out == 'assemble'
         }
     }
 
-    test("BAM-only sample: no --reads, no --regions") {
+    test("BAM-only sample, no platform: no --reads, --regions, --platform or --library") {
         when {
             process {
                 """
                 def d = "${projectDir}/tests/nf-test/inputs"
                 input[0] = [
-                    [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', transcriptome_args: '']],
+                    [id: 's/r', sample: 's', run_id: 'r', platform: null, library: null, run: [id: 'r', transcriptome_args: '']],
                     file("\${d}/sampleC.bam"), file("\${d}/sampleC.bam.bai"), [],
                     file("\${d}/genome.fa"), file("\${d}/annotation.gtf"),
                     [conda_prefix: "\${d}/fake_flair_prefix", container: null],
@@ -52,10 +55,9 @@ nextflow_process {
         }
         then {
             assert process.success
-            def argv = path("${process.out.dir[0][1]}/argv.json").json
-            assert !argv.contains('--reads')
-            assert !argv.contains('--regions')
-            assert argv[argv.indexOf('--args') + 1] == ''
+            def rec = path("${process.out.dir[0][1]}/argv.json").json
+            ['reads', 'regions', 'platform', 'library'].each { k -> assert !rec.opts.containsKey(k) }
+            assert rec.opts.args == ''
         }
     }
 }

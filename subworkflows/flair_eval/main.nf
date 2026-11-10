@@ -2,6 +2,7 @@
  * FLAIR_EVAL: samples x runs -> one bundle per job (docs/DESIGN.md "Pipeline steps").
  *
  *   FLAIR_ENV           once per distinct FLAIR source, plus params.align_flair for ALIGN_SHARED
+ *   PREP_REFERENCE      with --regions: genome + GTF cut to the regions' chromosomes
  *   ALIGN_SHARED        once per sample without a BAM (pinned FLAIR); skipped when a BAM is given
  *   ALIGN_OWN           per job, for runs with own_align: true (that run's FLAIR)
  *   ASSEMBLE            per job
@@ -22,10 +23,15 @@ include { QUANTIFY                 } from '../../modules/quantify/main'
 include { PRODUCTIVITY             } from '../../modules/productivity/main'
 include { EVALUATE_STRUCTURE       } from '../../modules/evaluate_structure/main'
 include { BUNDLE                   } from '../../modules/bundle/main'
+include { PREP_REFERENCE           } from '../../modules/prep_reference/main'
 include { flairSourceKey; safeId   } from '../inputs/keys'
 
 // Steps whose task cost is counted in bundle.json "compute": the FLAIR run itself.
-def COUNTED_STEPS() { ['align', 'assemble', 'quantify', 'productivity'] }
+// CONTRACTS section 7, A12: assemble, quantify, productivity (not align, not evaluation).
+def COUNTED_STEPS() { ['assemble', 'quantify', 'productivity'] }
+
+// Trace row columns of provenance/trace.tsv (A15).
+def STEP_PROCESS() { [align: 'FLAIR_EVAL:ALIGN_OWN', assemble: 'FLAIR_EVAL:ASSEMBLE', quantify: 'FLAIR_EVAL:QUANTIFY', productivity: 'FLAIR_EVAL:PRODUCTIVITY', eval: 'FLAIR_EVAL:EVALUATE_STRUCTURE'] }
 
 workflow FLAIR_EVAL {
     take:
@@ -69,7 +75,7 @@ workflow FLAIR_EVAL {
     def jobs = []
     samples.each { s ->
         runs.each { r ->
-            jobs << [id: "${s.sample}/${r.id}".toString(), sample: s.sample, run_id: r.id, run: r]
+            jobs << [id: "${s.sample}/${r.id}".toString(), sample: s.sample, run_id: r.id, run: r, platform: s.platform, library: s.library]
         }
     }
     def J = jobs.collectEntries { j -> [(j.id): j] }
@@ -86,7 +92,7 @@ workflow FLAIR_EVAL {
         channel.fromList(sharedSamples)
             .map { s -> [alignKey, s] }
             .combine(ch_env, by: 0)
-            .map { _k, s, _json, env -> [[id: s.sample, sample: s.sample], s.reads, s.genome, s.gtf, env] }
+            .map { _k, s, _json, env -> [[id: s.sample, sample: s.sample, platform: s.platform, library: s.library], s.reads, s.genome, s.gtf, env] }
     )
     ch_sample_bam = ALIGN_SHARED.out.bam
         .map { m, bam, bai -> [m.sample, bam, bai] }
@@ -105,37 +111,61 @@ workflow FLAIR_EVAL {
         .map { _sname, id, bam, bai -> [id, bam, bai] }
         .mix(ALIGN_OWN.out.bam.map { j, bam, bai -> [j.id, bam, bai] })
 
-    // ---- assemble, quantify, productivity -----------------------------------------------------
+    // ---- reference used by the FLAIR steps ---------------------------------------------------
+    // With --regions, PREP_REFERENCE cuts genome + GTF to the chromosomes in the BED (same
+    // coordinates). Alignment above keeps the full genome.
     def regions = params.regions ? file(params.regions, checkIfExists: true) : []
+    def refs = samples.collect { s -> [refKey(s), s.genome, s.gtf] }.unique { r -> r[0] }
+    if (params.regions) {
+        PREP_REFERENCE(channel.fromList(refs), regions)
+        ch_ref = PREP_REFERENCE.out.ref.map { k, g, _fai, a -> [k, g, a] }
+    }
+    else {
+        ch_ref = channel.fromList(refs)
+    }
+    ch_job_ref = channel.fromList(jobs)
+        .map { j -> [refKey(S[j.sample]), j.id] }
+        .combine(ch_ref, by: 0)
+        .map { _k, id, g, a -> [id, g, a] }    // [id, genome, gtf]
 
+    // ---- assemble, quantify, productivity -----------------------------------------------------
     ASSEMBLE(
         ch_job_bam
             .join(ch_jobenv)
-            .map { id, bam, bai, _json, env ->
+            .join(ch_job_ref)
+            .map { id, bam, bai, _json, env, g, a ->
                 def j = J[id]
-                def s = S[j.sample]
-                [j, bam, bai, s.reads ?: [], s.genome, s.gtf, env]
+                [j, bam, bai, S[j.sample].reads ?: [], g, a, env]
             },
         regions
     )
     ch_asm = ASSEMBLE.out.dir
         .map { j, d -> [j.id, d] }
         .join(ch_jobenv)                       // [id, assemble_dir, flair_env.json, env]
+        .join(ch_job_bam)                      // + [bam, bai]
+        .join(ch_job_ref)                      // + [genome, gtf]
 
+    // A6/A7: QUANTIFY runs for every quantify: true run. It gets reads when the sample has them,
+    // plus the job's BAM, genome and isoforms; the adapter writes skipped.json if the FLAIR
+    // version needs something that is missing.
     QUANTIFY(
         ch_asm
-            .filter { id, _d, _json, _env -> J[id].run.quantify && S[J[id].sample].reads }
-            .map { id, d, _json, env -> [J[id], d, S[J[id].sample].reads, env] }
+            .filter { id, _d, _json, _env, _bam, _bai, _g, _a -> J[id].run.quantify }
+            .map { id, d, _json, env, bam, bai, g, _a -> [J[id], d, S[J[id].sample].reads ?: [], bam, bai, g, env] }
     )
     PRODUCTIVITY(
         ch_asm
-            .filter { id, _d, _json, _env -> J[id].run.productivity }
-            .map { id, d, _json, env -> [J[id], d, S[J[id].sample].genome, S[J[id].sample].gtf, env] }
+            .filter { id, _d, _json, _env, _bam, _bai, _g, _a -> J[id].run.productivity }
+            .map { id, d, _json, env, _bam, _bai, g, a -> [J[id], d, g, a, env] }
     )
 
     // ---- evaluate and bundle ------------------------------------------------------------------
+    // A13: always the genome (junction motifs); reads/BAM paths are recorded in bundle inputs.
     EVALUATE_STRUCTURE(
-        ch_asm.map { id, d, json, _env -> [J[id], d, S[J[id].sample].gtf, json] },
+        ch_asm.map { id, d, json, _env, _bam, _bai, g, a ->
+            def s = S[J[id].sample]
+            [J[id], d, a, g, json, [reads: s.reads?.toString(), bam: s.bam?.toString()]]
+        },
         regions
     )
 
@@ -146,7 +176,7 @@ workflow FLAIR_EVAL {
             ALIGN_OWN.out.dir.map { j, d -> [j.id, 'align', d] },
             EVALUATE_STRUCTURE.out.dir.map { j, d -> [j.id, 'eval', d] },
         )
-        .map { id, step, d -> [groupKey(id, nParts(J[id], S[J[id].sample])), [step: step, dir: d]] }
+        .map { id, step, d -> [groupKey(id, nParts(J[id])), [step: step, dir: d]] }
         .groupTuple()
         .map { gk, parts -> [gk.getGroupTarget().toString(), parts] }
         .join(ch_jobenv)
@@ -169,14 +199,17 @@ def bundleInfo(Map j, Map s, List parts) {
     def rows = parts.collect { p ->
         def t = readTaskTrace(p.dir)
         [
-            step           : p.step,
-            counted        : p.step in COUNTED_STEPS(),
-            realtime_ms    : t.realtime,
-            pct_cpu        : t.pct_cpu,
-            peak_rss_bytes : t.peak_rss,
-            peak_vmem_bytes: t.peak_vmem,
-            rchar          : t.rchar,
-            wchar          : t.wchar,
+            step       : p.step,
+            counted    : p.step in COUNTED_STEPS(),
+            task_id    : t.task_id,
+            name       : "${STEP_PROCESS()[p.step]} (${j.id})".toString(),
+            status     : t.exit == null ? 'UNKNOWN' : (t.exit == 0 ? 'COMPLETED' : 'FAILED'),
+            exit       : t.exit,
+            realtime   : t.realtime,
+            '%cpu'     : t.pct_cpu,
+            peak_rss   : t.peak_rss,
+            rss        : t.rss,
+            duration   : t.duration,
         ]
     }
     return [
@@ -192,6 +225,8 @@ def bundleInfo(Map j, Map s, List parts) {
             regions : params.regions ? file(params.regions).toString() : null,
             platform: s.platform,
             library : s.library,
+            // with --regions FLAIR saw PREP_REFERENCE's copy cut to these chromosomes
+            reference_cut_to_regions: params.regions ? true : false,
         ],
         pipeline: [version: workflow.manifest.version ?: null, commit: workflow.commitId ?: null],
         compute : computeFromTrace(rows.findAll { r -> r.counted }),
@@ -200,32 +235,40 @@ def bundleInfo(Map j, Map s, List parts) {
 }
 
 /*
- * Read <task workdir>/.command.trace (written by Nextflow when tracing is on; nextflow.config
- * turns it on). Returns a map of numbers, empty when the file is absent.
- * Units: realtime ms, pct_cpu percent, peak_rss/peak_vmem bytes.
+ * One task's numbers, read from its work dir (the step dir's parent):
+ *   .command.trace  realtime (ms), %cpu (tenths of a percent), peak_rss/rss (KiB); written by
+ *                   Nextflow because nextflow.config turns tracing on
+ *   .exitcode       exit status
+ *   .command.run / .exitcode mtimes  ~ submit and completion, for duration (ms)
+ * Returned units: ms, percent, bytes. Missing files give nulls.
  */
 def readTaskTrace(Object stepDir) {
-    def f = stepDir.parent.resolve('.command.trace')
-    if (!f.exists()) {
-        return [:]
-    }
+    def wd = stepDir.parent
     def raw = [:]
-    f.readLines().each { l ->
-        def i = l.indexOf('=')
-        if (i > 0) {
-            raw[l.substring(0, i)] = l.substring(i + 1)
+    def f = wd.resolve('.command.trace')
+    if (f.exists()) {
+        f.readLines().each { l ->
+            def i = l.indexOf('=')
+            if (i > 0) {
+                raw[l.substring(0, i)] = l.substring(i + 1)
+            }
         }
     }
+    def ec = wd.resolve('.exitcode')
+    def run = wd.resolve('.command.run')
+    def exit = ec.exists() && ec.text.trim().isInteger() ? ec.text.trim().toInteger() : null
+    def duration = ec.exists() && run.exists() ? ec.lastModified() - run.lastModified() : null
     def cpu  = traceNum(raw, '%cpu')
-    def rss  = traceNum(raw, 'peak_rss')
-    def vmem = traceNum(raw, 'peak_vmem')
+    def prss = traceNum(raw, 'peak_rss')
+    def rss  = traceNum(raw, 'rss')
     return [
-        realtime : traceNum(raw, 'realtime'),
-        pct_cpu  : cpu != null ? cpu / 10 : null,       // stored as tenths of a percent
-        peak_rss : rss != null ? rss * 1024 : null,     // stored in KiB
-        peak_vmem: vmem != null ? vmem * 1024 : null,
-        rchar    : traceNum(raw, 'rchar'),
-        wchar    : traceNum(raw, 'wchar'),
+        task_id : "${wd.parent.name}/${wd.name.take(6)}".toString(),   // work dir hash, as in the Nextflow log
+        exit    : exit,
+        realtime: traceNum(raw, 'realtime'),
+        pct_cpu : cpu != null ? cpu / 10 : null,
+        peak_rss: prss != null ? prss * 1024 : null,
+        rss     : rss != null ? rss * 1024 : null,
+        duration: duration != null && duration >= 0 ? duration : null,
     ]
 }
 
@@ -234,19 +277,24 @@ def traceNum(Map raw, String k) {
     return v != null && v.isNumber() ? v.toBigDecimal() : null
 }
 
+// Samples with the same genome + GTF share one PREP_REFERENCE task.
+def refKey(Map s) {
+    return "${s.genome}|${s.gtf}".toString()
+}
+
 // Parts BUNDLE waits for: assemble + eval, plus the optional steps this job runs.
-def nParts(Map j, Map s) {
-    return 2 + (j.run.quantify && s.reads ? 1 : 0) + (j.run.productivity ? 1 : 0) + (j.run.own_align ? 1 : 0)
+def nParts(Map j) {
+    return 2 + (j.run.quantify ? 1 : 0) + (j.run.productivity ? 1 : 0) + (j.run.own_align ? 1 : 0)
 }
 
 def computeFromTrace(List rows) {
-    def timed = rows.findAll { r -> r.realtime_ms != null }
+    def timed = rows.findAll { r -> r.realtime != null }
     if (!timed) {
         return [cpu_hours: null, peak_rss_gb: null, wall_minutes: null]
     }
-    def cpuH = timed.findAll { r -> r.pct_cpu != null }.sum(0) { r -> r.realtime_ms / 3600000 * r.pct_cpu / 100 }
-    def rss = timed.findAll { r -> r.peak_rss_bytes != null }.collect { r -> r.peak_rss_bytes }
-    def wall = timed.sum(0) { r -> r.realtime_ms } / 60000
+    def cpuH = timed.findAll { r -> r['%cpu'] != null }.sum(0) { r -> r.realtime / 3600000 * r['%cpu'] / 100 }
+    def rss = timed.findAll { r -> r.peak_rss != null }.collect { r -> r.peak_rss }
+    def wall = timed.sum(0) { r -> r.realtime } / 60000
     return [
         cpu_hours   : (cpuH as BigDecimal).setScale(4, BigDecimal.ROUND_HALF_UP).doubleValue(),
         peak_rss_gb : rss ? (rss.max() / (1024 * 1024 * 1024) as BigDecimal).setScale(3, BigDecimal.ROUND_HALF_UP).doubleValue() : null,

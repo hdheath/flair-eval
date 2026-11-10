@@ -74,9 +74,12 @@ first, then from the launch directory. Columns and keys are listed in
    when a BAM is given. A run with `own_align: true` aligns with its own FLAIR instead.
 3. Per sample × run: assemble, then quantify and predictProductivity (switch off per run with
    `quantify: false` / `productivity: false`), then structure evaluation against the GTF.
+   Quantify also runs for BAM-only samples; a FLAIR version that needs reads records the step
+   as skipped instead of failing.
 4. One bundle per job, and one report over all bundles.
 
-`--regions regions.bed` restricts assembly and evaluation to a set of regions.
+`--regions regions.bed` restricts assembly and evaluation to a set of regions. FLAIR then gets a
+genome + GTF cut to the chromosomes in the BED (same coordinates), which keeps test regions fast.
 
 ### Reports over many launches
 
@@ -87,7 +90,8 @@ nextflow run hdheath/flair-eval --report_only \
   --bundles 'old_results/bundles,other/bundles/*/flair-dev' --outdir combined
 ```
 
-`--baseline <run_id>` picks the run that differences are shown against; `--report_title` sets
+`--baseline <run_id>` picks the run that differences are shown against (default: the first run
+in runs.yaml or `--flair` order); `--report_title` sets
 the heading. Output layout: [docs/output.md](docs/output.md).
 
 ### Profiles

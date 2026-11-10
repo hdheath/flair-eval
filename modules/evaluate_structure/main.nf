@@ -1,13 +1,14 @@
 /*
  * EVALUATE_STRUCTURE: isoform structure vs the reference GTF (bin/structure_metrics.py, owned by
  * the report stream). Writes bundle.json + tables/ into eval/ (CONTRACTS section 3).
+ * Always gets the genome (junction motifs, A13); reads/BAM paths are only recorded in inputs.
  */
 process EVALUATE_STRUCTURE {
     tag "${meta.id}"
     label 'process_single'
 
     input:
-    tuple val(meta), path(assemble), path(gtf), path(env_json)
+    tuple val(meta), path(assemble), path(gtf), path(genome), path(env_json), val(inputs)
     path(regions)
 
     output:
@@ -25,6 +26,9 @@ JSON
         --sample ${meta.sample} \\
         --run-json run.json \\
         --env-json ${env_json} \\
+        --genome ${genome} \\
+        ${inputs.reads ? "--reads '${inputs.reads}'" : ''} \\
+        ${inputs.bam ? "--bam '${inputs.bam}'" : ''} \\
         ${regions ? "--regions ${regions}" : ''} \\
         --out eval
     """

@@ -126,10 +126,10 @@ nextflow_pipeline {
         then {
             assert workflow.failed
             def out = (workflow.stdout + workflow.stderr).join('\n')
-            assert out.contains("both make run id 'flair-3.0.1'")
-            assert out.contains("--flair token 'ted-port' is not recognised. For a FLAIR branch, write git:ted-port")
-            assert out.contains("gives a git URL but no ref")
-            assert out.contains("starts with unknown source 'bogus:'")
+            assert out.contains("--flair tokens '3.0.1' and 'release:3.0.1' both give run id 'flair-3.0.1'; write these runs in runs.yaml with distinct ids")
+            assert out.contains("unknown --flair token 'ted-port'. Use a release (3.0.1), dev, main, git:ted-port for another branch")
+            assert out.contains("--flair token 'git:https://example.org/flair': a git URL needs @<ref>")
+            assert out.contains("unknown --flair token 'bogus:x'")
         }
     }
 
@@ -177,6 +177,38 @@ nextflow_pipeline {
         then {
             assert workflow.failed
             assert (workflow.stdout + workflow.stderr).join('\n').contains("--report_only needs --bundles")
+        }
+    }
+
+    test("A2: duplicate run ids in runs.yaml") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/samples.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/bad/dup_runs.yaml"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("runs file entries 1 and 2 both use run id 'same'. Run ids must be unique: give each run in runs.yaml its own explicit id.")
+        }
+    }
+
+    test("A4: --flair_args without '=' (Nextflow reads it as true)") {
+        when {
+            params {
+                reads      = "${projectDir}/tests/nf-test/inputs/sampleA.fastq"
+                genome     = "${projectDir}/tests/nf-test/inputs/genome.fa"
+                gtf        = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                flair      = "3.0.1"
+                flair_args = true
+                outdir     = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("--flair_args has no value")
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("--flair_args='--stringent'")
         }
     }
 }
