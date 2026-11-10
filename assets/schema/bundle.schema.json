@@ -406,6 +406,10 @@
     },
     "sections": {
       "type": "object"
+    },
+    "run_index": {
+      "type": "integer",
+      "minimum": 0
     }
   }
 }

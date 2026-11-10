@@ -244,3 +244,14 @@ Each section is optional and has its own panel. It is computed only when its inp
 - `sections.quant`: added by core from `counts.tsv`. It holds `{"isoforms_quantified", "reads_assigned", "cpm_hist": {edges, counts}}`. The report shows CPM correlation between runs that share a sample by reading `counts.tsv` beside the bundle.
 - `sections.productivity`: added by core from `productivity.tsv`. It holds `{"class_counts": {class: n}}`.
 - `sections.compute`: the report shows the existing `compute` block as a runtime panel (CPU-h, peak RSS, wall time per run). It needs no new key.
+
+## 9. Amendments — round 2 (2026-11-10, after the round-2 merge)
+- A17 [core, report] **Run order.** `bundle.json` gains optional `run_index` (integer ≥0): the run's position in runs.yaml or `--flair` order. Core's BUNDLE writes it. The report orders runs as baseline first, then `run_index`, then id. Bundles without it (old ones) sort after indexed runs, by id.
+- A18 [report, core] **`tables/genes.tsv`** (`gene_id gene_name`, one header line) is an optional output of `structure_metrics.py`. Core publishes it in the bundle when present.
+- A19 [core, report] **One implementation of sections.** `python3 -m flair_eval_lib.sections <bundle_dir>` is the single place that builds `sections.quant` and `sections.productivity` from the TSVs. Core's BUNDLE calls it instead of keeping its own copy.
+- A20 [adapter] **dev `quantify` must use `--genome`, not `-g`.** dev builds 57040d2 and 425b260 reject `-g`. Choose flags from `--help`, as is already done elsewhere. When a version supports `--parallel_mode`, pass `--parallel_mode byregion` to dev `transcriptome` too, never bychrom.
+- A21 [core, adapter, report] **"Reads assigned" depends on how a version quantifies:**
+  - 2.x, 3.0.1 and TED count from reads;
+  - dev counts from the genome BAM.
+
+  The adapter records `quantify_input: reads|bam` in `adapter_log.json`, core copies it to `sections.quant.input`, and the report notes it wherever reads-assigned numbers are compared.
