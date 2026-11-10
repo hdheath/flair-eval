@@ -36,7 +36,7 @@ from flair_eval_lib.annotation import (  # noqa: E402
 from flair_eval_lib.classify import FSM_END_WINDOW, Classifier, Reference  # noqa: E402
 from flair_eval_lib.fasta import Fasta  # noqa: E402
 from flair_eval_lib.metrics import (  # noqa: E402
-    normalise_version, ref_in_scope, summarise, write_tables)
+    normalise_version, ref_in_scope, summarise, write_gene_names, write_tables)
 from flair_eval_lib.schema import load_schema, validate  # noqa: E402
 
 _ID_RE = r"^[A-Za-z0-9][A-Za-z0-9._-]*$"
@@ -86,7 +86,7 @@ def _pipeline_commit():
 
 
 def build_bundle(args):
-    """Return (bundle dict, isoforms, calls)."""
+    """Return (bundle dict, isoforms, calls, reference transcripts)."""
     if not re.match(_ID_RE, args.sample):
         raise InputError(f"--sample {args.sample!r} must match {_ID_RE}")
     run = _load_json(args.run_json, "--run-json")
@@ -156,13 +156,13 @@ def build_bundle(args):
         "compute": {"cpu_hours": None, "peak_rss_gb": None, "wall_minutes": None},
         "sections": {},
     }
-    return bundle, isoforms, calls
+    return bundle, isoforms, calls, ref_tx
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     try:
-        bundle, isoforms, calls = build_bundle(args)
+        bundle, isoforms, calls, ref_tx = build_bundle(args)
     except InputError as e:
         print(f"structure_metrics.py: error: {e}", file=sys.stderr)
         return 2
@@ -181,6 +181,7 @@ def main(argv=None) -> int:
         return 3
     os.makedirs(args.out, exist_ok=True)
     write_tables(args.out, isoforms, calls)
+    write_gene_names(args.out, calls, ref_tx)
     with open(os.path.join(args.out, "bundle.json"), "w") as fh:
         json.dump(bundle, fh, indent=1)
         fh.write("\n")

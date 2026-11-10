@@ -10,22 +10,21 @@
 </style>
 </head>
 <body>
-<div id="app" class="viz-root">
-  <header class="top">
-    <div class="top-text">
+<div class="page">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">flair-eval report</p>
       <h1 id="title">__TITLE__</h1>
-      <p class="sub" id="subtitle"></p>
+      <p class="dek" id="subtitle"></p>
     </div>
-    <button id="theme" class="btn ghost" type="button" title="Switch colour theme">Theme: auto</button>
+    <div class="mast-tools">
+      <div class="seg" id="theme" role="group" aria-label="Colour theme"></div>
+      <button class="btn" id="print" type="button">Print / PDF</button>
+    </div>
   </header>
-  <nav class="tabs" role="tablist" aria-label="Report views">
-    <button role="tab" type="button" data-view="overview">Overview</button>
-    <button role="tab" type="button" data-view="run">Single run</button>
-    <button role="tab" type="button" data-view="compare">Compare</button>
-    <button role="tab" type="button" data-view="help">How to read this</button>
-  </nav>
-  <section class="filters" id="filters" aria-label="Filters"></section>
-  <main id="view" tabindex="-1"></main>
+  <section class="runbar" id="runbar" aria-label="Runs and sample"></section>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Report views"></nav>
+  <main id="view"></main>
   <footer id="footer"></footer>
 </div>
 <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
