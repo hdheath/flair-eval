@@ -241,7 +241,13 @@ def test_incomplete_env_is_rebuilt(world):
 def test_build_failure_leaves_no_marker(world):
     world.env["FAKE_CONDA_FAIL"] = "1"
     p, rec = world.resolve({"id": "r", "flair": {"release": "3.0.1"}})
-    assert p.returncode == 1 and "exited 1" in p.stderr
+    assert p.returncode == 1
+    err = p.stderr
+    assert "could not set up FLAIR for run 'r' (release 3.0.1)" in err
+    assert "What failed: `conda create (base env with Python and tools)` exited with code 1" in err
+    assert "Command:     " in err and " create -y -p " in err
+    assert "Log:         %s" % (world.cache / "logs" / "release-3.0.1.build.log") in err
+    assert "What to try:" in err and "rebuilds it" in err
     assert not os.path.exists(world.cache / "envs" / "release-3.0.1" / ".flair-eval-env.json")
     assert os.path.exists(world.cache / "logs" / "release-3.0.1.build.log")
 
@@ -301,13 +307,13 @@ def test_env_passthrough(world, tmp_path):
 
 def test_env_missing_or_broken(world, tmp_path):
     p, _ = world.resolve({"id": "x", "flair": {"env": str(tmp_path / "nope")}})
-    assert p.returncode == 1 and "not found" in p.stderr
+    assert p.returncode == 1 and "does not exist" in p.stderr and "What to try" in p.stderr
     broken = tmp_path / "broken"
     (broken / "bin").mkdir(parents=True)
     (broken / "bin" / "flair").write_text("#!/bin/sh\necho boom >&2; exit 1\n")
     os.chmod(str(broken / "bin" / "flair"), 0o755)
     p, _ = world.resolve({"id": "x", "flair": {"env": str(broken)}})
-    assert p.returncode == 1 and "boom" in p.stderr
+    assert p.returncode == 1 and "| boom" in p.stderr and "FLAIR does not start" in p.stderr
 
 
 def test_container_passthrough(world, tmp_path):
@@ -379,3 +385,20 @@ dependencies:
     assert flair_env.shipped_conda_extras(y, pins) == ["pysam>=0.24.1,<0.25.0", "intron-prospector>=1.5",
                                                       "ucsc-bedtobigbed"]
     assert flair_env.shipped_conda_extras(None, pins) == []
+
+
+def test_git_bad_ref_message(world):
+    world.env["PATH"] = world.env["PATH"]
+    p, _ = world.resolve({"id": "g", "flair": {"git": "https://example.org/flair", "ref": "no-such-branch"}})
+    assert p.returncode == 1
+    assert "'no-such-branch' is not a branch, tag or commit of https://example.org/flair" in p.stderr
+    assert "Command:     git ls-remote" in p.stderr
+
+
+def test_no_conda_message(world):
+    world.env.pop("FLAIR_EVAL_CONDA")
+    world.env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + "/usr/bin:/bin"
+    p, _ = world.resolve({"id": "r", "flair": {"release": "3.0.1"}})
+    if p.returncode == 0:
+        pytest.skip("a conda executable is on the minimal PATH")
+    assert "needs mamba, micromamba or conda" in p.stderr and "FLAIR_EVAL_CONDA" in p.stderr

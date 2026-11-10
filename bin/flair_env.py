@@ -55,7 +55,20 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class EnvError(Exception):
-    pass
+    """Resolution failed. `cmd`, `log` and `tail` point at the failing command; `hint` says
+    what the user can do about it."""
+
+    def __init__(self, msg, cmd=None, log=None, tail=None, hint=None):
+        super().__init__(msg)
+        self.cmd, self.log, self.tail, self.hint = cmd, log, tail, hint
+
+
+def log_tail(path, n=20):
+    try:
+        with open(path) as fh:
+            return "".join(fh.readlines()[-n:])
+    except OSError:
+        return None
 
 
 def now_iso():
@@ -79,8 +92,9 @@ def child_env(prefix=None):
     return env
 
 
-def run(argv, log_fh=None, env=None, cwd=None, timeout=None):
-    """Run argv; stream output to log_fh; raise EnvError on failure."""
+def run(argv, log_fh=None, env=None, cwd=None, timeout=None, what=None, hint=None):
+    """Run argv; stream output to log_fh; raise EnvError on failure. `what` names the command in
+    plain English for the error message."""
     cmd = " ".join(argv)
     log("+ " + cmd)
     if log_fh:
@@ -90,10 +104,14 @@ def run(argv, log_fh=None, env=None, cwd=None, timeout=None):
         p = subprocess.run(argv, stdout=log_fh or subprocess.DEVNULL, stderr=subprocess.STDOUT,
                            env=env or child_env(), cwd=cwd, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise EnvError("could not run %s: %s" % (cmd, e))
+        raise EnvError("`%s` could not be run (%s)" % (what or argv[0], e), cmd=cmd,
+                       log=log_fh.name if log_fh else None, hint=hint)
     if p.returncode != 0:
-        raise EnvError("%s exited %d%s" % (cmd, p.returncode,
-                                            " (log %s)" % log_fh.name if log_fh else ""))
+        if log_fh:
+            log_fh.flush()
+        raise EnvError("`%s` exited with code %d" % (what or os.path.basename(argv[0]), p.returncode),
+                       cmd=cmd, log=log_fh.name if log_fh else None,
+                       tail=log_tail(log_fh.name) if log_fh else None, hint=hint)
 
 
 def capture(argv, env=None, timeout=900):
@@ -143,12 +161,15 @@ def conda_exe(explicit=None):
         if c:
             if shutil.which(c) or os.path.exists(c):
                 return shutil.which(c) or c
-            raise EnvError("conda executable not found: %s" % c)
+            raise EnvError("the conda executable %r was not found" % c,
+                           hint="set FLAIR_EVAL_CONDA (or --conda) to a mamba, micromamba or conda executable")
     for name in ("mamba", "micromamba", "conda"):
         p = shutil.which(name)
         if p:
             return p
-    raise EnvError("no mamba/micromamba/conda on PATH (set FLAIR_EVAL_CONDA)")
+    raise EnvError("building this FLAIR env needs mamba, micromamba or conda, and none is on PATH",
+                   hint="run FLAIR_ENV where conda is available (the base env, not a FLAIR env), "
+                        "or set FLAIR_EVAL_CONDA to the executable")
 
 
 def tool_pins(explicit=None):
@@ -190,7 +211,9 @@ def pick_python(spec):
     for py in PYTHON_CHOICES:
         if python_ok(spec, py):
             return py
-    raise EnvError("no supported Python (%s) satisfies requires-python %r" % (PYTHON_CHOICES, spec))
+    raise EnvError("this FLAIR needs Python %s, and flair-eval only builds envs with Python %s"
+                   % (spec, ", ".join(PYTHON_CHOICES)),
+                   hint="build the env yourself and use it as `flair: {env: /path/to/env}`")
 
 
 def pypi_info(version):
@@ -204,9 +227,11 @@ def pypi_info(version):
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None, False
-        raise EnvError("PyPI query failed (%s): %s" % (url, e))
+        raise EnvError("could not ask PyPI about %s %s (%s)" % (PYPI_PACKAGE, version, e), cmd="GET " + url,
+                       hint="the FLAIR_ENV task needs network access to pypi.org")
     except (urllib.error.URLError, OSError, ValueError) as e:
-        raise EnvError("PyPI query failed (%s): %s" % (url, e))
+        raise EnvError("could not reach PyPI to look up %s %s (%s)" % (PYPI_PACKAGE, version, e),
+                       cmd="GET " + url, hint="the FLAIR_ENV task needs network access to pypi.org")
     return (d.get("info") or {}).get("requires_python"), True
 
 
@@ -225,7 +250,10 @@ def flair_version(prefix=None, container=None, runtime=None):
         if m:
             break
     if code != 0 or not m:
-        raise EnvError("`%s` failed (exit %d): %s" % (" ".join(argv), code, text[-800:]))
+        raise EnvError("FLAIR does not start in this env: `flair --version` exited with code %d" % code,
+                       cmd=" ".join(argv), tail=text[-1500:],
+                       hint="the env exists but its FLAIR is broken; the output above usually names the "
+                            "missing package")
     return "FLAIR " + m.group(1)
 
 
@@ -305,7 +333,8 @@ def conda_create(conda, prefix, packages, log_fh):
     argv = [conda, "create", "-y", "-p", prefix, "--override-channels"]
     for c in CHANNELS:
         argv += ["-c", c]
-    run(argv + packages, log_fh=log_fh, env=build_env())
+    run(argv + packages, log_fh=log_fh, env=build_env(), what="conda create (base env with Python and tools)",
+        hint="usually a package that cannot be solved or downloaded; the log shows which")
 
 
 def build_env():
@@ -317,7 +346,8 @@ def build_env():
 
 def pip_install(prefix, target, log_fh):
     run([os.path.join(prefix, "bin", "python"), "-m", "pip", "install", "--no-cache-dir", target],
-        log_fh=log_fh, env=child_env(prefix))
+        log_fh=log_fh, env=child_env(prefix), what="pip install %s" % os.path.basename(target.rstrip("/")),
+        hint="usually a dependency that pip cannot build or download; the log shows which")
 
 
 # --------------------------------------------------------------------------------------------
@@ -330,7 +360,9 @@ def resolve_git_ref(url, ref):
     code, out, err = capture(["git", "ls-remote", url, ref, "refs/heads/" + ref, "refs/tags/" + ref,
                               "refs/tags/%s^{}" % ref], timeout=300)
     if code != 0:
-        raise EnvError("git ls-remote %s failed: %s" % (url, err.strip()[-500:]))
+        raise EnvError("could not list the branches and tags of %s" % url,
+                       cmd="git ls-remote %s %s" % (url, ref), tail=err.strip()[-1500:],
+                       hint="check the URL, and that this machine can reach it (network, credentials)")
     refs = {}
     for line in out.splitlines():
         parts = line.split()
@@ -341,7 +373,8 @@ def resolve_git_ref(url, ref):
             return refs[name]
     if re.match(r"^[0-9a-fA-F]{7,39}$", ref):
         return None          # short SHA: needs a clone (resolve_short_sha)
-    raise EnvError("ref %r not found in %s" % (ref, url))
+    raise EnvError("%r is not a branch, tag or commit of %s" % (ref, url),
+                   cmd="git ls-remote %s %s" % (url, ref), hint="check the spelling of `ref` in runs.yaml / --flair")
 
 
 def fetch_source(url, sha, src, log_fh):
@@ -352,16 +385,19 @@ def fetch_source(url, sha, src, log_fh):
     try:
         run(["git", "init", "-q", src], log_fh=log_fh)
         run(["git", "-C", src, "remote", "add", "origin", url], log_fh=log_fh)
-        run(["git", "-C", src, "fetch", "-q", "--depth", "1", "origin", sha], log_fh=log_fh, timeout=1800)
+        run(["git", "-C", src, "fetch", "-q", "--depth", "1", "origin", sha], log_fh=log_fh, timeout=1800,
+            what="git fetch")
         run(["git", "-C", src, "checkout", "-q", "FETCH_HEAD"], log_fh=log_fh)
     except EnvError:
         log("shallow fetch by SHA failed; cloning")
         shutil.rmtree(src, ignore_errors=True)
-        run(["git", "clone", "-q", url, src], log_fh=log_fh, timeout=3600)
-        run(["git", "-C", src, "checkout", "-q", sha], log_fh=log_fh)
+        run(["git", "clone", "-q", url, src], log_fh=log_fh, timeout=3600, what="git clone",
+            hint="check the URL, and that this machine can reach it")
+        run(["git", "-C", src, "checkout", "-q", sha], log_fh=log_fh, what="git checkout")
     code, out, _ = capture(["git", "-C", src, "rev-parse", "HEAD"])
     if code != 0 or out.strip() != sha:
-        raise EnvError("checkout of %s gave %s, wanted %s" % (url, out.strip(), sha))
+        raise EnvError("the checkout of %s is at %s, not the wanted commit %s" % (url, out.strip(), sha),
+                       log=log_fh.name if log_fh else None)
 
 
 def resolve_short_sha(url, ref, cache, log_fh):
@@ -371,7 +407,9 @@ def resolve_short_sha(url, ref, cache, log_fh):
         run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", url, tmp], log_fh=log_fh, timeout=3600)
         code, out, err = capture(["git", "-C", tmp, "rev-parse", "--verify", ref + "^{commit}"])
         if code != 0:
-            raise EnvError("ref %r not found in %s" % (ref, url))
+            raise EnvError("%r is not a branch, tag or commit of %s" % (ref, url),
+                           cmd="git rev-parse --verify %s^{commit}" % ref,
+                           hint="check the spelling of `ref` in runs.yaml / --flair")
         return out.strip()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -459,8 +497,8 @@ def ensure_built(cache, key, builder, recipe):
                          % (ENV_TOOL_VERSION, key, now_iso(), json.dumps(recipe)))
             try:
                 extra = builder(prefix, log_fh) or {}
-            except Exception:
-                log("build failed; see %s" % log_path)
+            except EnvError as e:
+                e.log = e.log or log_path
                 raise
         marker = dict(recipe)
         marker.update(extra)
@@ -487,7 +525,8 @@ def resolve_release(version, cache, opts):
             req_py, on_pypi = None, False
         route = opts.route if opts.route != "auto" else ("pip" if on_pypi else "bioconda")
         if route == "pip" and not on_pypi:
-            raise EnvError("%s==%s is not on PyPI" % (PYPI_PACKAGE, version))
+            raise EnvError("FLAIR %s is not on PyPI (%s==%s)" % (version, PYPI_PACKAGE, version),
+                           hint="check the version number, or drop --route pip to let bioconda try")
         py = pick_python(req_py) if route == "pip" else None
         extras = shipped_conda_extras(shipped_yaml_for_release(version), pins) if route == "pip" else []
         recipe = {"source": "release", "requested": version, "route": route, "python_spec": py,
@@ -506,7 +545,7 @@ def resolve_release(version, cache, opts):
             conda_create(conda, pfx, ["flair=%s" % version] + pins, log_fh)
         v = flair_version(prefix=pfx)
         if version not in v:
-            raise EnvError("built env reports %r, wanted %s" % (v, version))
+            raise EnvError("the new env reports %r, not FLAIR %s" % (v, version), log=log_fh.name)
         return {}
 
     prefix, marker, built = ensure_built(cache, key, builder, recipe)
@@ -550,9 +589,12 @@ def resolve_git(url, ref, cache, opts):
 def resolve_env(path, cache, opts):
     prefix = os.path.abspath(os.path.expanduser(path))
     if not os.path.isdir(prefix):
-        raise EnvError("env not found: %s" % prefix)
+        raise EnvError("the env %s does not exist" % prefix,
+                       hint="`flair: {env: ...}` must be the absolute path of a conda env (the folder "
+                            "that contains bin/flair), e.g. from `conda env list`")
     if not os.path.exists(os.path.join(prefix, "bin", "flair")):
-        raise EnvError("no bin/flair in env %s" % prefix)
+        raise EnvError("%s has no bin/flair, so FLAIR is not installed in that env" % prefix,
+                       hint="install FLAIR there, or point `env:` at the env that has it")
     return {"source": "env", "requested": path, "resolved_commit": detect_commit(prefix),
             "conda_prefix": prefix, "container": None}
 
@@ -561,14 +603,15 @@ def container_runtime(explicit=None):
     for c in (explicit, os.environ.get("FLAIR_EVAL_CONTAINER_RUNTIME"), "apptainer", "singularity"):
         if c and shutil.which(c):
             return shutil.which(c)
-    raise EnvError("no apptainer/singularity on PATH for a container source")
+    raise EnvError("a container source needs apptainer or singularity, and neither is on PATH",
+                   hint="load apptainer (e.g. `module load apptainer`) or set FLAIR_EVAL_CONTAINER_RUNTIME")
 
 
 def resolve_container(uri, cache, opts):
     if not re.match(r"^[a-z]+://", uri):
         p = os.path.abspath(os.path.expanduser(uri))
         if not os.path.exists(p):
-            raise EnvError("container image not found: %s" % p)
+            raise EnvError("the container image %s does not exist" % p)
         uri = p
     return {"source": "container", "requested": uri, "resolved_commit": None,
             "conda_prefix": None, "container": uri}
@@ -625,12 +668,42 @@ def resolve(run_map, cache, opts):
     }
 
 
+def describe_source(run_map):
+    f = run_map.get("flair") if isinstance(run_map, dict) else None
+    if not isinstance(f, dict):
+        return "an unreadable `flair:` entry"
+    if "git" in f:
+        return "git %s @ %s" % (f.get("git"), f.get("ref"))
+    for k in ("release", "env", "container"):
+        if k in f:
+            return "%s %s" % (k, f[k])
+    return "`flair: %s`" % json.dumps(f)
+
+
+def env_failure_message(run_map, e):
+    rid = run_map.get("id", "?") if isinstance(run_map, dict) else "?"
+    lines = ["flair_env.py: could not set up FLAIR for run %r (%s)." % (rid, describe_source(run_map)),
+             "  What failed: %s." % str(e).rstrip(".")]
+    if e.cmd:
+        lines.append("  Command:     %s" % e.cmd)
+    if e.log:
+        lines.append("  Log:         %s" % e.log)
+    if e.tail and e.tail.strip():
+        lines.append("  Last lines%s:" % (" of the log" if e.log else " of its output"))
+        lines += ["    | " + l for l in e.tail.rstrip("\n").splitlines()[-20:]]
+    if e.hint:
+        lines.append("  What to try: %s." % e.hint.rstrip("."))
+    if e.log and e.log.endswith(".build.log"):
+        lines.append("  The half-built env is not marked complete, so the next run rebuilds it.")
+    return "\n".join(lines) + "\n"
+
+
 def cmd_resolve(a):
     try:
         with open(a.run_json) as fh:
             run_map = json.load(fh)
     except (OSError, ValueError) as e:
-        log("error: cannot read --run-json %s: %s" % (a.run_json, e))
+        log("error: cannot read the run description --run-json %s: %s" % (a.run_json, e))
         return 2
     cache = os.path.abspath(os.path.expanduser(a.cache))
     try:
@@ -640,7 +713,7 @@ def cmd_resolve(a):
             os.environ["CONDA_PKGS_DIRS"] = os.path.join(cache, "conda-pkgs")
         rec = resolve(run_map, cache, a)
     except EnvError as e:
-        log("error: %s" % e)
+        sys.stderr.write(env_failure_message(run_map, e))
         return 1
     tmp = a.out + ".tmp"
     with open(tmp, "w") as fh:

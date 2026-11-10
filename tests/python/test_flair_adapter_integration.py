@@ -111,6 +111,13 @@ def test_version_end_to_end(prefix, shared_bam):
     names = check_assemble(d)
     results["assemble"] = len(names)
 
+    # A6: BAM-only sample (no --reads); 2.x extracts the reads from the BAM for collapse
+    db = os.path.join(base, "assemble_bam_only")
+    p = adapter(prefix, "assemble", "--bam", shared_bam, "--genome", genome, "--gtf", gtf,
+                "--args", "", "--threads", THREADS, "--out", db)
+    assert p.returncode == 0, p.stderr
+    results["assemble_bam_only"] = len(check_assemble(db))
+
     regions = cfg("REGIONS", required=False)
     if regions:
         dr = os.path.join(base, "assemble_regions")
@@ -126,11 +133,15 @@ def test_version_end_to_end(prefix, shared_bam):
     assert p.returncode == 0, p.stderr
     results["quantify_contract"] = "skipped" if os.path.exists(os.path.join(dq, "skipped.json")) else "ok"
 
+    # A7/A8: everything core has, FLAIR's own BED via --flair-bed (dev quantifies from the BAM)
+    full = ["--sample", "it_sample", "--bam", shared_bam, "--genome", genome,
+            "--isoforms-bed", os.path.join(d, "isoforms.bed"), "--flair-bed", os.path.join(d, "isoforms.flair.bed"),
+            "--threads", THREADS]
     dq = os.path.join(base, "quantify")
     p = adapter(prefix, "quantify", "--isoforms-fa", os.path.join(d, "isoforms.fa"), "--reads", reads,
-                "--sample", "it_sample", "--bam", shared_bam, "--genome", genome,
-                "--isoforms-bed", os.path.join(d, "isoforms.bed"), "--threads", THREADS, "--out", dq)
+                *full, "--out", dq)
     assert p.returncode == 0, p.stderr
+    assert not os.path.exists(os.path.join(dq, "skipped.json")), open(os.path.join(dq, "skipped.json")).read()
     rows = tsv(os.path.join(dq, "counts.tsv"))
     assert rows[0] == ["isoform_id", "count", "cpm"]
     assert [r[0] for r in rows[1:]] == names
@@ -138,10 +149,19 @@ def test_version_end_to_end(prefix, shared_bam):
     assert total > 0
     assert abs(sum(float(r[2]) for r in rows[1:]) - 1e6) < 1
     results["quantify"] = total
+    results["quantify_mode"] = log_of(dq)["profile"]["quantify_mode"]
+
+    # BAM-only sample: only versions that count from the BAM (dev) produce counts
+    dqb = os.path.join(base, "quantify_bam_only")
+    p = adapter(prefix, "quantify", "--isoforms-fa", os.path.join(d, "isoforms.fa"), *full, "--out", dqb)
+    assert p.returncode == 0, p.stderr
+    skipped = os.path.exists(os.path.join(dqb, "skipped.json"))
+    assert skipped == (results["quantify_mode"] == "reads_manifest")
+    results["quantify_bam_only"] = "skipped" if skipped else "ok"
 
     dp = os.path.join(base, "productivity")
     p = adapter(prefix, "productivity", "--isoforms-bed", os.path.join(d, "isoforms.bed"), "--genome", genome,
-                "--gtf", gtf, "--out", dp)
+                "--gtf", gtf, "--flair-bed", os.path.join(d, "isoforms.flair.bed"), "--out", dp)
     assert p.returncode == 0, p.stderr
     if os.path.exists(os.path.join(dp, "skipped.json")):
         results["productivity"] = "skipped"

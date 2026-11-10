@@ -28,7 +28,26 @@ JSON
     """
 
     stub:
+    // CONTRACTS A11: `source` is the run's flair key (release|git|env|container), never "stub".
+    def kinds     = ['release', 'git', 'env', 'container']
+    def src       = kinds.find { run.flair instanceof Map && run.flair.containsKey(it) } ?: 'env'
+    def val       = run.flair instanceof Map ? (run.flair[src] ?: '') : ''
+    def requested = (src == 'git' ? "${val}@${run.flair.ref ?: ''}" : "${val}").toString()
+    def stub_json = groovy.json.JsonOutput.toJson([
+        run_id           : run.id.toString(),
+        source           : src,
+        requested        : requested,
+        resolved_commit  : null,
+        flair_version    : 'FLAIR stub',
+        conda_prefix     : null,     // stub tasks must not activate a real env
+        container        : null,
+        python           : null,
+        pip_freeze_sha256: null,
+        created          : '1970-01-01T00:00:00+00:00'
+    ])
     """
-    printf '{"run_id":"%s","source":"stub","requested":"stub","resolved_commit":null,"flair_version":"stub","conda_prefix":null,"container":null,"python":null,"pip_freeze_sha256":null,"created":"1970-01-01T00:00:00Z"}\\n' '${run.id}' > flair_env.json
+    cat > flair_env.json <<'JSON'
+${stub_json}
+JSON
     """
 }

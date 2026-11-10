@@ -4,16 +4,16 @@
 It runs *inside* the FLAIR environment and is the only thing in flair-eval that calls `flair`.
 It is stdlib-only, because that environment can be any FLAIR version on any Python >= 3.8.
 
-Usage (contract):
+Usage (contract, CONTRACTS section 2 + amendments A6-A9):
   flair_adapter.py align        --reads R --genome G [--gtf A] --threads N --out DIR
-  flair_adapter.py assemble     --bam B --reads R --genome G --gtf A --args "..." --threads N --out DIR [--regions BED]
-  flair_adapter.py quantify     --isoforms-fa F --reads R --sample S --threads N --out DIR
-  flair_adapter.py productivity --isoforms-bed B --genome G --gtf A --out DIR
+  flair_adapter.py assemble     --bam B [--reads R] --genome G --gtf A --args "..." --threads N --out DIR [--regions BED]
+  flair_adapter.py quantify     --isoforms-fa F [--reads R] --sample S --threads N --out DIR
+                                [--bam B --genome G --isoforms-bed I --flair-bed NATIVE]
+  flair_adapter.py productivity --isoforms-bed B --genome G --gtf A --out DIR [--flair-bed NATIVE]
   flair_adapter.py detect       [--json]          (print the detected CLI profile; not a pipeline step)
 
-Optional extras (not needed by core; see docs/flair_versions.md):
-  quantify:     --isoforms-bed B --bam B --genome G   (FLAIR dev quantify counts from a genome BAM)
-  every step:   --flair-bin PATH   --keep-work
+Every step also takes --platform pacbio|ont and --library cDNA|dRNA (recorded; dRNA adds the
+version's documented direct-RNA flags), --flair-bin PATH and --keep-work.
 
 The FLAIR version is detected by probing `flair --version` and the `--help` texts, so a branch or
 commit is handled by what its CLI offers, not by its version string. FLAIR >= 3 runs
@@ -53,11 +53,13 @@ class AdapterError(Exception):
 
 
 class StepFailed(Exception):
-    """A FLAIR command failed (exit code = FLAIR's, or 1)."""
+    """A FLAIR command failed, or FLAIR ran but did not write what it should (exit code = the
+    command's, or 1). `cmd`/`log` point the user at the exact command and its log."""
 
-    def __init__(self, msg, code=1):
+    def __init__(self, msg, code=1, cmd=None, log=None, tail=None):
         super().__init__(msg)
         self.code = code or 1
+        self.cmd, self.log, self.tail = cmd, log, tail
 
 
 class Skip(Exception):
@@ -119,8 +121,9 @@ class RunLog:
     def note(self, msg):
         self.data["notes"].append(msg)
 
-    def run(self, argv, cwd, label, env=None, stdout_path=None, check=True):
-        """Run one command, log it, raise StepFailed on a non-zero exit when check is set."""
+    def run(self, argv, cwd, label, env=None, stdout_path=None, check=True, what=None):
+        """Run one command, log it, raise StepFailed on a non-zero exit when check is set.
+        `what` is the plain-English name used in error messages (e.g. "flair transcriptome")."""
         os.makedirs(self.logs_dir, exist_ok=True)
         n = len(self.data["commands"]) + 1
         log_rel = os.path.join("logs", "%02d_%s.log" % (n, re.sub(r"[^A-Za-z0-9_.-]", "_", label)))
@@ -153,11 +156,27 @@ class RunLog:
             tail = ""
             try:
                 with open(log_path) as fh:
-                    tail = "".join(fh.readlines()[-15:])
+                    tail = "".join(l for l in fh.readlines()[2:][-20:])
             except OSError:
                 pass
-            raise StepFailed("%s exited %d (log %s)\n%s" % (label, code, log_path, tail), code)
+            name = what or label.replace("_", " ")
+            if code == 127 and "# could not start" in tail:
+                msg = "`%s` could not be started (program not found or not executable)" % name
+            elif code < 0:
+                msg = "`%s` was killed by signal %d (out of memory or time limit?)" % (name, -code)
+            else:
+                msg = "`%s` exited with code %d" % (name, code)
+            self.last_log = log_path
+            raise StepFailed(msg, code if code > 0 else 1, cmd=entry["cmd"], log=log_path, tail=tail)
         return code
+
+    def missing_output(self, what):
+        """StepFailed for a command that exited 0 but did not write what it should."""
+        last = self.data["commands"][-1] if self.data["commands"] else None
+        if last is None:
+            return StepFailed(what)
+        return StepFailed("`%s` finished without error but %s" % (last["label"].replace("_", " "), what),
+                          1, cmd=last["cmd"], log=os.path.join(self.out_dir, last["log"]))
 
     def finish(self, status):
         self.data["status"] = status
@@ -321,6 +340,8 @@ def detect_profile(flair):
         prof["assemble_cli"] = None
 
     prof["align"] = "align" in subs
+    ah = sub_help("align")
+    prof["align_flags"] = help_flags(ah) if ah is not None else []
 
     qh = sub_help("quantify")
     if qh is None:
@@ -505,14 +526,13 @@ def first_existing(paths):
 
 
 def native_sibling(paths, fname="isoforms.flair.bed"):
-    """Find `fname` next to any of `paths` (also behind symlinks, as Nextflow stages inputs)."""
+    """`fname` in the same directory as one of `paths` (e.g. an assemble/ dir passed whole)."""
     for p in paths:
         if not p:
             continue
-        for d in (os.path.dirname(os.path.abspath(p)), os.path.dirname(os.path.realpath(p))):
-            c = os.path.join(d, fname)
-            if os.path.exists(c):
-                return c
+        c = os.path.join(os.path.dirname(os.path.abspath(p)), fname)
+        if os.path.exists(c):
+            return c
     return None
 
 
@@ -538,6 +558,36 @@ def safe_name(s):
 
 
 # --------------------------------------------------------------------------------------------
+# --platform / --library (CONTRACTS A9)
+# --------------------------------------------------------------------------------------------
+# Only settings that FLAIR's own --help ties to a library type. FLAIR documents no setting
+# for the sequencing platform, so --platform is only recorded. See docs/flair_versions.md.
+LIBRARY_FLAGS = {
+    # (adapter command, FLAIR flag): library that turns it on
+    ("align", "--nvrna"): "dRNA",        # 2.2.0, 3.0.1, TED: "native-RNA specific alignment parameters"
+    ("correct", "--nvrna"): "dRNA",      # 2.2.0: "make the strand of a read consistent with the annotation"
+    ("transcriptome", "--directRNA"): "dRNA",   # dev: "input is directRNA - sets trust_strand"
+}
+
+
+def library_flags(a, log, command, available, user_toks=()):
+    """FLAIR flags implied by --library for one FLAIR command; recorded in adapter_log.json."""
+    out = []
+    lib = getattr(a, "library", None)
+    for (cmd, flag), want in sorted(LIBRARY_FLAGS.items()):
+        if cmd != command or lib != want:
+            continue
+        if flag not in available:
+            log.note("--library %s: this FLAIR's `%s` has no %s, so nothing is added" % (lib, command, flag))
+            continue
+        if has_flag(user_toks, flag):
+            continue
+        out.append(flag)
+        log.data.setdefault("library_flags", []).append({"command": command, "flag": flag, "library": lib})
+    return out
+
+
+# --------------------------------------------------------------------------------------------
 # Steps
 # --------------------------------------------------------------------------------------------
 def step_align(a, log, prof, flair, work):
@@ -548,11 +598,12 @@ def step_align(a, log, prof, flair, work):
     if a.gtf:
         log.note("--gtf is accepted for interface symmetry; FLAIR align defaults do not use it")
     prefix = os.path.join(work, "aligned")
-    log.run([flair, "align", "-g", genome, "-r", reads, "-t", str(a.threads), "-o", prefix],
-            cwd=work, label="flair_align")
+    log.run([flair, "align", "-g", genome, "-r", reads, "-t", str(a.threads), "-o", prefix]
+            + library_flags(a, log, "align", prof.get("align_flags", [])),
+            cwd=work, label="flair_align", what="flair align")
     bam = prefix + ".bam"
     if not os.path.exists(bam):
-        raise StepFailed("flair align wrote no %s" % bam)
+        raise log.missing_output("it wrote no BAM (expected %s)" % bam)
     shutil.move(bam, os.path.join(a.out, "aligned.bam"))
     bai_src = first_existing([bam + ".bai", prefix + ".bai"])
     if bai_src:
@@ -560,25 +611,28 @@ def step_align(a, log, prof, flair, work):
     else:
         samtools = env_tool(flair, "samtools")
         if not samtools:
-            raise StepFailed("flair align wrote no index and samtools is not available")
-        log.run([samtools, "index", os.path.join(a.out, "aligned.bam")], cwd=work, label="samtools_index")
+            raise StepFailed("flair align wrote no BAM index, and there is no samtools in the FLAIR env to make one")
+        log.run([samtools, "index", os.path.join(a.out, "aligned.bam")], cwd=work, label="samtools_index",
+                what="samtools index")
     log.data["outputs"] = {"aligned.bam": os.path.getsize(os.path.join(a.out, "aligned.bam"))}
 
 
 def subset_bam(bam, regions, work, log, flair):
     samtools = env_tool(flair, "samtools")
     if not samtools:
-        raise AdapterError("--regions needs samtools in the FLAIR env")
+        raise AdapterError("--regions needs samtools, and there is none in the FLAIR env or on PATH")
     sub = os.path.join(work, "regions.bam")
-    log.run([samtools, "view", "-b", "-L", regions, "-o", sub, bam], cwd=work, label="samtools_view_regions")
-    log.run([samtools, "index", sub], cwd=work, label="samtools_index_regions")
+    log.run([samtools, "view", "-b", "-L", regions, "-o", sub, bam], cwd=work, label="samtools_view_regions",
+            what="samtools view -L (cut the BAM to --regions)")
+    log.run([samtools, "index", sub], cwd=work, label="samtools_index_regions", what="samtools index")
     return sub
 
 
 def bam_read_names(bam, work, log, flair):
     samtools = env_tool(flair, "samtools")
     out = os.path.join(work, "regions.read_names.txt")
-    log.run([samtools, "view", bam], cwd=work, label="samtools_view_names", stdout_path=out)
+    log.run([samtools, "view", bam], cwd=work, label="samtools_view_names", stdout_path=out,
+            what="samtools view (list the reads in the region BAM)")
     names = set()
     with open(out) as fh:
         for line in fh:
@@ -615,6 +669,19 @@ def subset_reads(reads, keep, out_path):
     return kept
 
 
+def reads_from_bam(bam, work, log, flair):
+    """FASTQ of the BAM's primary alignments (samtools fastq -F 0x904), for 2.x collapse when the
+    sample has no reads file. Reverse-strand reads come back in their original orientation."""
+    samtools = env_tool(flair, "samtools")
+    if not samtools:
+        raise AdapterError("FLAIR 2.x collapse needs the reads; the sample has only a BAM and there is "
+                           "no samtools in the FLAIR env to extract them")
+    out = os.path.join(work, "reads_from_bam.fq")
+    log.run([samtools, "fastq", "-F", "0x904", bam], cwd=work, label="samtools_fastq", stdout_path=out,
+            what="samtools fastq (extract reads from the BAM)")
+    return out
+
+
 def find_native_outputs(prefix):
     return {
         "bed": first_existing([prefix + ".isoforms.bed"]),
@@ -640,8 +707,9 @@ def run_transcriptome(a, log, prof, flair, work, bam, genome, gtf, user_toks):
         tmp = os.path.join(work, "tmp")
         os.makedirs(tmp, exist_ok=True)
         cmd += ["--temp_dir", tmp]
+    cmd += library_flags(a, log, "transcriptome", tp["flags"], user_toks)
     cmd += user_toks
-    log.run(cmd, cwd=work, label="flair_transcriptome")
+    log.run(cmd, cwd=work, label="flair_transcriptome", what="flair transcriptome")
     return prefix
 
 
@@ -650,13 +718,15 @@ def run_correct_collapse(a, log, prof, flair, work, bam, reads, genome, gtf, use
     # as 2.x `flair align` does), then correct -> collapse.
     py = env_tool(flair, "python") or env_tool(flair, "python3") or sys.executable
     reads_bed = os.path.join(work, "reads.bed")
-    log.run([py, "-m", "flair.bam2Bed12", "-i", bam], cwd=work, label="bam2Bed12", stdout_path=reads_bed)
+    log.run([py, "-m", "flair.bam2Bed12", "-i", bam], cwd=work, label="bam2Bed12", stdout_path=reads_bed,
+            what="FLAIR's bam2Bed12 (BAM to reads BED12)")
     corr = os.path.join(work, "correct")
     cmd = [flair, "correct", "-q", reads_bed, "-f", gtf, "-g", genome, "-t", str(a.threads), "-o", corr]
-    log.run(cmd, cwd=work, label="flair_correct")
+    cmd += library_flags(a, log, "correct", prof["correct"]["flags"])
+    log.run(cmd, cwd=work, label="flair_correct", what="flair correct")
     corrected = first_existing([corr + "_all_corrected.bed"])
     if not corrected:
-        raise StepFailed("flair correct wrote no %s_all_corrected.bed" % corr)
+        raise log.missing_output("it wrote no corrected reads (expected %s_all_corrected.bed)" % corr)
     cp = prof["collapse"]
     prefix = os.path.join(work, "flair")
     cmd = [flair, "collapse", "-g", genome, "-r", reads, "-q", corrected, "-f", gtf,
@@ -668,7 +738,7 @@ def run_correct_collapse(a, log, prof, flair, work, bam, reads, genome, gtf, use
         os.makedirs(tmp, exist_ok=True)
         cmd += ["--temp_dir", tmp + os.sep]
     cmd += user_toks
-    log.run(cmd, cwd=work, label="flair_collapse")
+    log.run(cmd, cwd=work, label="flair_collapse", what="flair collapse")
     return prefix
 
 
@@ -690,7 +760,9 @@ def step_assemble(a, log, prof, flair, work):
         prefix = run_transcriptome(a, log, prof, flair, work, bam, genome, gtf, user_toks)
     else:
         if not reads:
-            raise AdapterError("FLAIR %s assembles with collapse, which needs --reads" % prof["flair_version"])
+            reads = reads_from_bam(bam, work, log, flair)
+            log.note("no --reads: FLAIR %s collapse needs reads, so they were extracted from the BAM's "
+                     "primary alignments (samtools fastq -F 0x904)" % prof["flair_version"])
         user_toks = split_user_args(a.args, prof["collapse"]["flags"], log, "collapse")
         if a.regions:
             keep = bam_read_names(bam, work, log, flair)
@@ -709,7 +781,7 @@ def fastx_is_fastq(path):
 
 def normalise_assembly(a, log, nat):
     if not nat["bed"]:
-        raise StepFailed("FLAIR wrote no isoforms.bed")
+        raise log.missing_output("FLAIR wrote no isoform BED (<prefix>.isoforms.bed)")
     out = a.out
     native_dir = os.path.join(out, "native")
     os.makedirs(native_dir, exist_ok=True)
@@ -744,7 +816,7 @@ def normalise_assembly(a, log, nat):
     log.data["outputs"]["gene_id_sources"] = sources
 
     if not nat["fa"]:
-        raise StepFailed("FLAIR wrote no isoforms.fa")
+        raise log.missing_output("FLAIR wrote no isoform FASTA (<prefix>.isoforms.fa)")
     seqs = read_fasta(nat["fa"])
     missing = [n for n in names if n not in seqs]
     extra = len(set(seqs) - set(names))
@@ -782,8 +854,11 @@ def normalise_assembly(a, log, nat):
 
 
 def native_bed_for(a, log, *paths):
-    """FLAIR's own isoform BED for quantify/productivity: --isoforms-bed if it has FLAIR's extra
-    columns, else isoforms.flair.bed written next to the assemble outputs."""
+    """FLAIR's own isoform BED (all columns) for quantify/productivity, in this order:
+    --flair-bed (CONTRACTS A8); --isoforms-bed when it has FLAIR's extra columns;
+    isoforms.flair.bed in the same directory as --isoforms-bed / --isoforms-fa."""
+    if getattr(a, "flair_bed", None):
+        return require_file(a.flair_bed, "--flair-bed")
     if getattr(a, "isoforms_bed", None) and os.path.exists(a.isoforms_bed):
         with open_text(a.isoforms_bed) as fh:
             for line in fh:
@@ -809,10 +884,11 @@ def step_quantify(a, log, prof, flair, work):
     nbed = native_bed_for(a, log, fa) if qp["needs_isoform_bed"] else None
     if mode == "bam_manifest":
         missing = [f for f, v in (("--bam", a.bam), ("--genome", a.genome)) if not v]
-        if missing or not nbed:
-            what = missing + ([] if nbed else ["FLAIR's isoform BED (isoforms.flair.bed)"])
-            raise Skip("this FLAIR (%s) quantifies from a genome BAM, which needs %s"
-                       % (prof["flair_version"], ", ".join(what)))
+        if not nbed:
+            missing.append("--flair-bed (FLAIR's own isoforms.flair.bed from assemble)")
+        if missing:
+            raise Skip("this FLAIR (%s) counts reads from the genome BAM, and the call is missing %s"
+                       % (prof["flair_version"], ", ".join(missing)))
         bam = require_file(a.bam, "--bam")
         genome = require_file(a.genome, "--genome")
         with open(man, "w") as fh:
@@ -820,18 +896,21 @@ def step_quantify(a, log, prof, flair, work):
         cmd = [flair, "quantify", "--manifest", man, "-g", genome, "--isoform_bed", nbed,
                "-t", str(a.threads), "-o", prefix]
     else:
+        if not a.reads:
+            raise Skip("this FLAIR (%s) quantifies from the reads file, and this sample has none "
+                       "(BAM-only sample)" % prof["flair_version"])
         reads = require_file(a.reads, "--reads")
         with open(man, "w") as fh:
             fh.write("%s\t%s\t%s\t%s\n" % (QUANT_SID, QUANT_COND, QUANT_BATCH, reads))
         cmd = [flair, "quantify", "-r", man, "-i", fa, "-t", str(a.threads), "-o", prefix]
         if qp["needs_isoform_bed"]:
             if not nbed:
-                raise Skip("this FLAIR (%s) quantify requires --isoform_bed with FLAIR's own BED, "
-                           "and none was given or found next to --isoforms-fa" % prof["flair_version"])
+                raise Skip("this FLAIR (%s) quantify needs FLAIR's own isoform BED; pass --flair-bed "
+                           "(isoforms.flair.bed from assemble)" % prof["flair_version"])
             cmd += ["--isoform_bed", nbed]
     if qp["temp_dir"]:
         cmd += ["--temp_dir", tmp + os.sep]
-    log.run(cmd, cwd=work, label="flair_quantify")
+    log.run(cmd, cwd=work, label="flair_quantify", what="flair quantify")
     # 2.x/3.0.1/TED/dev d033600: <o>.counts.tsv; dev 389748e: <o>.isoforms.counts.tsv
     counts_file = first_existing([prefix + s for s in (".counts.tsv", ".isoforms.counts.tsv",
                                                        ".counts_matrix.tsv", ".counts.txt")])
@@ -843,7 +922,7 @@ def step_quantify(a, log, prof, flair, work):
             counts_file = os.path.join(work, cands[0])
             log.warn("counts file found by name pattern: %s" % cands[0])
     if not counts_file:
-        raise StepFailed("flair quantify wrote no %s.counts.tsv" % prefix)
+        raise log.missing_output("it wrote no counts table (expected %s.counts.tsv)" % prefix)
     shutil.copyfile(counts_file, os.path.join(a.out, "flair.counts.tsv"))
     counts = parse_counts(counts_file)
     names = fasta_names(fa)
@@ -930,13 +1009,13 @@ def step_productivity(a, log, prof, flair, work):
     # and 2.x/3.0.1 require one of --firstTIS/--longestORF.
     if "--longestORF" in pp["flags"]:
         cmd.append("--longestORF")
-    log.run(cmd, cwd=pdir, label="predictProductivity")
+    log.run(cmd, cwd=pdir, label="predictProductivity", what="predictProductivity")
     outbed = first_existing([os.path.join(pdir, "pred.bed"), os.path.join(pdir, "pred.productivity.bed")])
     if not outbed:
         cands = [os.path.join(pdir, x) for x in os.listdir(pdir) if x.startswith("pred") and x.endswith(".bed")]
         outbed = cands[0] if cands else None
     if not outbed:
-        raise StepFailed("predictProductivity wrote no BED")
+        raise log.missing_output("it wrote no output BED (expected pred.bed)")
     shutil.copyfile(outbed, os.path.join(a.out, "flair.productivity.bed"))
     calls = {}
     for f in read_bed(outbed, min_cols=13):
@@ -1004,17 +1083,38 @@ def run_step(a):
         sys.stderr.write("flair_adapter.py: %s skipped: %s\n" % (a.step, e))
     except AdapterError as e:
         log.data["error"] = str(e)
-        sys.stderr.write("flair_adapter.py: error: %s\n" % e)
+        sys.stderr.write("flair_adapter.py: cannot run the %s step: %s\n"
+                         "  Full record: %s\n" % (a.step, e, os.path.join(out, "adapter_log.json")))
         code = 2
     except StepFailed as e:
         log.data["error"] = str(e)
-        sys.stderr.write("flair_adapter.py: %s failed: %s\n" % (a.step, e))
+        if e.cmd:
+            log.data["failed_command"] = {"cmd": e.cmd, "log": e.log, "exit_code": e.code}
+        sys.stderr.write(failure_message(a.step, log.data.get("flair_version"), e, out, work))
         code = e.code
     finally:
         log.finish(status)
         if not a.keep_work and status != "failed" and os.path.isdir(work):
             shutil.rmtree(work, ignore_errors=True)
     return code
+
+
+def failure_message(step, version, e, out, work):
+    """What failed, the exact command, where the log is, and the end of that log."""
+    lines = ["flair_adapter.py: the %s step failed%s." % (step, " (FLAIR %s)" % version if version else ""),
+             "  What failed: %s." % str(e).rstrip(".")]
+    if e.cmd:
+        lines.append("  Command:     %s" % e.cmd)
+    if e.log:
+        lines.append("  Log:         %s" % e.log)
+    if e.tail and e.tail.strip():
+        lines.append("  Last lines of the log:")
+        lines += ["    | " + l for l in e.tail.rstrip("\n").splitlines()]
+    lines.append("  Every command the adapter ran: %s" % os.path.join(out, "adapter_log.json"))
+    if os.path.isdir(work):
+        lines.append("  FLAIR's working files are kept in %s" % work)
+    lines.append("  flair-eval never patches FLAIR; known version problems are listed in docs/flair_versions.md.")
+    return "\n".join(lines) + "\n"
 
 
 def run_detect(a):
@@ -1040,6 +1140,17 @@ def positive_int(s):
     return v
 
 
+def choice(*allowed):
+    """argparse type: case-insensitive choice, returned in its canonical spelling."""
+    canon = {x.lower(): x for x in allowed}
+
+    def conv(s):
+        if s.lower() not in canon:
+            raise argparse.ArgumentTypeError("must be one of %s, not %r" % ("|".join(allowed), s))
+        return canon[s.lower()]
+    return conv
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="flair_adapter.py", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1051,6 +1162,11 @@ def build_parser():
             sp.add_argument("--threads", type=positive_int, default=1)
         sp.add_argument("--flair-bin", default=None, help="flair executable (default: PATH)")
         sp.add_argument("--keep-work", action="store_true", help="keep DIR/.work (FLAIR's raw run)")
+        sp.add_argument("--platform", type=choice("pacbio", "ont"), default=None,
+                        help="pacbio|ont; recorded in adapter_log.json (FLAIR has no platform setting)")
+        sp.add_argument("--library", type=choice("cDNA", "dRNA"), default=None,
+                        help="cDNA|dRNA; dRNA adds the version's documented direct-RNA flags "
+                             "(see docs/flair_versions.md)")
 
     s = sub.add_parser("align", help="flair align -> aligned.bam(.bai)")
     s.add_argument("--reads", required=True)
@@ -1060,7 +1176,8 @@ def build_parser():
 
     s = sub.add_parser("assemble", help="transcriptome (>=3) or correct+collapse (2.x)")
     s.add_argument("--bam", required=True)
-    s.add_argument("--reads", default=None, help="needed by 2.x collapse")
+    s.add_argument("--reads", default=None,
+                   help="optional; 2.x collapse needs reads and takes them from the BAM when absent")
     s.add_argument("--genome", required=True)
     s.add_argument("--gtf", required=True)
     s.add_argument("--args", default="", help="appended verbatim to transcriptome/collapse")
@@ -1072,15 +1189,19 @@ def build_parser():
     s.add_argument("--isoforms-fa", required=True)
     s.add_argument("--reads", default=None)
     s.add_argument("--sample", required=True)
-    s.add_argument("--isoforms-bed", default=None, help="optional; FLAIR's own BED is found next to the FASTA")
-    s.add_argument("--bam", default=None, help="optional; needed by FLAIR dev quantify")
-    s.add_argument("--genome", default=None, help="optional; needed by FLAIR dev quantify")
+    s.add_argument("--isoforms-bed", default=None, help="optional; assemble's isoforms.bed")
+    s.add_argument("--bam", default=None, help="optional; genome BAM (FLAIR dev quantifies from it)")
+    s.add_argument("--genome", default=None, help="optional; genome FASTA (FLAIR dev quantify)")
+    s.add_argument("--flair-bed", default=None,
+                   help="optional; assemble's isoforms.flair.bed (FLAIR's own BED; dev and TED quantify)")
     common(s)
 
     s = sub.add_parser("productivity", help="predictProductivity (or FLAIR's inline CDS) -> productivity.tsv")
     s.add_argument("--isoforms-bed", required=True)
     s.add_argument("--genome", required=True)
     s.add_argument("--gtf", required=True)
+    s.add_argument("--flair-bed", default=None,
+                   help="optional; assemble's isoforms.flair.bed (inline CDS of dev and TED)")
     common(s, threads=False)
 
     s = sub.add_parser("detect", help="print the detected FLAIR CLI profile")
@@ -1098,7 +1219,7 @@ def main(argv=None):
     if a.step == "detect":
         return run_detect(a)
     if a.step == "quantify" and not a.reads and not a.bam:
-        p.error("quantify needs --reads (or --bam for FLAIR dev)")
+        p.error("quantify needs --reads, or --bam for FLAIR versions that count from the genome BAM")
     return run_step(a)
 
 
