@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flair-eval/runs/1",
+  "title": "flair-eval runs.yaml",
+  "type": "object",
+  "required": [
+    "runs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "runs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "flair"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "flair": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "release"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "release": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "git",
+                  "ref"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "git": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "ref": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "env"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "env": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "container"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "container": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            ]
+          },
+          "transcriptome_args": {
+            "type": "string",
+            "default": ""
+          },
+          "quantify": {
+            "type": "boolean",
+            "default": true
+          },
+          "productivity": {
+            "type": "boolean",
+            "default": true
+          },
+          "own_align": {
+            "type": "boolean",
+            "default": false
+          },
+          "label": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}
