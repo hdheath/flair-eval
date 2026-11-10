@@ -1,0 +1,57 @@
+nextflow_process {
+
+    name "QUANTIFY passes reads, BAM, genome and isoform BEDs (A6-A8)"
+    script "modules/quantify/main.nf"
+    process "QUANTIFY"
+
+    test("with reads and FLAIR's native BED") {
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                def asm = file("\${d}/fake_assemble")
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', platform: 'pacbio', library: null, run: [id: 'r']],
+                    asm, file("\${d}/sampleA.fastq"), file("\${d}/sampleC.bam"), file("\${d}/sampleC.bam.bai"),
+                    file("\${d}/genome.fa"), [conda_prefix: "\${d}/fake_flair_prefix", container: null],
+                ]
+                """
+            }
+        }
+        then {
+            assert process.success
+            def rec = path("${process.out.dir[0][1]}/argv.json").json
+            assert rec.argv[0] == 'quantify'
+            assert rec.opts['isoforms-fa'] == 'fake_assemble/isoforms.fa'
+            assert rec.opts['isoforms-bed'] == 'fake_assemble/isoforms.bed'
+            assert rec.opts['flair-bed'] == 'fake_assemble/isoforms.flair.bed'
+            assert rec.opts.reads == 'sampleA.fastq'
+            assert rec.opts.bam == 'sampleC.bam'
+            assert rec.opts.genome == 'genome.fa'
+            assert rec.opts.sample == 's'
+            assert rec.opts.platform == 'pacbio'
+            assert !rec.opts.containsKey('library')
+        }
+    }
+
+    test("BAM-only sample still quantifies from the BAM") {
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', platform: null, library: null, run: [id: 'r']],
+                    file("\${d}/fake_assemble"), [], file("\${d}/sampleC.bam"), file("\${d}/sampleC.bam.bai"),
+                    file("\${d}/genome.fa"), [conda_prefix: "\${d}/fake_flair_prefix", container: null],
+                ]
+                """
+            }
+        }
+        then {
+            assert process.success
+            def rec = path("${process.out.dir[0][1]}/argv.json").json
+            assert !rec.opts.containsKey('reads')
+            assert rec.opts.bam == 'sampleC.bam'
+        }
+    }
+}

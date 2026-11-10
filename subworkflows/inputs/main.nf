@@ -335,7 +335,7 @@ def loadRunsYaml(String yamlPath, List errors) {
         def nBefore = errors.size()
         def run = checkRun(r, where, errors)
         if (run && seen.containsKey(run.id)) {
-            errors << "${where}: run id '${run.id}' is already used by entry ${seen[run.id]}. Run ids must be unique."
+            errors << "runs file entries ${seen[run.id]} and ${i + 1} both use run id '${run.id}'. Run ids must be unique: give each run in runs.yaml its own explicit id."
         }
         if (run) {
             seen[run.id] = i + 1
@@ -476,31 +476,29 @@ def normaliseRun(Map r) {
  * ---------------------------------------------------------------------------------------------
  */
 def quickRuns(Map p, List errors) {
-    def tokens = p.flair.toString().split(',').collect { t -> t.trim() }.findAll { t -> t }
-    if (!tokens) {
-        errors << "--flair is empty. Give comma-separated tokens, e.g. --flair 3.0.1,dev."
+    def value = p.flair == null ? '' : p.flair.toString()
+    if (!value.trim()) {
+        errors << "--flair is empty; give at least one token, e.g. --flair 3.0.1"
         return []
     }
     def runs = []
     def seen = [:]
-    tokens.each { tok ->
-        def flair = parseFlairToken(tok, errors)
-        if (flair == null) {
+    value.split(',', -1).each { tok ->
+        def t = parseToken(tok)
+        if (t.error) {
+            errors << t.error
             return
         }
-        def id = runIdForToken(flair)
-        if (seen.containsKey(id)) {
-            errors << "--flair tokens '${seen[id]}' and '${tok}' both make run id '${id}'. Remove the duplicate, or use --runs runs.yaml to give each run its own id."
+        if (seen.containsKey(t.id)) {
+            errors << "--flair tokens '${seen[t.id]}' and '${t.token}' both give run id '${t.id}'; write these runs in runs.yaml with distinct ids"
             return
         }
-        seen[id] = tok
-        def raw = [id: id, flair: flair, transcriptome_args: (p.flair_args ?: '').toString()]
-        def where = "--flair token '${tok}'"
+        seen[t.id] = t.token
         def nBefore = errors.size()
-        if (!checkFlairSource(flair, where, errors) || errors.size() != nBefore) {
+        if (!checkFlairSource(t.flair, "--flair token '${t.token}'", errors) || errors.size() != nBefore) {
             return
         }
-        runs << normaliseRun(raw)
+        runs << normaliseRun([id: t.id, flair: t.flair, transcriptome_args: (p.flair_args ?: '').toString()])
     }
     if (errors.size() == 0) {
         schemaCheck([runs: runs], 'runs.schema.json', '--flair runs', errors)
@@ -508,64 +506,100 @@ def quickRuns(Map p, List errors) {
     return runs
 }
 
-def parseFlairToken(String tok, List errors) {
-    def forms = "Valid forms: 3.0.1 | release:3.0.1 | dev | main | git:<ref> | git:<url>@<ref> | env:/abs/path | container:<uri>."
-    if (tok ==~ /^[0-9][0-9A-Za-z.+-]*$/) {
-        return [release: tok]
+/*
+ * One --flair token -> [token, id, flair] or [token, error]. Mirrors cli/src/flair_eval/tokens.py
+ * (parse_token) exactly, including its messages (CONTRACTS section 7, A1).
+ */
+def parseToken(String token) {
+    def t = token.trim()
+    if (!t) {
+        return [token: t, error: 'empty --flair token (check for a stray comma)']
     }
-    if (tok in ['dev', 'main']) {
-        return [git: DEFAULT_FLAIR_GIT(), ref: tok]
-    }
-    def colon = tok.indexOf(':')
-    if (colon < 0) {
-        errors << "--flair token '${tok}' is not recognised. For a FLAIR branch, write git:${tok}. ${forms}"
-        return null
-    }
-    def kind = tok.substring(0, colon)
-    def rest = tok.substring(colon + 1)
-    if (!rest) {
-        errors << "--flair token '${tok}' has nothing after '${kind}:'. ${forms}"
-        return null
-    }
-    if (kind == 'release') {
-        return [release: rest]
-    }
-    if (kind == 'env') {
-        return [env: rest]
-    }
-    if (kind == 'container') {
-        return [container: rest]
-    }
-    if (kind == 'git') {
-        def urlLike = rest.contains('://') || rest.startsWith('git@') || rest.startsWith('/')
-        if (!urlLike) {
-            return [git: DEFAULT_FLAIR_GIT(), ref: rest]
+    if (t.startsWith('release:')) {
+        def v = t.substring('release:'.length()).trim()
+        if (!v) {
+            return [token: t, error: "--flair token '${t}': give a version, e.g. release:3.0.1".toString()]
         }
-        def at = rest.lastIndexOf('@')
-        def minAt = rest.startsWith('git@') ? 3 : -1
-        if (at <= minAt || at == rest.length() - 1) {
-            errors << "--flair token '${tok}' gives a git URL but no ref. Write git:<url>@<branch|tag|sha>."
-            return null
-        }
-        return [git: rest.substring(0, at), ref: rest.substring(at + 1)]
+        return tokenRun(t, 'flair-', v, [release: v])
     }
-    errors << "--flair token '${tok}' starts with unknown source '${kind}:'. ${forms}"
-    return null
+    if (t.startsWith('git:')) {
+        def rest = t.substring('git:'.length()).trim()
+        if (!rest) {
+            return [token: t, error: "--flair token '${t}': give a branch, tag or SHA, e.g. git:dev".toString()]
+        }
+        def url = DEFAULT_FLAIR_GIT()
+        def ref = rest
+        if (looksLikeUrl(rest)) {
+            def at = rest.lastIndexOf('@')
+            url = at > 0 ? rest.substring(0, at) : ''
+            ref = at > 0 ? rest.substring(at + 1) : ''
+            if (!looksLikeUrl(url) || !ref || (ref.contains('/') && ref.contains(':'))) {
+                return [token: t, error: "--flair token '${t}': a git URL needs @<ref>, e.g. git:https://github.com/me/flair@my-branch".toString()]
+            }
+        }
+        return tokenRun(t, 'flair-', ref, [git: url, ref: ref])
+    }
+    if (t.startsWith('env:')) {
+        def path = t.substring('env:'.length()).trim()
+        if (!path) {
+            return [token: t, error: "--flair token '${t}': give a conda env path, e.g. env:/path/to/env".toString()]
+        }
+        return tokenRun(t, 'env-', tokenBasename(path), [env: path])
+    }
+    if (t.startsWith('container:')) {
+        def uri = t.substring('container:'.length()).trim()
+        if (!uri) {
+            return [token: t, error: "--flair token '${t}': give an image, e.g. container:docker://org/flair:3.0.1 or container:/path/flair.sif".toString()]
+        }
+        return tokenRun(t, 'ctr-', containerName(uri), [container: uri])
+    }
+    if (t in ['dev', 'main']) {
+        return [token: t, id: 'flair-' + t, flair: [git: DEFAULT_FLAIR_GIT(), ref: t]]
+    }
+    if (t ==~ /^[0-9].*/) {
+        return tokenRun(t, 'flair-', t, [release: t])
+    }
+    return [token: t, error: "unknown --flair token '${t}'. Use a release (3.0.1), dev, main, git:${t} for another branch, env:/path or container:<uri>".toString()]
 }
 
-def runIdForToken(Map fl) {
-    if (fl.release) {
-        return 'flair-' + safeId(fl.release)
+// Test helper: parseToken over a list (one nf-test call for a whole table).
+def quickRunsCheck(List values, String flairArgs) {
+    return values.collect { v ->
+        def errors = []
+        def runs = quickRuns([flair: v, flair_args: flairArgs], errors)
+        [ids: runs.collect { r -> r.id }, args: runs.collect { r -> r.transcriptome_args }, errors: errors]
     }
-    if (fl.git) {
-        return 'flair-' + safeId(fl.ref)
+}
+
+def parseTokenEach(List tokens) {
+    return tokens.collect { tok -> parseToken(tok.toString()) }
+}
+
+def tokenRun(String token, String prefix, String rest, Map flair) {
+    def rid = prefix + safeId(rest)
+    if (!rest || !(rid ==~ ID_PATTERN())) {
+        return [token: token, error: "--flair token '${token}' gives an unusable run id '${rid}'; write this run in runs.yaml instead".toString()]
     }
-    if (fl.env) {
-        return 'env-' + safeId(fl.env.replaceAll('/+$', '').tokenize('/').last())
-    }
-    def base = fl.container.replaceAll('^[a-z]+://', '').tokenize('/').last()
-    base = base.replaceAll('@sha256:.*$', '').replaceAll(':[^:]*$', '').replaceAll(/\.(sif|img|simg)$/, '')
-    return 'ctr-' + safeId(base)
+    return [token: token, id: rid, flair: flair]
+}
+
+def looksLikeUrl(String s) {
+    return s.contains('://') || s.startsWith('git@') || s.startsWith('/') || s.startsWith('file:')
+}
+
+def tokenBasename(String path) {
+    def p = path.replaceAll('/+$', '')
+    def i = p.lastIndexOf('/')
+    return i >= 0 ? p.substring(i + 1) : p
+}
+
+def containerName(String uri) {
+    def i = uri.indexOf('://')
+    def base = tokenBasename(i >= 0 ? uri.substring(i + 3) : uri)
+    def at = base.indexOf('@')
+    base = at >= 0 ? base.substring(0, at) : base
+    def colon = base.lastIndexOf(':')
+    return colon >= 0 ? base.substring(0, colon) : base
 }
 
 /*

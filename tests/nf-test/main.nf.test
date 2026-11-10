@@ -29,7 +29,22 @@ nextflow_pipeline {
                 assert bj.compute.keySet() == ['cpu_hours', 'peak_rss_gb', 'wall_minutes'] as Set
                 assert bj.pipeline.version && bj.pipeline.created
                 assert bj.inputs.regions.endsWith('regions.bed')
+                // A12: core records the original absolute paths, not PREP_REFERENCE's cut copy
+                assert bj.inputs.genome == "${projectDir}/tests/nf-test/inputs/genome.fa"
+                assert bj.inputs.gtf == "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                assert bj.inputs.reference_cut_to_regions == true
+                def trace = path("${b}/provenance/trace.tsv").readLines()
+                assert trace[0].split('\t') as List == ['task_id', 'name', 'status', 'exit', 'realtime', '%cpu', 'peak_rss', 'rss', 'duration']
+                assert trace.drop(1).every { l -> l.contains("(${j})") && l.split('\t')[2] == 'COMPLETED' }
             }
+            // sections (CONTRACTS section 8): quant and productivity written by BUNDLE
+            def q = path("$outputDir/bundles/sampleA/flair-3.0.1/bundle.json").json.sections
+            assert q.quant.isoforms_quantified == 2
+            assert q.quant.reads_assigned == 4
+            assert q.quant.cpm_hist.edges.size() == q.quant.cpm_hist.counts.size()
+            assert q.quant.cpm_hist.counts.sum() == 2
+            assert q.productivity.class_counts == [NGO: 1, PRO: 1]
+            assert !path("$outputDir/bundles/sampleA/flair-dev/bundle.json").json.sections.containsKey('quant')
             // quantify: false for flair-dev; productivity: false for dev-own-align
             assert !path("$outputDir/bundles/sampleA/flair-dev/counts.tsv").exists()
             assert path("$outputDir/bundles/sampleA/flair-dev/productivity.tsv").exists()
@@ -45,8 +60,14 @@ nextflow_pipeline {
             assert names.count { n -> n.contains('FLAIR_EVAL:ALIGN_SHARED') } == 1
             assert names.count { n -> n.contains('FLAIR_EVAL:ALIGN_OWN') } == 2
             assert names.count { n -> n.contains('FLAIR_EVAL:BUNDLE') } == 6
+            // --regions: one PREP_REFERENCE for the one distinct genome + GTF
+            assert names.count { n -> n.contains('FLAIR_EVAL:PREP_REFERENCE') } == 1
             def html = path("$outputDir/report/report.html").text
             assert html.count('bundle.json') == 6
+            // A5: first run is the default baseline; bundles reach the report in run order
+            assert html.contains('--baseline flair-3.0.1')
+            assert html.indexOf('/flair-3.0.1/bundle.json') < html.indexOf('/flair-dev/bundle.json')
+            assert html.indexOf('/flair-dev/bundle.json') < html.indexOf('/dev-own-align/bundle.json')
             assert path("$outputDir/pipeline_info/params.json").json.input.endsWith('samples.csv')
         }
     }
@@ -59,7 +80,7 @@ nextflow_pipeline {
                 gtf        = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
                 flair      = "3.0.1,dev,git:https://github.com/someone/flair.git@feature/x,container:docker://quay.io/biocontainers/flair:2.0.0--pyhdfd78af_0"
                 flair_args = "--stringent"
-                baseline   = "flair-3.0.1"
+                baseline   = "flair-dev"
                 outdir     = "$outputDir"
             }
         }
@@ -70,7 +91,7 @@ nextflow_pipeline {
                 assert path("$outputDir/bundles/sampleB/${r}/provenance/adapter_assemble.json").json.args == '--stringent'
             }
             def html = path("$outputDir/report/report.html").text
-            assert html.contains('--baseline flair-3.0.1')
+            assert html.contains('--baseline flair-dev')
             assert html.count('bundle.json') == 4
         }
     }
@@ -89,11 +110,12 @@ nextflow_pipeline {
         then {
             assert workflow.success
             assert path("$outputDir/bundles/mysample/flair-3.0.1/bundle.json").exists()
-            // no reads -> no QUANTIFY
-            assert !path("$outputDir/bundles/mysample/flair-3.0.1/counts.tsv").exists()
+            assert path("$outputDir/bundles/mysample/flair-3.0.1/bundle.json").json.inputs.reference_cut_to_regions == false
+            // A6/A7: no reads, but QUANTIFY still runs from the BAM
+            assert path("$outputDir/bundles/mysample/flair-3.0.1/counts.tsv").exists()
             def names = workflow.trace.tasks().collect { t -> t.name }
             assert !names.any { n -> n.contains('ALIGN_SHARED') }
-            assert !names.any { n -> n.contains('QUANTIFY') }
+            assert names.any { n -> n.contains('QUANTIFY') }
         }
     }
 

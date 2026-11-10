@@ -1,0 +1,124 @@
+# flair-eval CI: Python unit tests, nf-test, and stub runs of the whole pipeline.
+# Runs on GitHub-hosted runners only; nothing here needs FLAIR, conda or a cluster.
+name: CI
+
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NXF_VER: "25.10.0"
+  NXF_ANSI_LOG: "false"
+  NFT_VER: "0.9.4"
+
+jobs:
+  pytest:
+    name: pytest (bin + cli)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@v4     # cli/tests/test_builder_parity.py runs the builder JS
+        with:
+          node-version: "20"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pandas>=2" "numpy>=1.24" "pytest>=7" -e "cli[test]"
+      - name: tests/python
+        run: python -m pytest tests/python -q
+      - name: cli/tests
+        run: python -m pytest cli/tests -q
+
+  nf-test:
+    name: nf-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v5   # host python3 runs the bundle step in stub mode
+        with:
+          python-version: "3.12"
+      - uses: nf-core/setup-nextflow@v2
+        with:
+          version: ${{ env.NXF_VER }}
+      - name: Install nf-test
+        run: |
+          wget -qO- https://get.nf-test.com | bash -s $NFT_VER
+          sudo mv nf-test /usr/local/bin/
+      - name: nf-test
+        run: nf-test test -c tests/nf-test/nf-test.config --ci --junitxml=nf-test.xml
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nf-test-results
+          path: nf-test.xml
+          if-no-files-found: ignore
+
+  stub:
+    name: stub run (${{ matrix.mode }}, parser ${{ matrix.parser }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [files, one-command]
+        parser: [v1, v2]
+    env:
+      NXF_SYNTAX_PARSER: ${{ matrix.parser }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: nf-core/setup-nextflow@v2
+        with:
+          version: ${{ env.NXF_VER }}
+      - name: --help lists every parameter
+        run: |
+          nextflow run . --help > help.txt
+          for p in input runs reads bam genome gtf sample platform library flair flair_args outdir \
+                   bundles baseline report_only align_flair regions report_title env_cache; do
+            grep -q -- "--$p " help.txt || { echo "--help is missing --$p"; exit 1; }
+          done
+      - name: stub run
+        run: |
+          D=tests/nf-test/inputs
+          if [ "${{ matrix.mode }}" = files ]; then
+            nextflow run . -stub -profile local --input $D/samples.csv --runs $D/runs.yaml \
+              --regions $D/regions.bed --outdir stub-out
+            test "$(find stub-out/bundles -name bundle.json | wc -l)" -eq 6
+          else
+            nextflow run . -stub -profile local --reads $D/sampleB.fq.gz --genome $D/genome.fa \
+              --gtf $D/annotation.gtf --flair 3.0.1,dev --flair_args='--stringent' --outdir stub-out
+            test "$(find stub-out/bundles -name bundle.json | wc -l)" -eq 2
+          fi
+          test -s stub-out/report/report.html
+          test -s stub-out/pipeline_info/execution_trace.txt
+      - name: Upload stub output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stub-${{ matrix.mode }}-${{ matrix.parser }}
+          path: |
+            stub-out
+            .nextflow.log

@@ -18,8 +18,10 @@ from pathlib import Path
 
 REQUIRED_KEYS = ["schema", "sample", "run_id", "flair", "pipeline", "summary", "categories",
                  "fsm_subcategories", "junctions", "histograms", "sections"]
-TRACE_COLUMNS = ["step", "counted", "realtime_ms", "pct_cpu", "peak_rss_bytes",
-                 "peak_vmem_bytes", "rchar", "wchar"]
+# CONTRACTS section 7, A15. Raw units: realtime/duration ms, %cpu percent, peak_rss/rss bytes.
+TRACE_COLUMNS = ["task_id", "name", "status", "exit", "realtime", "%cpu", "peak_rss", "rss", "duration"]
+# sections.quant cpm_hist: fixed edges so runs compare bin by bin; last bin is open-ended.
+CPM_EDGES = [0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
 STEP_ORDER = ["align", "assemble", "quantify", "productivity", "eval"]
 
 
@@ -33,6 +35,55 @@ def fmt(v):
     if isinstance(v, bool):
         return "true" if v else "false"
     return str(v)
+
+
+def read_tsv(path: Path):
+    """Rows of a one-header TSV as dicts (CONTRACTS section 7, A10)."""
+    with open(path) as fh:
+        lines = [l.rstrip("\n").rstrip("\r") for l in fh if l.strip()]
+    if not lines:
+        return []
+    head = lines[0].split("\t")
+    return [dict(zip(head, l.split("\t"))) for l in lines[1:]]
+
+
+def num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def histogram(values, edges):
+    counts = [0] * len(edges)
+    for v in values:
+        i = 0
+        while i + 1 < len(edges) and v >= edges[i + 1]:
+            i += 1
+        counts[i] += 1
+    return counts
+
+
+def quant_section(counts_tsv: Path):
+    """sections.quant (CONTRACTS section 8) from counts.tsv: isoform_id, count, cpm."""
+    rows = read_tsv(counts_tsv)
+    counts = [num(r.get("count")) for r in rows]
+    cpms = [num(r.get("cpm")) for r in rows]
+    assigned = sum(c for c in counts if c is not None)
+    return {
+        "isoforms_quantified": sum(1 for c in counts if c is not None and c > 0),
+        "reads_assigned": int(assigned) if float(assigned).is_integer() else round(assigned, 3),
+        "cpm_hist": {"edges": CPM_EDGES, "counts": histogram([c for c in cpms if c is not None], CPM_EDGES)},
+    }
+
+
+def productivity_section(prod_tsv: Path):
+    """sections.productivity (CONTRACTS section 8) from productivity.tsv: ..., class."""
+    classes = {}
+    for r in read_tsv(prod_tsv):
+        c = (r.get("class") or "").strip() or "unknown"
+        classes[c] = classes.get(c, 0) + 1
+    return {"class_counts": dict(sorted(classes.items()))}
 
 
 def copy_if(src: Path, dst: Path) -> bool:
@@ -97,19 +148,26 @@ def main(argv=None):
     for k in ("label", "tags"):
         if b.get(k) in (None, "", {}) and info.get(k) not in (None, ""):
             b[k] = info[k]
+    # CONTRACTS section 7, A12: core owns pipeline, inputs and compute. Values core knows win;
+    # anything else structure_metrics recorded (e.g. its own git commit) is kept.
     pipe = b.get("pipeline") or {}
     for k, v in info["pipeline"].items():
-        if pipe.get(k) in (None, ""):
+        if v not in (None, ""):
             pipe[k] = v
     if not pipe.get("created"):
         pipe["created"] = dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     b["pipeline"] = pipe
     inputs = b.get("inputs") or {}
     for k, v in info["inputs"].items():
-        if inputs.get(k) in (None, ""):
-            inputs[k] = v
+        inputs[k] = v           # original absolute paths, not the staged task-local names
     b["inputs"] = inputs
     b["compute"] = info["compute"]
+    sections = b.get("sections") or {}
+    if (out / "counts.tsv").is_file():
+        sections["quant"] = quant_section(out / "counts.tsv")
+    if (out / "productivity.tsv").is_file():
+        sections["productivity"] = productivity_section(out / "productivity.tsv")
+    b["sections"] = sections
     (out / "bundle.json").write_text(json.dumps(b, indent=2) + "\n")
     return 0
 

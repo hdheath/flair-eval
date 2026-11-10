@@ -23,12 +23,14 @@ workflow {
         log.info(topic == 'true' ? paramsHelp(helpOpts) : paramsHelp(helpOpts, topic))
     }
     else {
+        checkFlairArgs(params.flair_args)
         validateParameters()
         log.info(paramsSummaryLog(workflow))
         writeParamsJson()
 
         def prior = parseBundlesParam(params.bundles)
         def ch_bundles
+        def baseline = params.baseline ? params.baseline.toString() : ''
 
         if (params.report_only) {
             if (!prior) {
@@ -51,13 +53,24 @@ workflow {
             if (params.baseline && !(params.baseline in runIds) && !prior) {
                 log.warn("--baseline '${params.baseline}' is not one of this launch's runs (${runIds.join(', ')}) and no --bundles were given; the report will fall back to its default baseline.")
             }
+            // A5: the default baseline is the first run, and core always passes it.
+            baseline = baseline ?: runIds[0]
+            // build_report.py orders runs as first seen, so hand it bundles in run order.
+            def runIndex = runIds.withIndex().collectEntries { rid, i -> [(rid): i] }
             FLAIR_EVAL(inputs.samples, inputs.runs)
             ch_bundles = FLAIR_EVAL.out.bundles
-                .toSortedList { a, b -> a[0].id <=> b[0].id }
+                .toSortedList { a, b -> (runIndex[a[0].run_id] <=> runIndex[b[0].run_id]) ?: (a[0].sample <=> b[0].sample) }
                 .map { items -> items.collect { item -> item[1] } }
         }
 
-        REPORT(ch_bundles, prior, params.report_title, params.baseline ?: '')
+        REPORT(ch_bundles, prior, params.report_title, baseline)
+    }
+}
+
+// A4: `--flair_args "--x"` makes Nextflow set flair_args=true and a stray --x param.
+def checkFlairArgs(Object v) {
+    if (v instanceof Boolean || (v != null && v.toString() == 'true')) {
+        error("--flair_args has no value: Nextflow read the words after it as separate options. Quote it with '=', e.g. --flair_args='--stringent' (or --flair_args='--stringent --check_splice').")
     }
 }
 
