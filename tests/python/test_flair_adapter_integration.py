@@ -5,6 +5,9 @@ Opt-in (skipped unless FLAIR_EVAL_IT_ENVS is set). Run it on a compute node, e.g
   FLAIR_EVAL_IT_READS=reads.fa FLAIR_EVAL_IT_GENOME=genome.fa FLAIR_EVAL_IT_GTF=annotation.gtf \
   FLAIR_EVAL_IT_OUT=/scratch/dir [FLAIR_EVAL_IT_REGIONS=regions.bed] [FLAIR_EVAL_IT_ALIGN_ENV=/envs/flair-3.0.1] \
   python -m pytest tests/python/test_flair_adapter_integration.py -v
+FLAIR_EVAL_IT_EXPECT_FAIL=env_id:step[,…] names steps that are known to crash inside FLAIR (e.g.
+git-425b26040b10:quantify, see docs/flair_versions.md); the test then checks that they fail with a
+non-zero exit and a "What failed" message, and goes on with the other steps.
 The shared BAM is aligned once with FLAIR_EVAL_IT_ALIGN_ENV (default: the first env that has
 `flair align`), like the pipeline's shared align step. docs/flair_versions.md lists the data used.
 """
@@ -19,6 +22,7 @@ ADAPTER = os.path.join(ROOT, "bin", "flair_adapter.py")
 ENVS = [e for e in os.environ.get("FLAIR_EVAL_IT_ENVS", "").split(",") if e]
 pytestmark = pytest.mark.skipif(not ENVS, reason="set FLAIR_EVAL_IT_ENVS to run the integration test")
 THREADS = os.environ.get("FLAIR_EVAL_IT_THREADS", "4")
+EXPECT_FAIL = {tuple(x.split(":", 1)) for x in os.environ.get("FLAIR_EVAL_IT_EXPECT_FAIL", "").split(",") if ":" in x}
 
 
 def cfg(name, required=True):
@@ -140,6 +144,11 @@ def test_version_end_to_end(prefix, shared_bam):
     dq = os.path.join(base, "quantify")
     p = adapter(prefix, "quantify", "--isoforms-fa", os.path.join(d, "isoforms.fa"), "--reads", reads,
                 *full, "--out", dq)
+    if (env_id(prefix), "quantify") in EXPECT_FAIL:
+        assert p.returncode != 0 and "What failed:" in p.stderr and "Log:" in p.stderr, p.stderr
+        results["quantify"] = "fails in FLAIR (expected): " + log_of(dq)["error"]
+        results["quantify_input"] = log_of(dq)["quantify_input"]
+        return finish(prefix, base, d, results, genome, gtf)
     assert p.returncode == 0, p.stderr
     assert not os.path.exists(os.path.join(dq, "skipped.json")), open(os.path.join(dq, "skipped.json")).read()
     rows = tsv(os.path.join(dq, "counts.tsv"))
@@ -150,6 +159,8 @@ def test_version_end_to_end(prefix, shared_bam):
     assert abs(sum(float(r[2]) for r in rows[1:]) - 1e6) < 1
     results["quantify"] = total
     results["quantify_mode"] = log_of(dq)["profile"]["quantify_mode"]
+    results["quantify_input"] = log_of(dq)["quantify_input"]
+    assert results["quantify_input"] == ("bam" if results["quantify_mode"] == "bam_manifest" else "reads")
 
     # BAM-only sample: only versions that count from the BAM (dev) produce counts
     dqb = os.path.join(base, "quantify_bam_only")
@@ -158,7 +169,11 @@ def test_version_end_to_end(prefix, shared_bam):
     skipped = os.path.exists(os.path.join(dqb, "skipped.json"))
     assert skipped == (results["quantify_mode"] == "reads_manifest")
     results["quantify_bam_only"] = "skipped" if skipped else "ok"
+    finish(prefix, base, d, results, genome, gtf)
 
+
+def finish(prefix, base, d, results, genome, gtf):
+    names = [f[3] for f in tsv(os.path.join(d, "isoforms.bed"))]
     dp = os.path.join(base, "productivity")
     p = adapter(prefix, "productivity", "--isoforms-bed", os.path.join(d, "isoforms.bed"), "--genome", genome,
                 "--gtf", gtf, "--flair-bed", os.path.join(d, "isoforms.flair.bed"), "--out", dp)

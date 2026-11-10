@@ -10,12 +10,28 @@ Versions checked on 2026-11-09:
 |---|---|---|
 | **2.2.0** | PyPI `flair-brookslab==2.2.0` | `FLAIR 2.2.0` |
 | **3.0.1** | PyPI `flair-brookslab==3.0.1` | `FLAIR 3.0.1` |
-| **dev** | BrooksLabUCSC `dev` at d033600 (2026-10-26) and at 389748e (2026-11-09) | `FLAIR 3.0.0+dev` |
+| **dev** | BrooksLabUCSC `dev` at 57040d2 (2026-08-19), 425b260 (2026-09-03), d033600 (2026-10-26) and 389748e (2026-11-09) | `FLAIR 3.0.0+dev` |
 | **TED** | TED fork of dev (base 51fa32f, 2026-05-22), HEAD 20c0f47 + uncommitted edits | `FLAIR 3.0.0+dev` |
 
 dev and TED report the same version string, so the adapter **detects the CLI by probing**
 `flair --help` and each subcommand's `--help` rather than by version number.
-`flair_adapter.py detect --json` prints what it found.
+`flair_adapter.py detect --json` prints what it found. Option names come from the same help text:
+the adapter uses the long name (`--genome`, `--threads`, `--output`, …) whenever a command lists
+it, and the short one only when it does not (CONTRACTS A20).
+
+**dev builds differ from each other**, so the "dev" column below is d033600 unless noted:
+
+| dev build | `align` | `quantify` genome option | transcriptome parallel option | `predictProductivity` script |
+|---|---|---|---|---|
+| 57040d2 | yes | `--genome` only (`-g` exits 2) | `--parallel_mode` | — |
+| 425b260 | yes | `--genome` only (`-g` exits 2); **quantify crashes** (FLAIR bug, §7) | `--parallel_mode` | yes |
+| d033600 | no | `-g, --genome` | `--parallel_mode` | no |
+| 389748e | no | `-g, --genome` | **none** (removed; it has `--region_bed`/`--region` instead) | no |
+
+The adapter passes `--parallel_mode byregion` wherever the help lists it and notes in
+`adapter_log.json` when a build has no parallel option. 425b260 is on no branch or tag of
+BrooksLabUCSC/flair (it is on `cafelton/flair` `dev`). GitHub serves it from BrooksLabUCSC by full
+SHA through the fork network, so `flair_env.py` resolves such short SHAs with the GitHub API.
 
 ## 1. Subcommands and the CLI the adapter picks
 
@@ -102,7 +118,9 @@ per `isoforms.fa` record in FASTA order. FLAIR's own table is kept as `flair.cou
 
 **What each version needs (A7).** Core passes everything it has: `--isoforms-fa`, `--reads`
 (unless the sample is BAM-only), `--bam`, `--genome`, `--isoforms-bed`, `--flair-bed`. The adapter
-uses what the version needs and writes `skipped.json` naming what is missing:
+uses what the version needs and writes `skipped.json` naming what is missing. `adapter_log.json`
+records `quantify_input: reads|bam` (A21; also on a skip), because "reads assigned" means reads
+from the reads file for 2.x/3.0.1/TED but alignments in the genome BAM for dev:
 
 | | 2.2.0 / 3.0.1 | TED | dev |
 |---|---|---|---|
@@ -160,6 +178,18 @@ interface symmetry and not passed on.
   `ucsc-bedtobigbed`) and fails without it; dev's `misc/flair_conda_env.yaml` also lists
   `intron-prospector` and a `pysam` range. pip cannot install these, so `flair_env.py` adds the
   runtime conda packages of the commit's own `misc/flair_conda_env.yaml` (found on 389748e).
+  Older dev commits (57040d2, 425b260) already call `bedToBigBed` in `isoform_data.py` but do not
+  list it in that file (425b260 lists it only in `flair_dev_conda_env.yaml`), so `flair_env.py`
+  also scans FLAIR's `.py` files for the programs in `EXTERNAL_TOOLS` (`bedToBigBed` →
+  `ucsc-bedtobigbed`, `intron_prospector` → `intron-prospector`) and adds their packages. For a
+  release the scan runs after the pip install (adding them with `conda install`); 2.2.0 and 3.0.1
+  call neither.
+- **dev 425b260 quantify always crashes**: `flair_quantify.py:199` calls
+  `run_count_sam_transcripts(..., output_bam=False)`, but `count_sam_transcripts.py:675` at that
+  commit no longer takes `output_bam`, so every call ends in `TypeError: run_count_sam_transcripts()
+  got an unexpected keyword argument 'output_bam'`. 57040d2 still has the parameter and works. The
+  adapter reports the failure (exit 1, the command and its log); runs of 425b260 should set
+  `quantify: false` so one crashing task does not abort the whole run.
 - **dev output names move**: between d033600 and 389748e, quantify's `<o>.counts.tsv` became
   `<o>.isoforms.counts.tsv` (+ `<o>.isoforms.sample_info.tsv`). The adapter looks for the known
   names, then for any `<o>.*counts*` table, and logs a warning when it had to guess.
@@ -189,7 +219,7 @@ interface symmetry and not passed on.
   PyPI lacks) is used only when PyPI has no such version; it brings its own tool versions unless
   pinned. `--route pip|bioconda` forces one.
 - **git** → `git ls-remote` resolves the ref (annotated tags dereferenced; a short SHA needs a
-  clone), the commit is fetched shallow by SHA into `<cache>/src/<sha>`, Python is chosen from its
+  clone, and on GitHub falls back to the API for commits only the fork network has), the commit is fetched shallow by SHA into `<cache>/src/<sha>`, Python is chosen from its
   `pyproject.toml`, the runtime conda extras come from its `misc/flair_conda_env.yaml` (the R
   stack, longshot/whatshap and doc/build tools are left out), then `pip install <src>` (not
   editable) into `<cache>/envs/git-<sha12>`.
@@ -235,17 +265,21 @@ Integration results, 2026-11-09, on FLAIR's own test inputs (`test/input/basic.r
 reads; `basic.annotation.gtf`; hg38 chr12+chr17+chr20), shared BAM from 3.0.1 `align`, 4 threads
 on a SLURM short node:
 
-| env | `align` | isoforms (all / BAM-only / `--regions`) | quantify with reads: assigned reads | quantify, BAM-only sample | productivity |
+| env | `align` | isoforms (all / BAM-only / `--regions`) | quantify with reads: assigned (`quantify_input`) | quantify, BAM-only sample | productivity |
 |---|---|---|---|---|---|
-| 2.2.0 (existing env) | ok | 14 / 14 / 13 | 763 | skipped (needs reads) | predictProductivity: 9 PRO, 5 PTC |
-| 3.0.1 (existing env, Python 3.13) | ok | 15 / 15 / 11 | 974 | skipped (needs reads) | predictProductivity: 7 PRO, 5 PTC, 3 NGO |
-| 3.0.1 (`release: 3.0.1`, built from scratch, Python 3.12) | ok | 15 / 15 / 11 | 974 | skipped (needs reads) | predictProductivity |
-| TED 20c0f47+ (existing env) | ok | 7 / 7 / 4 | 774 | skipped (needs reads) | inline: 5 PRO, 2 NGO |
-| dev d033600 (existing env) | skipped | 7 / 7 / 4 | 751 (from the BAM) | **751** | inline: 5 PRO, 2 NGO |
-| dev 389748e (`git: …flair, ref: dev`, built from scratch) | skipped | 7 / 7 / 4 | 751 (from the BAM) | **751** | inline |
+| 2.2.0 (existing env) | ok | 14 / 14 / 13 | 763 (reads) | skipped (needs reads) | predictProductivity: 9 PRO, 5 PTC |
+| 3.0.1 (existing env, Python 3.13) | ok | 15 / 15 / 11 | 974 (reads) | skipped (needs reads) | predictProductivity: 7 PRO, 5 PTC, 3 NGO |
+| 3.0.1 (`release: 3.0.1`, built from scratch, Python 3.12) | ok | 15 / 15 / 11 | 974 (reads) | skipped (needs reads) | predictProductivity |
+| TED 20c0f47+ (existing env) | ok | 7 / 7 / 4 | 774 (reads) | skipped (needs reads) | inline: 5 PRO, 2 NGO |
+| dev 57040d2 (`git`, `ref: 57040d2`, built from scratch) | ok | 7 / 7 / 4 | 714 (bam) | **714** | inline |
+| dev 425b260 (`git`, `ref: 425b260`, built from scratch) | ok | 7 / 7 / 4 | **crashes in FLAIR** (§7) | crashes | inline |
+| dev d033600 (existing env) | skipped | 7 / 7 / 4 | 751 (bam) | **751** | inline: 5 PRO, 2 NGO |
+| dev 389748e (`git: …flair, ref: dev`, built from scratch) | skipped | 7 / 7 / 4 | 751 (bam) | **751** | inline |
 
-Without `--bam`, dev quantify writes `skipped.json` (the contract's minimal call). Run again
-2026-11-09 after the round-1 amendments (A6–A11); all six pass.
+Without `--bam`, dev quantify writes `skipped.json` (the contract's minimal call). Last run
+2026-11-10 after the round-2 amendments (A20, A21): dev transcriptome got
+`--parallel_mode byregion` on 57040d2, 425b260 and d033600 (389748e has no such option), and dev
+quantify got `--genome` on every build.
 
 The freshly built `release: 3.0.1` env gives byte-identical `isoforms.bed/.gtf`, `counts.tsv` and
 `productivity.tsv` to the existing 3.0.1 env, and dev 389748e matches dev d033600 on this data.

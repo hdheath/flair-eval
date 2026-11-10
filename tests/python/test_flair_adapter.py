@@ -78,12 +78,20 @@ HELP = {
      "  -g GENOME, --genome GENOME\n  --sample_name SAMPLE_NAME\n",
  ("dev", "quantify"): "usage: flair quantify [-h] --manifest MANIFEST -g GENOME --isoform_bed\n"
      "                      ISOFORM_BED [-o OUTPUT] [-t THREADS] [--temp_dir TEMP_DIR]\n",
+ ("dev-long", "quantify"): "usage: flair quantify [-h] --manifest MANIFEST --genome GENOME --isoform_bed\n"
+     "                      ISOFORM_BED [--output OUTPUT] [--threads THREADS] [--temp_dir TEMP_DIR]\n",
  ("ted", "quantify"): "usage: quantify [-h] -r R -i I [-o O] [-t T] [--temp_dir TEMP_DIR]\n"
      "                [--isoform_bed ISOFORMS]\n\nrequired named arguments:\n  -r R, --reads_manifest R\n"
      "  -i I, --isoforms I\n  --isoform_bed ISOFORMS, --isoformbed ISOFORMS\n",
 }
 if "--help" in argv:
-    text = HELP.get((GEN, sub))
+    text = None
+    if GEN == "dev" and os.environ.get("FAKE_DEV_LONG_ONLY"):
+        text = HELP.get(("dev-long", sub))
+    if text is None:
+        text = HELP.get((GEN, sub))
+    if text and GEN == "dev" and sub == "transcriptome" and os.environ.get("FAKE_DEV_NO_PARALLEL"):
+        text = text.replace("[--parallel_mode PARALLEL_MODE]", "[--region_bed REGION_BED]")
     if text is None:
         if sub == "quantify":
             text = ("usage: flair quantify -r reads_manifest.tsv -i isoforms.fa [options]\n\n"
@@ -162,7 +170,10 @@ if sub in ("transcriptome", "collapse"):
 if sub == "quantify":
     o = opt("-o", "--output")
     if GEN == "dev":
-        for need in ("--manifest", "-g", "--isoform_bed"):
+        if os.environ.get("FAKE_DEV_LONG_ONLY") and "-g" in argv:
+            sys.stderr.write("flair quantify: error: unrecognized arguments: -g\n"); sys.exit(2)
+        assert "-g" in argv or "--genome" in argv
+        for need in ("--manifest", "--isoform_bed"):
             assert need in argv, need
         nb = [l.split("\t") for l in open(opt("--isoform_bed")).read().splitlines()]
         assert all(len(f) >= 25 for f in nb), "dev quantify needs FLAIR's 25-column BED"
@@ -247,7 +258,7 @@ def fake(tmp_path):
     (inputs / "shared.bam.bai").write_text("")
     (inputs / "regions.bed").write_text("chr1\t0\t5000\n")
 
-    def make(gen, with_pp=True, fail=None):
+    def make(gen, with_pp=True, fail=None, extra_env=None):
         b = tmp_path / ("env_" + gen) / "bin"
         b.mkdir(parents=True, exist_ok=True)
         write_exe(str(b / "flair"), FAKE_FLAIR)
@@ -265,6 +276,9 @@ def fake(tmp_path):
                     "PATH": str(b) + os.pathsep + env["PATH"],
                     "PYTHONPATH": str(tmp_path / ("env_" + gen) / "pylib")})
         env.pop("FLAIR_EVAL_FLAIR", None)
+        env.pop("FAKE_DEV_LONG_ONLY", None)
+        env.pop("FAKE_DEV_NO_PARALLEL", None)
+        env.update(extra_env or {})
         if fail:
             env["FAKE_FLAIR_FAIL"] = fail
         else:
@@ -294,6 +308,14 @@ def assemble(run, out, *extra, check=None):
     i = run.inputs
     return run("assemble", "--bam", i / "shared.bam", "--reads", i / "reads.fa", "--genome", i / "genome.fa",
                "--gtf", i / "annot.gtf", "--args", "", "--threads", "2", "--out", out, *extra, check=check)
+
+
+def argval(call, *names):
+    """Value after whichever of `names` (short or long form) the command used."""
+    for n in names:
+        if n in call:
+            return call[call.index(n) + 1]
+    raise AssertionError("none of %s in %s" % (names, call))
 
 
 def read_tsv(path):
@@ -374,7 +396,7 @@ def test_align(fake):
         "--threads", "3", "--out", out, check=0)
     assert (out / "aligned.bam").exists() and (out / "aligned.bam.bai").exists()
     call = run.calls()[-1]
-    assert call[0] == "align" and call[call.index("-t") + 1] == "3"
+    assert call[0] == "align" and argval(call, "-t", "--threads") == "3"
     log = json.load(open(out / "adapter_log.json"))
     assert log["flair_version"] == "3.0.1" and log["commands"][0]["argv"][1] == "align"
 
@@ -416,7 +438,7 @@ def test_assemble_v2_uses_correct_collapse(fake):
     assert subs.index("correct") < subs.index("collapse")
     assert "transcriptome" not in subs
     col = [c for c in run.calls() if c[0] == "collapse"][0]
-    assert "--generate_map" in col and col[col.index("-r") + 1].endswith("reads.fa")
+    assert "--generate_map" in col and argval(col, "-r", "--reads").endswith("reads.fa")
     labels = [c["label"] for c in log["commands"]]
     assert labels[:3] == ["bam2Bed12", "flair_correct", "flair_collapse"]
 
@@ -430,7 +452,7 @@ def test_assemble_v2_without_reads_extracts_them_from_bam(fake):
         "--out", out, check=0)
     check_assembly(out)
     col = [c for c in run.calls() if c[0] == "collapse"][0]
-    assert col[col.index("-r") + 1].endswith("reads_from_bam.fq")
+    assert argval(col, "-r", "--reads").endswith("reads_from_bam.fq")
     log = json.load(open(out / "adapter_log.json"))
     fq = [c for c in log["commands"] if c["label"] == "samtools_fastq"][0]
     assert fq["argv"][1:4] == ["fastq", "-F", "0x904"]
@@ -451,7 +473,7 @@ def test_assemble_v2_regions_subsets_reads(fake):
     out = run.tmp / "asm"
     assemble(run, out, "--regions", run.inputs / "regions.bed", "--keep-work", check=0)
     col = [c for c in run.calls() if c[0] == "collapse"][0]
-    sub_reads = col[col.index("-r") + 1]
+    sub_reads = argval(col, "-r", "--reads")
     assert "regions.reads" in sub_reads
     assert open(sub_reads).read().count(">") == 2     # readC is outside the regions
     labels = [c["label"] for c in json.load(open(out / "adapter_log.json"))["commands"]]
@@ -471,7 +493,7 @@ def test_assemble_sample_name_and_genes(fake, gen):
     assert tx[tx.index("--sample_name") + 1] == "flaireval"
     assert tx[tx.index("--parallel_mode") + 1] == "byregion"
     assert "--generate_map" in tx
-    assert tx[tx.index("-b") + 1].endswith("regions.bam")
+    assert argval(tx, "-b", "--genome_aligned_bam", "--genomealignedbam").endswith("regions.bam")
     if gen == "dev":
         assert "--temp_dir" in tx
     ncols = len(read_tsv(out / "isoforms.flair.bed")[0])
@@ -640,7 +662,7 @@ def test_failure_message_names_command_and_log(fake):
     err = p.stderr
     assert "the assemble step failed (FLAIR 3.0.1)" in err
     assert "What failed: `flair transcriptome` exited with code 3" in err
-    assert "Command:" in err and " transcriptome -b " in err
+    assert "Command:" in err and " transcriptome --genomealignedbam " in err
     assert "Log:         %s" % (out / "logs" / "01_flair_transcriptome.log") in err
     assert "| Traceback: fake failure in transcriptome" in err
     log = json.load(open(out / "adapter_log.json"))
@@ -731,3 +753,61 @@ def test_stdlib_only():
     if stdlib is None:
         pytest.skip("needs Python 3.10+")
     assert imports <= set(stdlib) | {"__future__"}, imports - set(stdlib)
+
+
+def test_dev_quantify_long_genome_flag(fake):
+    """A20: dev 57040d2/425b260 quantify accept only --genome; the flag comes from --help."""
+    run = fake("dev", extra_env={"FAKE_DEV_LONG_ONLY": "1"})
+    asm = run.tmp / "asm"
+    assemble(run, asm, check=0)
+    out = run.tmp / "q"
+    run("quantify", "--isoforms-fa", asm / "isoforms.fa", "--sample", "s", "--bam", run.inputs / "shared.bam",
+        "--genome", run.inputs / "genome.fa", "--flair-bed", asm / "isoforms.flair.bed",
+        "--threads", "2", "--out", out, check=0)
+    q = [c for c in run.calls() if c[0] == "quantify"][-1]
+    assert "-g" not in q and argval(q, "--genome").endswith("genome.fa")
+    assert argval(q, "--threads") == "2" and "-t" not in q
+    assert len(read_tsv(out / "counts.tsv")) == 4
+    # the older help (short -g listed only) keeps the short form
+    run2 = fake("dev")
+    asm2 = run2.tmp / "asm2"
+    assemble(run2, asm2, check=0)
+    run2("quantify", "--isoforms-fa", asm2 / "isoforms.fa", "--sample", "s", "--bam", run2.inputs / "shared.bam",
+         "--genome", run2.inputs / "genome.fa", "--flair-bed", asm2 / "isoforms.flair.bed",
+         "--out", run2.tmp / "q2", check=0)
+    assert "-g" in [c for c in run2.calls() if c[0] == "quantify"][-1]
+
+
+@pytest.mark.parametrize("no_parallel", [False, True])
+def test_dev_parallel_mode_byregion_when_supported(fake, no_parallel):
+    """A20: --parallel_mode byregion whenever transcriptome --help lists it; nothing otherwise."""
+    run = fake("dev", extra_env={"FAKE_DEV_NO_PARALLEL": "1"} if no_parallel else None)
+    out = run.tmp / "asm"
+    assemble(run, out, check=0)
+    tx = [c for c in run.calls() if c[0] == "transcriptome"][0]
+    log = json.load(open(out / "adapter_log.json"))
+    if no_parallel:
+        assert "--parallel_mode" not in tx and "bychrom" not in tx
+        assert any("no --parallel_mode" in n for n in log["notes"])
+    else:
+        assert argval(tx, "--parallel_mode") == "byregion"
+
+
+@pytest.mark.parametrize("gen,expected", [("v2", "reads"), ("v301", "reads"), ("ted", "reads"), ("dev", "bam")])
+def test_quantify_input_recorded(fake, gen, expected):
+    """A21: adapter_log.json says whether this version counts reads or the genome BAM."""
+    run = fake(gen)
+    asm = run.tmp / "asm"
+    assemble(run, asm, check=0)
+    out = run.tmp / "q"
+    run("quantify", "--isoforms-fa", asm / "isoforms.fa", "--reads", run.inputs / "reads.fa", "--sample", "s",
+        "--bam", run.inputs / "shared.bam", "--genome", run.inputs / "genome.fa",
+        "--flair-bed", asm / "isoforms.flair.bed", "--out", out, check=0)
+    assert json.load(open(out / "adapter_log.json"))["quantify_input"] == expected
+    assert (out / "counts.tsv").exists()
+    # recorded on a skip too, and null for other steps
+    out2 = run.tmp / "q2"
+    run("quantify", "--isoforms-fa", asm / "isoforms.fa", "--sample", "s", "--out", out2,
+        *(["--bam", run.inputs / "shared.bam"]), check=0)
+    assert json.load(open(out2 / "adapter_log.json"))["quantify_input"] == expected
+    assert json.load(open(asm / "adapter_log.json"))["quantify_input"] is None

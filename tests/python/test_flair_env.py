@@ -80,8 +80,11 @@ elif a[0] == "init":
 elif a[0] == "checkout":
     open(os.path.join(src, "pyproject.toml"), "w").write('requires-python = ">=3.12,<3.13"\n')
     os.makedirs(os.path.join(src, "misc"))
+    os.makedirs(os.path.join(src, "src", "flair"))
+    open(os.path.join(src, "src", "flair", "isoform_data.py"), "w").write(
+        "pipettor.run([('bedToBigBed', '-as=x', 'in.bed', 'sizes', 'out.bb')])\n")
     open(os.path.join(src, "misc", "flair_conda_env.yaml"), "w").write(
-        "dependencies:\n  - python >=3.12\n  - minimap2 =2.30\n  - ucsc-bedtobigbed\n  - r-ggplot2\n"
+        "dependencies:\n  - python >=3.12\n  - minimap2 =2.30\n  - r-ggplot2\n"
         "  - pip\n  - pip:\n      - flair-brookslab\n")
     open(os.path.join(src, ".head"), "w").write(SHA)
 elif a[0] == "rev-parse":
@@ -402,3 +405,35 @@ def test_no_conda_message(world):
     if p.returncode == 0:
         pytest.skip("a conda executable is on the minimal PATH")
     assert "needs mamba, micromamba or conda" in p.stderr and "FLAIR_EVAL_CONDA" in p.stderr
+
+
+def test_git_short_sha_from_fork_network(world, tmp_path):
+    """A short SHA that no branch of the repo reaches (e.g. dev 425b260, which lives on a fork's
+    branch) is looked up through the GitHub API, then fetched by full SHA."""
+    api = tmp_path / "ghapi" / "repos" / "BrooksLabUCSC" / "flair" / "commits"
+    api.mkdir(parents=True)
+    (api / SHA[:7]).write_text(json.dumps({"sha": SHA}))
+    world.env["FLAIR_EVAL_GITHUB_API"] = "file://" + str(tmp_path / "ghapi")
+    p, rec = world.resolve({"id": "dev-short", "flair": {"git": "https://github.com/BrooksLabUCSC/flair",
+                                                         "ref": SHA[:7]}})
+    assert p.returncode == 0, p.stderr
+    assert rec["resolved_commit"] == SHA and "fork network" in p.stderr
+    assert "fetch -q --depth 1 origin " + SHA in open(world.env["FAKE_GIT_LOG"]).read()
+
+
+def test_github_commit_sha_rejects_mismatch(tmp_path, monkeypatch):
+    api = tmp_path / "repos" / "o" / "r" / "commits"
+    api.mkdir(parents=True)
+    (api / "abc1234").write_text(json.dumps({"sha": "f" * 40}))
+    monkeypatch.setenv("FLAIR_EVAL_GITHUB_API", "file://" + str(tmp_path))
+    assert flair_env.github_commit_sha("https://github.com/o/r", "abc1234") is None
+    assert flair_env.github_commit_sha("https://gitlab.com/o/r", "abc1234") is None
+
+
+def test_tools_called_by(tmp_path):
+    (tmp_path / "a.py").write_text("run(['bedToBigBed', x])\n# intron_prospector is mentioned in a comment\n")
+    (tmp_path / "b.py").write_text('cmd = ("intron_prospector", "-g")\n')
+    assert flair_env.tools_called_by(str(tmp_path)) == ["intron-prospector", "ucsc-bedtobigbed"]
+    assert flair_env.tools_called_by(str(tmp_path), ["ucsc-bedtobigbed=473"]) == ["intron-prospector"]
+    assert flair_env.merge_extras(["intron-prospector>=1.5"], ["intron-prospector", "x"]) == \
+        ["intron-prospector>=1.5", "x"]

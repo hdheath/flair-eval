@@ -329,6 +329,21 @@ def write_marker(prefix, data):
     os.replace(tmp, os.path.join(prefix, MARKER))
 
 
+def conda_add_called_tools(conda, prefix, have, pins, log_fh):
+    """After a release install: conda-install EXTERNAL_TOOLS the installed FLAIR calls but the
+    env lacks. Returns what was added."""
+    pkg = flair_package_dir(prefix)
+    names = {re.split(r"[=<>! ]", h, maxsplit=1)[0] for h in have}
+    want = [t for t in (tools_called_by(pkg, pins) if pkg else []) if t not in names]
+    if want:
+        argv = [conda, "install", "-y", "-p", prefix, "--override-channels"]
+        for c in CHANNELS:
+            argv += ["-c", c]
+        run(argv + want, log_fh=log_fh, env=build_env(), what="conda install %s" % " ".join(want),
+            hint="FLAIR calls these programs; the log shows why they could not be installed")
+    return want
+
+
 def conda_create(conda, prefix, packages, log_fh):
     argv = [conda, "create", "-y", "-p", prefix, "--override-channels"]
     for c in CHANNELS:
@@ -400,13 +415,38 @@ def fetch_source(url, sha, src, log_fh):
                        log=log_fh.name if log_fh else None)
 
 
+def github_commit_sha(url, ref):
+    """Full SHA for `ref` from the GitHub API, or None. It also finds commits that no branch of
+    `url` reaches but its fork network does (e.g. a short SHA from a fork's branch), which GitHub
+    still serves by full SHA from `url`."""
+    m = re.match(r"^(?:https?://|git@)github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    if not m:
+        return None
+    api = os.environ.get("FLAIR_EVAL_GITHUB_API", "https://api.github.com").rstrip("/")
+    req = urllib.request.Request("%s/repos/%s/%s/commits/%s" % (api, m.group(1), m.group(2), ref),
+                                 headers={"Accept": "application/vnd.github+json",
+                                          "User-Agent": "flair-eval"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            sha = (json.load(r) or {}).get("sha", "")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    return sha if SHA_RE.match(sha or "") and sha.startswith(ref.lower()) else None
+
+
 def resolve_short_sha(url, ref, cache, log_fh):
     tmp = os.path.join(cache, "src", "_resolve-%d" % os.getpid())
     shutil.rmtree(tmp, ignore_errors=True)
     try:
-        run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", url, tmp], log_fh=log_fh, timeout=3600)
+        run(["git", "clone", "-q", "--filter=blob:none", "--no-checkout", url, tmp], log_fh=log_fh, timeout=3600,
+            what="git clone (to look up a short commit id)",
+            hint="check the URL, and that this machine can reach it")
         code, out, err = capture(["git", "-C", tmp, "rev-parse", "--verify", ref + "^{commit}"])
         if code != 0:
+            sha = github_commit_sha(url, ref)
+            if sha:
+                log("%s is on no branch or tag of %s; GitHub knows it as %s (fork network)" % (ref, url, sha))
+                return sha
             raise EnvError("%r is not a branch, tag or commit of %s" % (ref, url),
                            cmd="git rev-parse --verify %s^{commit}" % ref,
                            hint="check the spelling of `ref` in runs.yaml / --flair")
@@ -445,6 +485,43 @@ def shipped_conda_extras(yaml_text, pins):
             continue
         extras.append(spec.replace(" ", ""))
     return extras
+
+
+# External programs FLAIR code calls that pip cannot install, and their conda packages. Some dev
+# commits call bedToBigBed without listing it in misc/flair_conda_env.yaml (57040d2, 425b260),
+# so the source itself is scanned too.
+EXTERNAL_TOOLS = {"bedToBigBed": "ucsc-bedtobigbed", "intron_prospector": "intron-prospector"}
+
+
+def tools_called_by(pkg_dir, pins=()):
+    """Conda packages for EXTERNAL_TOOLS that appear as quoted program names in FLAIR's .py files."""
+    pinned = {re.split(r"[=<>! ]", p, maxsplit=1)[0] for p in pins}
+    found = set()
+    for root, _, files in os.walk(pkg_dir):
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            try:
+                text = open(os.path.join(root, f), errors="replace").read()
+            except OSError:
+                continue
+            for tool, pkg in EXTERNAL_TOOLS.items():
+                if re.search(r"""['"]%s['"]""" % re.escape(tool), text):
+                    found.add(pkg)
+    return sorted(found - pinned)
+
+
+def merge_extras(extras, more):
+    names = {re.split(r"[=<>! ]", e, maxsplit=1)[0] for e in extras}
+    return list(extras) + [m for m in more if m not in names]
+
+
+def flair_package_dir(prefix):
+    for root, dirs, _ in os.walk(os.path.join(prefix, "lib")):
+        if os.path.basename(root) == "site-packages":
+            d = os.path.join(root, "flair")
+            return d if os.path.isdir(d) else None
+    return None
 
 
 def shipped_yaml_for_release(version):
@@ -543,10 +620,11 @@ def resolve_release(version, cache, opts):
             pip_install(pfx, "%s==%s" % (PYPI_PACKAGE, version), log_fh)
         else:
             conda_create(conda, pfx, ["flair=%s" % version] + pins, log_fh)
+        added = conda_add_called_tools(conda, pfx, recipe.get("conda_extras", []), pins, log_fh)
         v = flair_version(prefix=pfx)
         if version not in v:
             raise EnvError("the new env reports %r, not FLAIR %s" % (v, version), log=log_fh.name)
-        return {}
+        return {"conda_extras_from_source": added}
 
     prefix, marker, built = ensure_built(cache, key, builder, recipe)
     return {"source": "release", "requested": version, "resolved_commit": None,
@@ -576,6 +654,7 @@ def resolve_git(url, ref, cache, opts):
         py = pick_python(spec)
         shipped = os.path.join(src, "misc", "flair_conda_env.yaml")
         extras = shipped_conda_extras(open(shipped).read(), pins) if os.path.exists(shipped) else []
+        extras = merge_extras(extras, tools_called_by(os.path.join(src, "src"), pins))
         conda_create(conda, pfx, ["python=%s" % py] + pins + extras + ["pip", "git"], log_fh)
         pip_install(pfx, src, log_fh)
         flair_version(prefix=pfx)
