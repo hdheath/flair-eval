@@ -1,0 +1,108 @@
+// Unit tests for the --flair token table (docs/CONTRACTS.md section 1) and small parsers.
+nextflow_function {
+
+    name "input parsing functions"
+    script "subworkflows/inputs/main.nf"
+
+    test("parseFlairToken: release") {
+        function "parseFlairToken"
+        when { function { """
+            input[0] = '3.0.1'
+            input[1] = []
+        """ } }
+        then { assert function.success; assert function.result == [release: '3.0.1'] }
+    }
+
+    test("parseFlairToken: release: prefix") {
+        function "parseFlairToken"
+        when { function { """
+            input[0] = 'release:2.2.0'
+            input[1] = []
+        """ } }
+        then { assert function.result == [release: '2.2.0'] }
+    }
+
+    test("parseFlairToken: dev and main") {
+        function "parseFlairToken"
+        when { function { """
+            input[0] = 'main'
+            input[1] = []
+        """ } }
+        then { assert function.result == [git: 'https://github.com/BrooksLabUCSC/flair', ref: 'main'] }
+    }
+
+    test("parseFlairToken: git:<ref>") {
+        function "parseFlairToken"
+        when { function { """
+            input[0] = 'git:ted-port'
+            input[1] = []
+        """ } }
+        then { assert function.result == [git: 'https://github.com/BrooksLabUCSC/flair', ref: 'ted-port'] }
+    }
+
+    test("parseFlairToken: git:<url>@<ref>, https and ssh") {
+        function "parseFlairToken"
+        when { function { """
+            input[0] = 'git:git@github.com:someone/flair.git@v3.0.1'
+            input[1] = []
+        """ } }
+        then { assert function.result == [git: 'git@github.com:someone/flair.git', ref: 'v3.0.1'] }
+    }
+
+    test("parseFlairToken: env and container") {
+        function "parseFlairToken"
+        when { function { """
+            input[0] = 'container:docker://quay.io/biocontainers/flair:2.0.0--pyhdfd78af_0'
+            input[1] = []
+        """ } }
+        then { assert function.result == [container: 'docker://quay.io/biocontainers/flair:2.0.0--pyhdfd78af_0'] }
+    }
+
+    test("runIdForToken: every row of the token table") {
+        function "runIdForToken"
+        when { function { """
+            input[0] = [git: 'https://github.com/BrooksLabUCSC/flair', ref: 'feature/x']
+        """ } }
+        then { assert function.result == 'flair-feature-x' }
+    }
+
+    test("runIdForToken: env basename") {
+        function "runIdForToken"
+        when { function { """
+            input[0] = [env: '/home/u/miniforge3/envs/flair-3.0.1/']
+        """ } }
+        then { assert function.result == 'env-flair-3.0.1' }
+    }
+
+    test("runIdForToken: container basename without tag") {
+        function "runIdForToken"
+        when { function { """
+            input[0] = [container: 'docker://quay.io/biocontainers/flair:2.0.0--pyhdfd78af_0']
+        """ } }
+        then { assert function.result == 'ctr-flair' }
+    }
+
+    test("runIdForToken: .sif image") {
+        function "runIdForToken"
+        when { function { """
+            input[0] = [container: '/images/flair_dev.sif']
+        """ } }
+        then { assert function.result == 'ctr-flair_dev' }
+    }
+
+    test("stripReadExtensions") {
+        function "stripReadExtensions"
+        when { function { """
+            input[0] = 'A549.ccs.fastq.gz'
+        """ } }
+        then { assert function.result == 'A549.ccs' }
+    }
+
+    test("splitCsvLine: quotes and escaped quotes") {
+        function "splitCsvLine"
+        when { function { """
+            input[0] = 's1,"a,b","x""y",,z'
+        """ } }
+        then { assert function.result == ['s1', 'a,b', 'x"y', '', 'z'] }
+    }
+}

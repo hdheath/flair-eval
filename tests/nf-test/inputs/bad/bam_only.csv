@@ -1,0 +1,2 @@
+sample,bam,genome,gtf
+bamonly,../sampleC.bam,../genome.fa,../annotation.gtf

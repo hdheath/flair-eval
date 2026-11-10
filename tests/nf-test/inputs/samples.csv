@@ -1,0 +1,3 @@
+sample,reads,bam,genome,gtf,platform,library
+sampleA,sampleA.fastq,,genome.fa,annotation.gtf,pacbio,cDNA
+sampleC,sampleB.fq.gz,sampleC.bam,genome.fa,annotation.gtf,ont,

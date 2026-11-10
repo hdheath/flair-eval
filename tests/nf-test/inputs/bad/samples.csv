@@ -1,0 +1,6 @@
+sample,reads,bam,genome,gtf,platform,library
+bad name,../sampleA.fastq,,../genome.fa,../annotation.gtf,PacBio,cDNA
+nofiles,,,../genome.fa,../annotation.gtf,,
+s3,missing.fq,../noindex.bam,../genome.fa,,,
+dup,../sampleA.fastq,,../genome.fa,../annotation.gtf,,
+dup,../sampleA.fastq,,../genome.fa,../annotation.gtf,,

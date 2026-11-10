@@ -1,0 +1,13 @@
+runs:
+  - id: flair-3.0.1
+    flair: { release: "3.0.1" }
+  - id: flair-dev
+    flair: { git: "https://github.com/BrooksLabUCSC/flair", ref: "dev" }
+    transcriptome_args: "--stringent"
+    quantify: false
+    label: "FLAIR dev"
+    tags: { branch: dev }
+  - id: dev-own-align
+    flair: { git: "https://github.com/BrooksLabUCSC/flair", ref: "dev" }
+    own_align: true
+    productivity: false

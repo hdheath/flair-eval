@@ -1,0 +1,2 @@
+sample,reads,genome,gtf,colour
+s1,../sampleA.fastq,../genome.fa,../annotation.gtf,red
