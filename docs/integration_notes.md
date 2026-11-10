@@ -5,29 +5,17 @@ end-to-end job. Each item names the owning stream and file. Core did not edit th
 
 ## Open items for other streams
 
-### adapter: `bin/flair_adapter.py` does not accept `--platform`, `--library` or `--flair-bed` yet
-CONTRACTS section 7, A8 and A9. Core passes each of these flags only when
-`flair_adapter.py <step> --help` lists it (`modules/adapter_opts.nf`), so nothing breaks today,
-but the values are silently not used.
-
-```
-$ bin/flair_adapter.py assemble --bam x.bam --genome g.fa --gtf a.gtf --out o --platform pacbio
-flair_adapter.py: error: unrecognized arguments: --platform pacbio
-```
-
-Once the adapter adds them, core picks them up with no change.
-
-### adapter: `modules/flair_env/main.nf` stub writes `"source":"stub"`
-CONTRACTS section 7, A11 says the stub must write `source` as the run's `flair` key
-(`release|git|env|container`). The current stub block prints `"source":"stub"`, which is not
-allowed by the bundle schema. It only matters in `-stub` runs (core's EVALUATE_STRUCTURE stub
-writes its own `flair` block), so nothing fails, but the stub `flair_env.json` copied into
-`provenance/` is not contract-shaped. Suggested stub line:
-
-```groovy
-def src = (run.flair.keySet() as List).find { k -> k in ['release', 'git', 'env', 'container'] }
-printf '{"run_id":"%s","source":"%s",...}' '${run.id}' '${src}'
-```
+### Round 3 status
+- Fixed upstream in `v2` (a40c81f): the adapter accepts `--flair-bed`, `--platform` and `--library`
+  (core now passes all of them; `tests/nf-test/adapter_flags.nf.test` checks QUANTIFY and
+  PRODUCTIVITY against the merged adapter's real `--help`), and the FLAIR_ENV stub writes a real
+  `source`. The report draws the section 8 panels.
+- Still open, adapter: `bin/flair_adapter.py` does not write `quantify_input` to
+  `adapter_log.json` yet (A21). Core copies it into `sections.quant.input` as soon as it is
+  there; until then that key is absent in real runs.
+- Still open, adapter: `nextflow lint` warns on `modules/flair_env/main.nf:33`
+  (`containsKey(it)`, implicit closure parameter, deprecated in strict syntax). Suggested:
+  `kinds.find { k -> run.flair instanceof Map && run.flair.containsKey(k) }`.
 
 ## FLAIR behaviour seen in the first real run (not fixable in flair-eval; FLAIR is never patched)
 

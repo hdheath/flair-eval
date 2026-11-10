@@ -61,6 +61,8 @@ ${groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(bundle))}
 JSON
     printf 'isoform_id\\tgene_id\\tchrom\\tstart\\tend\\tstrand\\tn_exons\\tlength\\tcategory\\tsubcategory\\tref_transcript\\tref_gene\\n' > eval/tables/isoforms.tsv
     printf 'iso1_stub\\tnovel_gene_1\\tchr1\\t100\\t900\\t+\\t2\\t500\\tintergenic\\t\\t\\t\\n' >> eval/tables/isoforms.tsv
+    printf 'iso2_stub\\tg1\\tchr1\\t1\\t20\\t+\\t1\\t20\\tFSM\\tCIM\\tt1\\tg1\\n' >> eval/tables/isoforms.tsv
+    printf 'gene_id\\tgene_name\\ng1\\tGENE1\\n' > eval/tables/genes.tsv
     printf 'category\\tsubcategory\\tn\\nintergenic\\t\\t1\\n' > eval/tables/categories.tsv
     """
 }

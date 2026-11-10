@@ -46,6 +46,6 @@ process QUANTIFY {
     flair_adapter.py --help > /dev/null
     mkdir -p quantify
     printf 'isoform_id\\tcount\\tcpm\\niso1_stub\\t3\\t750000\\niso2_stub\\t1\\t250000\\n' > quantify/counts.tsv
-    printf '{"step":"quantify","stub":true,"commands":[]}\\n' > quantify/adapter_log.json
+    printf '{"step":"quantify","stub":true,"commands":[],"quantify_input":"reads"}\\n' > quantify/adapter_log.json
     """
 }

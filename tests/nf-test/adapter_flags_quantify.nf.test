@@ -1,0 +1,36 @@
+// CONTRACTS section 7, A7-A9: with the merged bin/flair_adapter.py, QUANTIFY and PRODUCTIVITY
+// must really pass --flair-bed, --bam, --genome, --isoforms-bed, --platform and --library.
+// The prefix's flair_adapter.py answers --help with the real adapter's help (core probes it)
+// and records the actual call instead of running FLAIR.
+nextflow_process {
+
+    name "QUANTIFY flags reach the merged adapter"
+    script "modules/quantify/main.nf"
+    process "QUANTIFY"
+
+    test("quantify: --flair-bed --bam --genome --isoforms-bed --platform --library") {
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', platform: 'ont', library: 'dRNA', run: [id: 'r']],
+                    file("\${d}/fake_assemble"), file("\${d}/sampleA.fastq"), file("\${d}/sampleC.bam"), file("\${d}/sampleC.bam.bai"),
+                    file("\${d}/genome.fa"), [conda_prefix: "\${d}/real_help_prefix", container: null],
+                ]
+                """
+            }
+        }
+        then {
+            assert process.success
+            def o = path("${process.out.dir[0][1]}/argv.json").json.opts
+            assert o['flair-bed'] == 'fake_assemble/isoforms.flair.bed'
+            assert o['isoforms-bed'] == 'fake_assemble/isoforms.bed'
+            assert o.bam == 'sampleC.bam'
+            assert o.genome == 'genome.fa'
+            assert o.platform == 'ont'
+            assert o.library == 'dRNA'
+            assert o.reads == 'sampleA.fastq'
+        }
+    }
+}

@@ -2,7 +2,11 @@
 """Build one bundle folder (docs/CONTRACTS.md section 3) from a job's step outputs.
 
 Usage:
-  flair_eval_bundle.py --info info.json --env-json flair_env.json --steps DIR --out BUNDLE_DIR
+  flair_eval_bundle.py --info info.json --env-json flair_env.json --steps DIR --out BUNDLE_DIR \
+                       --lib-dir PIPELINE_BIN
+
+sections.quant / sections.productivity are built by `python3 -m flair_eval_lib.sections`
+(CONTRACTS section 9, A19), found in --lib-dir.
 
 DIR holds the step folders written by the pipeline: assemble/ and eval/ (required), and
 quantify/, productivity/, align/ (own_align runs) when they ran. info.json is written by the
@@ -12,7 +16,9 @@ Stdlib only.
 import argparse
 import datetime as dt
 import json
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,8 +26,6 @@ REQUIRED_KEYS = ["schema", "sample", "run_id", "flair", "pipeline", "summary", "
                  "fsm_subcategories", "junctions", "histograms", "sections"]
 # CONTRACTS section 7, A15. Raw units: realtime/duration ms, %cpu percent, peak_rss/rss bytes.
 TRACE_COLUMNS = ["task_id", "name", "status", "exit", "realtime", "%cpu", "peak_rss", "rss", "duration"]
-# sections.quant cpm_hist: fixed edges so runs compare bin by bin; last bin is open-ended.
-CPM_EDGES = [0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
 STEP_ORDER = ["align", "assemble", "quantify", "productivity", "eval"]
 
 
@@ -35,55 +39,6 @@ def fmt(v):
     if isinstance(v, bool):
         return "true" if v else "false"
     return str(v)
-
-
-def read_tsv(path: Path):
-    """Rows of a one-header TSV as dicts (CONTRACTS section 7, A10)."""
-    with open(path) as fh:
-        lines = [l.rstrip("\n").rstrip("\r") for l in fh if l.strip()]
-    if not lines:
-        return []
-    head = lines[0].split("\t")
-    return [dict(zip(head, l.split("\t"))) for l in lines[1:]]
-
-
-def num(v):
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def histogram(values, edges):
-    counts = [0] * len(edges)
-    for v in values:
-        i = 0
-        while i + 1 < len(edges) and v >= edges[i + 1]:
-            i += 1
-        counts[i] += 1
-    return counts
-
-
-def quant_section(counts_tsv: Path):
-    """sections.quant (CONTRACTS section 8) from counts.tsv: isoform_id, count, cpm."""
-    rows = read_tsv(counts_tsv)
-    counts = [num(r.get("count")) for r in rows]
-    cpms = [num(r.get("cpm")) for r in rows]
-    assigned = sum(c for c in counts if c is not None)
-    return {
-        "isoforms_quantified": sum(1 for c in counts if c is not None and c > 0),
-        "reads_assigned": int(assigned) if float(assigned).is_integer() else round(assigned, 3),
-        "cpm_hist": {"edges": CPM_EDGES, "counts": histogram([c for c in cpms if c is not None], CPM_EDGES)},
-    }
-
-
-def productivity_section(prod_tsv: Path):
-    """sections.productivity (CONTRACTS section 8) from productivity.tsv: ..., class."""
-    classes = {}
-    for r in read_tsv(prod_tsv):
-        c = (r.get("class") or "").strip() or "unknown"
-        classes[c] = classes.get(c, 0) + 1
-    return {"class_counts": dict(sorted(classes.items()))}
 
 
 def copy_if(src: Path, dst: Path) -> bool:
@@ -100,6 +55,8 @@ def main(argv=None):
     ap.add_argument("--env-json", required=True, type=Path)
     ap.add_argument("--steps", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--lib-dir", required=True, type=Path,
+                    help="directory holding flair_eval_lib (the pipeline's bin/)")
     a = ap.parse_args(argv)
 
     info = json.loads(a.info.read_text())
@@ -162,12 +119,23 @@ def main(argv=None):
         inputs[k] = v           # original absolute paths, not the staged task-local names
     b["inputs"] = inputs
     b["compute"] = info["compute"]
-    sections = b.get("sections") or {}
-    if (out / "counts.tsv").is_file():
-        sections["quant"] = quant_section(out / "counts.tsv")
-    if (out / "productivity.tsv").is_file():
-        sections["productivity"] = productivity_section(out / "productivity.tsv")
-    b["sections"] = sections
+    if info.get("run_index") is not None:
+        b["run_index"] = int(info["run_index"])          # A17: position in runs.yaml / --flair
+    (out / "bundle.json").write_text(json.dumps(b, indent=2) + "\n")
+
+    # A19: sections.quant / sections.productivity come from the one shared implementation.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(a.lib_dir) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    subprocess.run([sys.executable, "-m", "flair_eval_lib.sections", str(out)], env=env, check=True)
+
+    # A21: how this version quantified (reads | bam), as the adapter recorded it.
+    b = json.loads((out / "bundle.json").read_text())
+    qlog = out / "provenance" / "adapter_quantify.json"
+    quant = (b.get("sections") or {}).get("quant")
+    if quant is not None and qlog.is_file():
+        qin = json.loads(qlog.read_text()).get("quantify_input")
+        if qin:
+            quant["input"] = qin
     (out / "bundle.json").write_text(json.dumps(b, indent=2) + "\n")
     return 0
 

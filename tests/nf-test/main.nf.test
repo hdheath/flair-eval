@@ -39,11 +39,18 @@ nextflow_pipeline {
             }
             // sections (CONTRACTS section 8): quant and productivity written by BUNDLE
             def q = path("$outputDir/bundles/sampleA/flair-3.0.1/bundle.json").json.sections
+            // A19: built by flair_eval_lib.sections; A21: input copied from adapter_log.json
             assert q.quant.isoforms_quantified == 2
             assert q.quant.reads_assigned == 4
             assert q.quant.cpm_hist.edges.size() == q.quant.cpm_hist.counts.size()
             assert q.quant.cpm_hist.counts.sum() == 2
+            assert q.quant.input == 'reads'
             assert q.productivity.class_counts == [NGO: 1, PRO: 1]
+            // A17: run_index = position in runs.yaml; A18: genes.tsv published
+            ['flair-3.0.1': 0, 'flair-dev': 1, 'dev-own-align': 2].each { rid, i ->
+                assert path("$outputDir/bundles/sampleC/${rid}/bundle.json").json.run_index == i
+                assert path("$outputDir/bundles/sampleC/${rid}/tables/genes.tsv").exists()
+            }
             assert !path("$outputDir/bundles/sampleA/flair-dev/bundle.json").json.sections.containsKey('quant')
             // quantify: false for flair-dev; productivity: false for dev-own-align
             assert !path("$outputDir/bundles/sampleA/flair-dev/counts.tsv").exists()

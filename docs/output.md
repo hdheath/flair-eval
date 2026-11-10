@@ -29,7 +29,8 @@ bundles/<sample>/<run_id>/
 ├── productivity.tsv               isoform_id, cds_start, cds_end, class (when productivity ran)
 ├── tables/
 │   ├── isoforms.tsv               one row per isoform with its structural category
-│   └── categories.tsv             category, subcategory, n
+│   ├── categories.tsv             category, subcategory, n
+│   └── genes.tsv                  gene_id, gene_name of reference genes (when written)
 └── provenance/
     ├── flair_env.json             which FLAIR ran: source, version, commit, env/container
     ├── adapter_<step>.json        exact FLAIR commands, version, exit codes, wall time
@@ -84,16 +85,21 @@ the evaluation), with the columns of CONTRACTS section 7, A15, in raw units:
 
 ### `sections`
 
-BUNDLE adds two report sections (CONTRACTS section 8) when their files exist:
+BUNDLE adds two report sections (CONTRACTS sections 8 and 9) when their files exist, by calling
+the one shared implementation, `python3 -m flair_eval_lib.sections <bundle_dir>` (A19):
 
 | key | from | content |
 |---|---|---|
-| `sections.quant` | `counts.tsv` | `isoforms_quantified` (count > 0), `reads_assigned` (Σ count), `cpm_hist` |
+| `sections.quant` | `counts.tsv` | `isoforms_quantified`, `reads_assigned`, `cpm_hist`, and `input` (`reads` or `bam`: how this FLAIR version quantified, copied from the adapter log, A21) |
 | `sections.productivity` | `productivity.tsv` | `class_counts`: isoforms per productivity class |
 
-`cpm_hist` uses fixed edges `0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000`
-over all isoforms in `counts.tsv`; like the other histograms the last bin is open-ended, so
-`len(counts) == len(edges)`.
+Both count only isoforms listed in `tables/isoforms.tsv`, so a `--regions` run counts the same
+isoforms in every panel. The CPM bin edges are defined in `bin/flair_eval_lib/sections.py`.
+
+### Other `bundle.json` keys set by BUNDLE
+
+- `run_index` (A17): the run's position in runs.yaml or `--flair` order, starting at 0. The
+  report lists runs as baseline first, then by `run_index`.
 
 ### `--regions` and the reference FLAIR sees
 
