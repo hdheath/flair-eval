@@ -138,12 +138,21 @@ Paths: `/private/groups/brookslab/hdheath/claude-tmp/09_11_26_flair_eval_e2e/`
 
 - Core passes `--baseline` only when the user gave one, or when there are no `--bundles`
   (then this launch's first run, A5). With `--bundles` and no `--baseline` it passes none.
-- Pending: re-run REPORT for `results_add/` once the report stream's A22 lands in `v2`
-  (`build_report.py` picks the first run of the earliest launch). At aac4602 it still falls back
-  to name order without `--baseline`, so the re-run would not show the intended baseline yet.
-  Command, from `09_11_26_flair_eval_e2e/`:
+- Done in round 6, see below.
 
-  ```
-  sbatch --export=ALL,RUNS=$PWD/inputs/runs_add.yaml,OUT=$PWD/results_add,EXTRA="--bundles $PWD/results_final/bundles -resume" run_final.sbatch
-  ```
-  Only REPORT re-runs (its baseline input changes); FLAIR tasks come from the cache.
+## Round 6: A24 launch id, and the add-a-run report re-checked
+
+- BUNDLE writes `pipeline.launch` = `workflow.sessionId` (A24). nf-test checks that every bundle
+  of one launch carries the same UUID.
+- `results_add/` relaunched with `-resume` (SLURM job 46969356, 4.8 min). The FLAIR steps of the
+  3.0.0 job (ASSEMBLE, QUANTIFY, PRODUCTIVITY, EVALUATE_STRUCTURE) re-ran as well as BUNDLE and
+  REPORT, not only REPORT: the merged adapter's `.fai` guard changed `bin/flair_adapter.py`, and
+  Nextflow hashes the bin scripts a task calls. FLAIR_ENV and PREP_REFERENCE came from cache.
+- The new `flair-3.0.0` bundle has a launch id; the five `results_final/` bundles have none, so
+  the report uses its fallback rule. Its embedded data shows
+  `baseline_rule = {rule: earliest_launch, launches: 2}`, baseline `flair-2.2.0`.
+- Headless Chromium: header reads "baseline FLAIR 2.2.0, first run of the earliest of 2
+  launches"; runs listed FLAIR 2.2.0, FLAIR 3.0.0, FLAIR 3.0.1, dev (tip), dev @425b260, TED
+  (baseline first, then run_index, then id); no console errors.
+- Report: `/private/groups/brookslab/hdheath/claude-tmp/09_11_26_flair_eval_e2e/results_add/report/report.html`
+  (the round-4 version is kept beside it as `report.round4.html`).

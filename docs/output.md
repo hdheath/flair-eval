@@ -51,6 +51,7 @@ pipeline knows:
 | key | filled with |
 |---|---|
 | `pipeline.version` / `pipeline.commit` | the pipeline manifest version and git commit (null for a local checkout) |
+| `pipeline.launch` | Nextflow's session id: the same for every bundle of one launch, and kept by `-resume` (A24) |
 | `pipeline.created` | when the bundle was written (UTC). The newest bundle wins when the report sees the same (sample, run_id) twice |
 | `inputs` | absolute paths of the original `genome`, `gtf`, `reads`, `bam`, `regions`, plus `platform`, `library` and `reference_cut_to_regions` (below); other keys written by structure_metrics are kept |
 | `label`, `tags` | from the run, when structure_metrics left them empty |

@@ -76,6 +76,10 @@ nextflow_pipeline {
             assert html.indexOf('/flair-3.0.1/bundle.json') < html.indexOf('/flair-dev/bundle.json')
             assert html.indexOf('/flair-dev/bundle.json') < html.indexOf('/dev-own-align/bundle.json')
             assert path("$outputDir/pipeline_info/params.json").json.input.endsWith('samples.csv')
+            // A24: one launch id (the Nextflow session id) on every bundle of this launch
+            def launchIds = jobs.collect { j -> path("$outputDir/bundles/${j}/bundle.json").json.pipeline.launch }.unique()
+            assert launchIds.size() == 1
+            assert launchIds[0] ==~ /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/
         }
     }
 

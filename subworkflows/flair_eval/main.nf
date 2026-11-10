@@ -231,7 +231,8 @@ def bundleInfo(Map j, Map s, List parts) {
             // with --regions FLAIR saw PREP_REFERENCE's copy cut to these chromosomes
             reference_cut_to_regions: params.regions ? true : false,
         ],
-        pipeline: [version: workflow.manifest.version ?: null, commit: workflow.commitId ?: null],
+        // A24: launch = Nextflow session id, shared by every bundle of one launch (and kept on -resume)
+        pipeline: [version: workflow.manifest.version ?: null, commit: workflow.commitId ?: null, launch: workflow.sessionId?.toString()],
         compute : computeFromTrace(rows.findAll { r -> r.counted }),
         trace   : rows,
     ]
