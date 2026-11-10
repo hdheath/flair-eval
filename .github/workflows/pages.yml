@@ -13,6 +13,7 @@ on:
       - "bin/build_report.py"
       - "bin/flair_eval_lib/**"
       - "tests/fixtures/bundles/**"
+      - "assets/demo/**"
       - "cli/**"
       - ".github/workflows/pages.yml"
   pull_request:
@@ -23,6 +24,7 @@ on:
       - "bin/build_report.py"
       - "bin/flair_eval_lib/**"
       - "tests/fixtures/bundles/**"
+      - "assets/demo/**"
       - "cli/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:

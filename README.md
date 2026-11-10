@@ -4,9 +4,9 @@ Compare FLAIR runs (different versions, branches or settings) on the same long-r
 Results come out as one self-contained HTML report: open any single run, or tick several
 runs to compare them.
 
-> **Status:** v2 is under construction on the `v2` branch. See [docs/DESIGN.md](docs/DESIGN.md)
-> and [docs/CONTRACTS.md](docs/CONTRACTS.md). The previous multi-assembler pipeline is in `legacy/`
-> for reference.
+> **Status:** v2, the FLAIR-only rewrite, is on `main` (development continues on `v2`). See
+> [docs/DESIGN.md](docs/DESIGN.md) and [docs/CONTRACTS.md](docs/CONTRACTS.md). The previous
+> multi-assembler pipeline is in `legacy/` for reference.
 
 **Supported FLAIR versions:** 2.2.0, 3.0.1 and `dev` (the tip of BrooksLabUCSC/flair `dev`,
 resolved to a commit at launch). Other releases, branches, envs and containers can be named too,
