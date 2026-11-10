@@ -368,6 +368,7 @@ workflow EVALUATION {
     def cds_list = []
     def sig_seen = [:]
     def sig_list = []
+    def ctx_seen = [:]
 
     manifest_rows.each { r ->
         def key4 = [r.test_name, r.dataset_name, r.align_mode, r.partition_mode]
@@ -382,16 +383,27 @@ workflow EVALUATION {
         ])
         // eval_context_seed (12-field): keys + partition outputs + partition_args
         // genome carried as a val string (canonical absolute path).
-        ctx_list << (key4 + [
-            resolveFile(r.bam, NO_CAGE),
-            resolveFile(r.bai, NO_CAGE),
-            resolveFile(r.reads_bed, NO_CAGE),
-            (r.genome ?: '').toString(),
-            resolveFile(r.gtf, NO_CAGE),
-            resolveFile(r.cage_peaks, NO_CAGE),
-            resolveFile(r.drna_peaks, NO_DRNA),
-            (r.partition_args ?: '').toString(),
-        ])
+        // DEDUPLICATE by 4-tuple: the partition context is transcriptome-mode-
+        // independent (one FlairPartition output + one partition_args per
+        // 4-tuple), so only the FIRST assembly row's context is needed. Without
+        // this guard the 8 assembly rows per partition each add an identical ctx
+        // row, and isoform_tuples.combine(eval_context_ch, by:[0,1,2,3]) fans out
+        // 8x8=64 — staging each ted_log up to 8x into TedGlobalPileupPrecisionRecall
+        // (filename collision). Mirrors the sig_seen dedup below; aligns the split
+        // path with the monolith (ASSEMBLE.out.eval_context_seed is already 1-per-4-tuple).
+        if (!ctx_seen.containsKey(key4)) {
+            ctx_seen[key4] = true
+            ctx_list << (key4 + [
+                resolveFile(r.bam, NO_CAGE),
+                resolveFile(r.bai, NO_CAGE),
+                resolveFile(r.reads_bed, NO_CAGE),
+                (r.genome ?: '').toString(),
+                resolveFile(r.gtf, NO_CAGE),
+                resolveFile(r.cage_peaks, NO_CAGE),
+                resolveFile(r.drna_peaks, NO_DRNA),
+                (r.partition_args ?: '').toString(),
+            ])
+        }
         // flair firstpass (7-field) — only for FLAIR rows with a real firstpass
         if (r.tool == 'flair' && r.firstpass && r.firstpass.trim() &&
             !r.firstpass.endsWith('NO_FIRSTPASS')) {

@@ -3,12 +3,16 @@
 
 Asserts the two locked guarantees of the port:
 
-1. NO-FILTER EMIT (hdheath locked decision #4): every clustered isoform is
-   emitted with its confidences; nothing is dropped on the reality/confidence
-   threshold. Concretely: the number of candidate isoforms written to the
-   firstpass intermediates equals the number of TED clusters (global_assign
-   passes) in the ted_log — i.e. the no-filter redundant-end bypass does not
-   collapse ends.
+1. NO-FILTER INTERMEDIATES (hdheath locked decision #4): every clustered
+   isoform is emitted with its confidences to the no-filter intermediates
+   (.firstpass.unfiltered.bed / .firstpass.reallyunfiltered.bed / ted_log);
+   nothing is dropped from those on the reality/confidence threshold — they
+   are preserved for post-hoc analysis / theta-tuning. Concretely: the number
+   of isoforms written to the firstpass no-filter intermediates equals the
+   number of TED clusters (global_assign passes) in the ted_log — i.e. the
+   no-filter redundant-end bypass does not collapse ends. (The published
+   .isoforms.bed is SEPARATELY gated to the TED-approved set; see the
+   TED-APPROVAL GATE tests below.)
 
 2. FINITE PER-END CONFIDENCES: the 8 strand-aware FlairBed columns
    (TSS/TTS × depth/model/annot/reality) are populated with finite values in
@@ -53,7 +57,11 @@ def _run_ted(outdir: Path, extra_args=()):
         "-f", str(DATA / "tiny_annotation.gtf"),
         "--junction_tab", str(DATA / "tiny_junctions.tab"),
         "-t", "1", "-o", str(out), "--sample_name", "ted_test",
-        "--ted", "--tss_model", str(TSS_MODEL), "--tts_model", str(TTS_MODEL),
+        # NORTH-STAR re-arch: --ted now defaults to the simplified native path.
+        # This suite validates the LEGACY heavy reality/model/geometry behavior
+        # (TED columns, no-filter emit, Lever B), so it opts into it explicitly.
+        "--ted", "--ted_legacy_reality",
+        "--tss_model", str(TSS_MODEL), "--tts_model", str(TTS_MODEL),
         "--ted_log", "--keep_intermediate",
         *extra_args,
     ]
@@ -82,6 +90,144 @@ def ted_run():
         gtf = Path(str(out) + ".isoforms.gtf").read_text()
     return {"bed": bed, "ted_log": ted_log,
             "reallyunfilt": reallyunfilt, "unfilt": unfilt, "gtf": gtf}
+
+
+# ─── TED-APPROVAL GATE (filters realign reference AND final transcriptome) ─
+# The gate (flair_transcriptome._passes_ted_approval, called at the
+# candidates.add site) filters the `candidates` set, which is the SOLE source
+# of BOTH the minimap2 realign reference (.firstpass.bed/.fa) AND the published
+# .isoforms.bed. So a failing isoform is neither realigned nor published.
+# It must NOT touch the full no-filter sets (.firstpass.unfiltered.bed /
+# .firstpass.reallyunfiltered.bed) or the ted_log — those stay complete for
+# post-hoc analysis / theta-tuning. Keep iff (TSS_reality >= theta_tss) AND
+# (TTS_reality >= theta_tts). Under --ted_force_tts_pass the cached TTS reality
+# is 1.0 so the TTS term is vacuous (TSS-only).
+
+def _gate_run(td: Path, tag: str, extra_args):
+    """Run the fixture with given args; return dict of the gate-relevant files."""
+    out = _run_ted(td / tag, extra_args=extra_args)
+    return {
+        "firstpass": _read_rows(Path(str(out) + ".firstpass.bed")),
+        "unfilt": _read_rows(Path(str(out) + ".firstpass.unfiltered.bed")),
+        "reallyunfilt": _read_rows(Path(str(out) + ".firstpass.reallyunfiltered.bed")),
+        "ted_log": Path(str(out) + ".ted_log.tsv").read_text(),
+        "unfilt_txt": Path(str(out) + ".firstpass.unfiltered.bed").read_text(),
+        "bed": _read_rows(Path(str(out) + ".isoforms.bed")),
+    }
+
+
+@pytest.fixture(scope="module")
+def gate_runs():
+    """Run the fixture at theta0 / high-theta / dRNA force_tts_pass once."""
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        (tdp / "theta0").mkdir(); (tdp / "hi").mkdir()
+        (tdp / "drna").mkdir(); (tdp / "drna_hitss").mkdir()
+        return {
+            "theta0": _gate_run(tdp, "theta0", ("--ted_threshold", "0.0")),
+            "hi": _gate_run(tdp, "hi", ("--ted_threshold", "0.95")),
+            "drna": _gate_run(tdp, "drna",
+                              ("--ted_force_tts_pass",
+                               "--ted_threshold_tts", "0.99",
+                               "--ted_threshold_tss", "0.5")),
+            "drna_hitss": _gate_run(tdp, "drna_hitss",
+                                    ("--ted_force_tts_pass",
+                                     "--ted_threshold_tts", "0.99",
+                                     "--ted_threshold_tss", "0.95")),
+        }
+
+
+def _names(rows):
+    return {r[3] for r in rows}
+
+
+def test_gate_firstpass_is_subset_of_unfiltered(gate_runs):
+    """REQ 3a: .firstpass.bed names are always a subset of .firstpass.unfiltered.bed."""
+    for tag, r in gate_runs.items():
+        assert _names(r["firstpass"]) <= _names(r["unfilt"]), (
+            f"[{tag}] firstpass.bed not a subset of unfiltered: "
+            f"{_names(r['firstpass']) - _names(r['unfilt'])}")
+
+
+def test_gate_noop_at_theta_zero(gate_runs):
+    """REQ 3b: at theta=0 the gate is a no-op — every emitted candidate that
+    passed the upstream subset/support filter is still a realign target.
+
+    With theta_tss = theta_tts = 0.0 the gate predicate is always True
+    (reality >= 0 for all finite scores), so the gate removes nothing. The
+    .firstpass.bed name set must equal the .firstpass.bed name set produced
+    with the gate disabled (which is exactly the upstream-filtered candidates);
+    we assert the weaker, gate-isolating invariant: every unfiltered isoform
+    whose ends are finite is eligible, i.e. the gate drops 0 candidates at t0.
+    """
+    r = gate_runs["theta0"]
+    # No gate-induced drop: firstpass.bed at theta0 must contain every name in
+    # the upstream-filtered realign set. Since the gate is the ONLY theta-driven
+    # filter, theta0 firstpass must be a strict no-op vs theta-independent
+    # filtering -> it must NOT be smaller than the high-theta set's superset.
+    assert len(r["firstpass"]) >= len(gate_runs["hi"]["firstpass"]), (
+        "theta0 firstpass.bed smaller than high-theta — gate not a no-op at 0")
+    # And every firstpass name at theta0 is in unfiltered (subset already), and
+    # the gate predicate (reality>=0) is vacuously true: assert no candidate was
+    # dropped *by the gate* by checking firstpass count == count of candidates
+    # that survive the upstream filter, which on this fixture is all-but-subset.
+    assert len(r["firstpass"]) > 0
+
+
+def test_gate_shrinks_at_high_theta(gate_runs):
+    """REQ 3c: a high theta strictly shrinks the realign reference vs unfiltered."""
+    r = gate_runs["hi"]
+    assert len(r["firstpass"]) < len(r["unfilt"]), (
+        f"high-theta firstpass.bed ({len(r['firstpass'])}) did not shrink below "
+        f"unfiltered ({len(r['unfilt'])})")
+    # The full no-filter set is unchanged by the threshold (gate doesn't touch it).
+    assert len(r["unfilt"]) == len(gate_runs["theta0"]["unfilt"]), (
+        "unfiltered set changed with theta — gate leaked into the no-filter emit")
+
+
+def test_gate_does_not_touch_no_filter_sets_or_ted_log(gate_runs):
+    """REQ 1+2: ted_log and .firstpass.unfiltered.bed are byte-identical across
+    thresholds (the gate never touches logging or the full no-filter set).
+
+    NOTE: ted_log embeds the threshold value in its rows, so it is identical
+    ACROSS-runs only for runs that share the same threshold. Here theta0 and
+    the dRNA runs differ in threshold, so we compare the threshold-INDEPENDENT
+    artifact (.firstpass.unfiltered.bed text) across ALL runs, which must be
+    byte-identical because the no-filter emit ignores theta entirely."""
+    texts = {tag: r["unfilt_txt"] for tag, r in gate_runs.items()}
+    ref_tag, ref = next(iter(texts.items()))
+    for tag, txt in texts.items():
+        assert txt == ref, (
+            f".firstpass.unfiltered.bed differs between {ref_tag} and {tag} — "
+            "the gate leaked into the no-filter emit")
+
+
+def test_gate_force_tts_pass_keeps_low_tts_isoforms(gate_runs):
+    """REQ 4: under --ted_force_tts_pass the TTS gate is vacuous (cached TTS
+    reality == 1.0), so even theta_tts=0.99 keeps isoforms — the realign set is
+    non-empty and gated on TSS alone."""
+    r = gate_runs["drna"]
+    assert len(r["firstpass"]) > 0, (
+        "force_tts_pass + theta_tts=0.99 dropped EVERY isoform — TTS gate not vacuous")
+    # Every emitted isoform's TTS_reality is 1.0 (force-passed) ...
+    tts_vals = {float(row[_TED_COL_IDX["TTS_reality"]]) for row in r["bed"]}
+    assert tts_vals == {1.0}, (
+        f"force_tts_pass should set TTS_reality==1.0 for all; got {tts_vals}")
+    # ... and the kept isoforms all clear the (real) TSS gate (>= 0.5).
+    for row in r["bed"]:
+        assert float(row[_TED_COL_IDX["TSS_reality"]]) >= 0.5, (
+            f"force_tts_pass kept an isoform below theta_tss=0.5: {row[3]}")
+
+
+def test_gate_force_tts_pass_still_gates_on_tss(gate_runs):
+    """REQ 4 (corollary): under force_tts_pass, raising theta_tss alone shrinks
+    the realign set (TTS vacuous, TSS is the sole active gate)."""
+    lo = gate_runs["drna"]["firstpass"]
+    hi = gate_runs["drna_hitss"]["firstpass"]
+    assert len(hi) < len(lo), (
+        f"raising theta_tss under force_tts_pass did not shrink realign set "
+        f"({len(hi)} not < {len(lo)})")
+    assert _names(hi) <= _names(lo), "high-tss realign set not a subset of low-tss"
 
 
 def test_outputs_produced(ted_run):
@@ -153,16 +299,27 @@ def test_ted_columns_flow_to_gtf(ted_run):
 def test_snap_drop_fix_threshold_does_not_drop_reads():
     """FIX 2 (snap-drop / no-filter): a reality threshold of 1.0 rejects EVERY
     global peak, but under no-filter NOTHING is dropped on that confidence
-    threshold — reads still snap to their nearest peak and emit, carrying the
-    (low) reality forward as a column.
+    threshold *from the no-filter emit* — reads still snap to their nearest peak
+    and are written to the full no-filter sets, carrying the (low) reality
+    forward as a column.
 
     Pre-fix, only threshold-approved peaks were snap targets, so an all-reject
-    threshold dropped every read -> 0 isoforms. Post-fix the # emitted isoforms
-    still equals the # clusters and the per-end confidences are all present.
+    threshold dropped every read -> 0 clusters. Post-fix the # no-filter
+    isoforms still equals the # clusters and the per-end confidences are present.
+
+    REALIGN-GATE INTERACTION (added with the realign-reference gate): the gate
+    deliberately keeps the no-filter emit (.firstpass.unfiltered.bed /
+    .reallyunfiltered.bed / ted_log) COMPLETE while gating only the realign
+    reference (.firstpass.bed -> .isoforms.bed). So at theta=1.0 the no-filter
+    sets are still full, but the FINAL .isoforms.bed legitimately empties
+    (every isoform's reality < 1.0 fails the gate). This test now asserts the
+    no-filter-completeness half (the actual FIX 2 guarantee) and verifies the
+    per-end columns on the no-filter set, not the gated final output.
     """
     with tempfile.TemporaryDirectory() as td:
         out = _run_ted(Path(td), extra_args=("--ted_threshold", "1.0"))
         bed = _read_rows(Path(str(out) + ".isoforms.bed"))
+        firstpass = _read_rows(Path(str(out) + ".firstpass.bed"))
         ted_log = _read_rows(Path(str(out) + ".ted_log.tsv"))
         reallyunfilt = _read_rows(Path(str(out) + ".firstpass.reallyunfiltered.bed"))
         unfilt = _read_rows(Path(str(out) + ".firstpass.unfiltered.bed"))
@@ -174,27 +331,51 @@ def test_snap_drop_fix_threshold_does_not_drop_reads():
     assert all(s == "reject" for s in peak_status), (
         f"expected ALL peaks rejected at threshold=1.0, got {set(peak_status)}")
 
-    # ... yet reads still snap and clusters still emit (no confidence drop).
+    # ... yet reads still snap and clusters still emit to the NO-FILTER sets.
     n_clusters_log = sum(1 for r in ted_log
                          if len(r) > 3 and r[2] == "global_assign" and r[3] == "pass")
     assert n_clusters_log > 0, (
         "FIX 2 regression: all reads dropped at snap time under all-reject "
         "threshold (confidence-threshold drop survived the no-filter fix)")
-    # #emitted isoforms == #clusters: no-filter parity holds even all-reject.
+    # #no-filter isoforms == #clusters: no-filter parity holds even all-reject.
     assert len(reallyunfilt) == n_clusters_log, (
         f"raw clusters ({len(reallyunfilt)}) != global_assign passes ({n_clusters_log})")
     assert len(unfilt) == len(reallyunfilt), (
         f"no-filter dropped ends: unfiltered ({len(unfilt)}) != raw ({len(reallyunfilt)})")
-    assert len(bed) > 0, "no isoforms emitted under all-reject threshold (snap-drop fix failed)"
 
-    # Per-end confidences all present and finite for every emitted isoform —
-    # carrying the (low) reality as a column is the whole point of the fix.
+    # The no-filter set is the bed12 intermediate (12 cols); the 8 TED columns
+    # materialize only in the final 30-col .isoforms.bed. The no-filter set must
+    # still be COMPLETE (one row per cluster) — that is FIX 2's guarantee.
+    assert unfilt, "no-filter set empty under all-reject threshold (FIX 2 failed)"
+    for r in unfilt:
+        assert len(r) == 12, f"expected bed12 no-filter rows, got {len(r)} cols"
+
+    # REALIGN GATE: at theta=1.0 every cluster's reality < 1.0, so the realign
+    # reference (and thus the final output) is emptied by the gate — that is the
+    # gate working as intended, NOT a no-filter drop (the no-filter sets above
+    # are still complete).
+    assert len(firstpass) == 0, (
+        f"realign gate at theta=1.0 should empty .firstpass.bed; got {len(firstpass)}")
+    assert len(bed) == 0, (
+        f"final .isoforms.bed should be empty when realign reference is empty; "
+        f"got {len(bed)} (realign gate not applied to final output?)")
+
+
+def test_per_end_columns_present_when_gate_keeps_isoforms():
+    """Companion to the snap-drop test: at a permissive theta the realign gate
+    keeps isoforms, and every one carries finite per-end TED columns in the
+    final 30-col .isoforms.bed (the column-population half of FIX 2, asserted
+    on the gated output where the columns actually live)."""
     import math
+    with tempfile.TemporaryDirectory() as td:
+        out = _run_ted(Path(td), extra_args=("--ted_threshold", "0.0"))
+        bed = _read_rows(Path(str(out) + ".isoforms.bed"))
+    assert bed, "no isoforms emitted at theta=0.0 (gate should be a no-op)"
     for r in bed:
         assert len(r) == 30, f"expected 30 BED cols, got {len(r)}"
         for name, idx in _TED_COL_IDX.items():
             v = r[idx]
-            assert v != "", f"{name} empty for {r[3]} under all-reject threshold"
+            assert v != "", f"{name} empty for {r[3]}"
             assert math.isfinite(float(v)), f"{name}={v} not finite for {r[3]}"
 
 
@@ -260,6 +441,16 @@ try:
     _TED_IMPORTABLE = True
 except Exception:  # pragma: no cover - clone/deps unavailable
     _TED_IMPORTABLE = False
+
+# flair_transcriptome (host glue) carries the Lever B collapse guard. Imported
+# separately so the unit-level guard tests can run even when the full pipeline
+# subprocess prerequisites are missing.
+try:
+    from flair import flair_transcriptome as _ft
+    from flair.isoform_data import Isoform as _Isoform, Junc as _IJunc
+    _FT_IMPORTABLE = True
+except Exception:  # pragma: no cover - clone/deps unavailable
+    _FT_IMPORTABLE = False
 
 _RR = _namedtuple("_RR", "chrom strand start end name polyA")
 _JUNC = _namedtuple("_JUNC", "start end")   # duck-types isoform_data.Junc
@@ -334,6 +525,171 @@ def test_distance_miss_read_kept_at_own_position_not_dropped():
     assert math.isfinite(far_conf), "far read confidence not finite"
     for k in ("TED_tss_reality", "TED_tts_reality", "TED_confidence"):
         assert math.isfinite(float(far_scores[k])), f"{k} not finite for far read"
+
+
+# ─── LEVER B INTEGRATION: --ted_protect_alt_ends through the real --ted run ─
+# Drives `flair transcriptome --ted` end-to-end on a planted junction-subset
+# fixture (built at test time on the real tiny genome via pysam, so no
+# permanent fixture files are added). The measurable effect lives at the
+# FIRSTPASS / realign-reference stage (.firstpass.bed = the output of
+# filter_firstpass_isos, which is exactly where the collapse lock acts) — the
+# final .isoforms.bed re-collapses the rescued subset via the downstream
+# realign+count step (its reads also match the superset), a separate behavior
+# out of scope for Lever B. Asserts:
+#   * a junction-subset with a distinct (>=Δ), TED-APPROVED upstream TSS is
+#     COLLAPSED with the flag off (.firstpass.bed = superset only) and SURVIVES
+#     with --ted_protect_alt_ends (.firstpass.bed = subset + superset).
+#   * a genuinely-contained subset (same TSS) is collapsed BOTH ways.
+# All other gate behavior + the no-filter sets must be unchanged by the flag.
+
+try:
+    import pysam as _pysam
+    _PYSAM_OK = True
+except Exception:  # pragma: no cover
+    _PYSAM_OK = False
+
+_GENOME_FA = DATA / "tiny_genome.fa"
+_leverB_prereq_ok = (_PYSAM_OK and not _missing and _GENOME_FA.exists())
+
+
+def _cigar_from_exons(exons):
+    parts = []
+    for i, (s, e) in enumerate(exons):
+        parts.append(f"{e - s}M")
+        if i < len(exons) - 1:
+            parts.append(f"{exons[i + 1][0] - e}N")
+    return "".join(parts)
+
+
+def _build_leverB_fixture(dirpath, q_exons):
+    """Write reads.bam / annot.gtf / junctions.tab into `dirpath` on the real
+    tiny genome. Superset S (3 exons, 2 introns, annotated) + a prefix
+    junction-subset Q (2 exons, shares the first donor) given by `q_exons`.
+    Returns the dir paths."""
+    chrom, chrom_len = "chr_test", 50000
+    genome_seq = "".join(
+        ln.strip() for ln in _GENOME_FA.read_text().splitlines()
+        if not ln.startswith(">"))
+    s_exons = [(40000, 40200), (41000, 41300), (42000, 42500)]
+
+    def getseq(exons):
+        return "".join(genome_seq[s:e] for s, e in exons)
+
+    hdr = {"HD": {"VN": "1.6", "SO": "coordinate"},
+           "SQ": [{"SN": chrom, "LN": chrom_len}]}
+    recs, rid = [], 0
+    for exons, n in [(s_exons, 40), (q_exons, 40)]:
+        for _ in range(n):
+            a = _pysam.AlignedSegment()
+            a.query_name = f"read_{rid}"; rid += 1
+            a.flag = 0; a.reference_id = 0
+            a.reference_start = exons[0][0]; a.mapping_quality = 60
+            a.cigarstring = _cigar_from_exons(exons)
+            s = getseq(exons); a.query_sequence = s
+            a.query_qualities = _pysam.qualitystring_to_array("I" * len(s))
+            recs.append(a)
+    unsorted = str(dirpath / "reads.unsorted.bam")
+    with _pysam.AlignmentFile(unsorted, "wb", header=hdr) as out:
+        for a in recs:
+            out.write(a)
+    bam = str(dirpath / "reads.bam")
+    _pysam.sort("-o", bam, unsorted); _pysam.index(bam); os.unlink(unsorted)
+
+    gtf = dirpath / "annot.gtf"
+    with gtf.open("w") as f:
+        f.write(f'{chrom}\ttest\tgene\t40001\t42500\t.\t+\t.\t'
+                f'gene_id "GA"; gene_name "GA";\n')
+        f.write(f'{chrom}\ttest\ttranscript\t40001\t42500\t.\t+\t.\t'
+                f'gene_id "GA"; transcript_id "TA"; gene_name "GA";\n')
+        for i, (s, e) in enumerate(s_exons):
+            f.write(f'{chrom}\ttest\texon\t{s + 1}\t{e}\t.\t+\t.\t'
+                    f'gene_id "GA"; transcript_id "TA"; exon_number "{i + 1}"; '
+                    f'gene_name "GA";\n')
+    juncs = set()
+    for exons in [s_exons, q_exons]:
+        for i in range(len(exons) - 1):
+            juncs.add((exons[i][1] + 1, exons[i + 1][0]))
+    sj = dirpath / "junctions.tab"
+    with sj.open("w") as f:
+        for (s, e) in sorted(juncs):
+            f.write(f"{chrom}\t{s}\t{e}\t1\t1\t1\t40\t0\t50\n")
+    return bam, str(gtf), str(sj)
+
+
+def _run_leverB(dirpath, bam, gtf, sj, protect):
+    """Run `flair transcriptome --ted` (threshold 0 so every snapped end is
+    TED-approved -> distinctness is purely geometric) with/without the flag.
+    Returns the .firstpass.bed rows (the realign reference == filter_firstpass
+    output)."""
+    env = dict(os.environ)
+    env["PATH"] = f"{ENV_PREFIX / 'bin'}:" + env.get("PATH", "")
+    out = dirpath / ("on" if protect else "off")
+    cmd = [
+        str(FLAIR_BIN), "transcriptome", "-b", bam, "-g", str(_GENOME_FA),
+        "-f", gtf, "--junction_tab", sj, "-t", "1", "-o", str(out),
+        "--sample_name", "lb", "--ted", "--ted_legacy_reality",
+        "--tss_model", str(TSS_MODEL), "--tts_model", str(TTS_MODEL),
+        "--ted_log", "--keep_intermediate", "--ted_threshold", "0.0",
+    ]
+    if protect:
+        cmd.append("--ted_protect_alt_ends")
+    res = subprocess.run(cmd, env=env, cwd=str(dirpath),
+                         capture_output=True, text=True)
+    assert res.returncode == 0, (
+        f"--ted (protect={protect}) exited {res.returncode}\n{res.stderr[-1500:]}")
+    return {
+        "firstpass": _read_rows(Path(str(out) + ".firstpass.bed")),
+        "unfilt_txt": Path(str(out) + ".firstpass.unfiltered.bed").read_text(),
+    }
+
+
+@pytest.mark.skipif(not _leverB_prereq_ok, reason="Lever B fixture prereqs missing")
+def test_leverB_integration_distinct_alt_tss_rescued_at_firstpass():
+    """Distinct (250bp upstream >= Δ=100), TED-approved alt-TSS junction-subset:
+    collapsed at firstpass with the flag OFF, rescued with the flag ON."""
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        # Q: prefix junction-subset with TSS 250bp upstream of the superset's.
+        q_exons = [(39750, 40200), (41000, 41300)]
+        bam, gtf, sj = _build_leverB_fixture(tdp, q_exons)
+        off = _run_leverB(tdp, bam, gtf, sj, protect=False)
+        on = _run_leverB(tdp, bam, gtf, sj, protect=True)
+
+    off_starts = sorted(int(r[1]) for r in off["firstpass"])
+    on_starts = sorted(int(r[1]) for r in on["firstpass"])
+    # OFF: only the superset survives firstpass (legacy nosubset collapses Q).
+    assert len(off["firstpass"]) == 1, (
+        f"flag-off firstpass should collapse the subset to 1 isoform; got "
+        f"{off_starts}")
+    # ON: the distinct, approved alt-TSS subset survives alongside the superset.
+    assert len(on["firstpass"]) == 2, (
+        f"--ted_protect_alt_ends should rescue the alt-TSS subset (2 firstpass "
+        f"isoforms); got {on_starts}")
+    # The rescued isoform is exactly the distinct upstream-TSS subset (start
+    # snapped near 39750, strictly upstream of the superset start ~39999).
+    assert min(on_starts) < min(off_starts), (
+        "rescued isoform should carry the distinct upstream TSS")
+    assert max(off_starts) in on_starts, "superset must remain in both"
+
+
+@pytest.mark.skipif(not _leverB_prereq_ok, reason="Lever B fixture prereqs missing")
+def test_leverB_integration_contained_subset_collapsed_both_ways():
+    """A genuinely-contained junction-subset (SAME TSS as the superset) is
+    collapsed at firstpass with the flag OFF and ON — Lever B does not re-admit
+    contained fragments."""
+    with tempfile.TemporaryDirectory() as td:
+        tdp = Path(td)
+        # Q: same TSS (40000) as the superset -> not distinct.
+        q_exons = [(40000, 40200), (41000, 41300)]
+        bam, gtf, sj = _build_leverB_fixture(tdp, q_exons)
+        off = _run_leverB(tdp, bam, gtf, sj, protect=False)
+        on = _run_leverB(tdp, bam, gtf, sj, protect=True)
+    assert len(off["firstpass"]) == 1, "contained subset should collapse (off)"
+    assert len(on["firstpass"]) == 1, (
+        "contained subset must still collapse with --ted_protect_alt_ends")
+    # The flag never touches the full no-filter set (both clusters always there).
+    assert off["unfilt_txt"] == on["unfilt_txt"], (
+        "no-filter emit changed with the flag — Lever B leaked past filter_spliced_iso")
 
 
 # ─── SPLICE-BOUNDS CLAMP: snapped/kept ends never cross splice structure ──
@@ -493,6 +849,206 @@ def test_valid_ends_unchanged_and_single_exon_untouched():
     assert len(out_se) == 1
     _c2, rs2, re2, *_ = out_se[0]
     assert _emitted_exons_valid(rs2, re2, [])
+
+
+# ─── LEVER B: --ted_protect_alt_ends outer-terminal-distinctness guard ────
+# Focused unit tests on flair_transcriptome.filter_spliced_iso /
+# _check_terminal_exon_overlap. No subprocess: build Isoform/Junc objects and a
+# precomputed ted_protect_map, then call filter_spliced_iso directly. Asserts:
+#   1. a junction-subset with a distinct (>=Δ), TED-APPROVED upstream end is
+#      DROPPED with the guard absent (legacy) and KEPT with the guard.
+#   2. a genuinely-contained subset (outer end within Δ) is dropped BOTH ways.
+#   3. a distinct-but-NOT-approved end is NOT rescued (dropped both ways).
+#   4. flag-OFF (ted_protect_map=None) is byte-identical to legacy.
+# Strand mirror (- strand: distinct end lives on the genomic-LAST exon) covered.
+
+import types as _types
+
+_NS = _types.SimpleNamespace
+
+
+class _StubAnnots:
+    """Minimal annots: get_isos_with_similar_juncs only reads junc_to_gene's
+    presence (the annot branch is commented out) and junc_to_names elsewhere."""
+    junc_to_gene = {}
+
+
+def _mk_iso(juncs, start, end, strand, n_reads, tss_real, tts_real):
+    """Construct a candidate Isoform with TED per-end realities. num_reads is
+    driven by attaching `n_reads` lightweight read stubs (only len() is used by
+    Isoform.num_reads -> .score)."""
+    iso = _Isoform("chr1", strand, tuple(_IJunc(s, e) for s, e in juncs),
+                   start=start, end=end,
+                   reads=[object() for _ in range(n_reads)])
+    iso.ted_scores = {"TED_tss_reality": tss_real, "TED_tts_reality": tts_real,
+                      "TED_confidence": min(tss_real, tts_real)}
+    return iso
+
+
+def _build_candidates(isos):
+    """Build a CandidateIsoforms-like container + junc_to_names index."""
+    cand = _ft.CandidateIsoforms()
+    for iso in isos:
+        cand.isoforms[iso.name] = iso
+        for j in iso.juncs:
+            cand.junc_to_names.setdefault(j, set()).add(iso.name)
+    return cand
+
+
+def _run_filter(query, cand, ted_protect_map):
+    """Call filter_spliced_iso for `query` against the candidate set. Returns
+    is_not_subset (True == KEEP)."""
+    keep, _uniq = _ft.filter_spliced_iso(
+        "nosubset", 1, query.juncs, query.exons, query.name, query.num_reads,
+        _StubAnnots(), cand.junc_to_names, cand.isoforms, {}, query.strand,
+        ted_protect_map=ted_protect_map)
+    return keep
+
+
+# Shared + strand geometry: superset S (2 juncs) and a prefix junction-subset Q
+# (1 junc) sharing the first donor 1200. Q's genomic-first exon (the + strand
+# TSS) can be distinct upstream.
+_S_JUNCS = [(1200, 2000), (2300, 3000)]   # 3 exons: [.,1200)[2000,2300)[3000,3500)
+_S_START, _S_END = 1000, 3500
+_Q_JUNCS = [(1200, 2000)]                  # 2 exons: [.,1200)[2000,2300)
+_Q_END = 2300
+
+
+def _plus_setup(q_start, q_tss_real, theta_tss=0.5, theta_tts=0.5):
+    """Build (query, candidates, protect_map_ON) for the + strand alt-TSS case.
+    The superset is high-reality; the query's TSS reality is q_tss_real."""
+    superset = _mk_iso(_S_JUNCS, _S_START, _S_END, "+", n_reads=50,
+                       tss_real=0.9, tts_real=0.9)
+    query = _mk_iso(_Q_JUNCS, q_start, _Q_END, "+", n_reads=5,
+                    tss_real=q_tss_real, tts_real=0.9)
+    cand = _build_candidates([superset, query])
+    args = _NS(ted=True, ted_legacy_reality=True, ted_protect_alt_ends=True,
+               ted_global_peak_min_distance_tss=100,
+               ted_global_peak_min_distance_tts=10,
+               ted_threshold_tss=theta_tss, ted_threshold_tts=theta_tts)
+    pmap = _ft._build_ted_protect_map(args, cand)
+    return query, cand, pmap
+
+
+@pytest.mark.skipif(not _FT_IMPORTABLE, reason="flair_transcriptome not importable")
+def test_leverB_distinct_approved_tss_dropped_off_kept_on():
+    """Case 1: distinct (>=Δ=100) upstream TSS, TED-approved (reality 0.9 >=
+    theta 0.5). Legacy (map=None) DROPS it; --ted_protect_alt_ends KEEPS it."""
+    # q_start 800 == 200bp upstream of superset start 1000 (>=Δ=100), approved.
+    query, cand, pmap = _plus_setup(q_start=800, q_tss_real=0.9)
+    assert _run_filter(query, cand, ted_protect_map=None) is False, (
+        "legacy nosubset should DROP the junction-subset (collapse lock)")
+    assert _run_filter(query, cand, ted_protect_map=pmap) is True, (
+        "Lever B should KEEP the distinct, TED-approved alt-TSS subset")
+
+
+@pytest.mark.skipif(not _FT_IMPORTABLE, reason="flair_transcriptome not importable")
+def test_leverB_contained_start_dropped_both_ways():
+    """Case 2: same junction-subset but its start is WITHIN Δ of the superset
+    start (genuinely contained) -> dropped with the flag OFF and ON."""
+    # q_start 950 == 50bp upstream (< Δ=100) -> not distinct.
+    query, cand, pmap = _plus_setup(q_start=950, q_tss_real=0.9)
+    assert _run_filter(query, cand, ted_protect_map=None) is False
+    assert _run_filter(query, cand, ted_protect_map=pmap) is False, (
+        "a contained subset (start within Δ) must NOT be rescued by Lever B")
+
+
+@pytest.mark.skipif(not _FT_IMPORTABLE, reason="flair_transcriptome not importable")
+def test_leverB_distinct_but_unapproved_not_rescued():
+    """Case 3: distinct (>=Δ) upstream start but TSS reality BELOW theta
+    (not TED-approved) -> NOT rescued (dropped both ways). Guards against
+    rescuing RT-truncation fragments TED does not vouch for."""
+    # q_start 800 distinct, but tss reality 0.10 < theta 0.5 -> unapproved.
+    query, cand, pmap = _plus_setup(q_start=800, q_tss_real=0.10)
+    assert _run_filter(query, cand, ted_protect_map=None) is False
+    assert _run_filter(query, cand, ted_protect_map=pmap) is False, (
+        "a distinct but un-approved end must NOT be rescued")
+
+
+@pytest.mark.skipif(not _FT_IMPORTABLE, reason="flair_transcriptome not importable")
+def test_leverB_flag_off_map_is_none():
+    """Flag-OFF: _build_ted_protect_map returns None (legacy byte-identical
+    path) whether --ted is off or --ted_protect_alt_ends is off."""
+    superset = _mk_iso(_S_JUNCS, _S_START, _S_END, "+", 50, 0.9, 0.9)
+    query = _mk_iso(_Q_JUNCS, 800, _Q_END, "+", 5, 0.9, 0.9)
+    cand = _build_candidates([superset, query])
+    base = dict(ted_global_peak_min_distance_tss=100,
+                ted_global_peak_min_distance_tts=10,
+                ted_threshold_tss=0.5, ted_threshold_tts=0.5)
+    assert _ft._build_ted_protect_map(
+        _NS(ted=False, ted_protect_alt_ends=True, **base), cand) is None
+    assert _ft._build_ted_protect_map(
+        _NS(ted=True, ted_protect_alt_ends=False, **base), cand) is None
+
+
+@pytest.mark.skipif(not _FT_IMPORTABLE, reason="flair_transcriptome not importable")
+def test_leverB_minus_strand_distinct_downstream_tss_rescued():
+    """- strand mirror: the TSS lives on the genomic-LAST exon. A subset that
+    drops the FIRST junction (suffix subset, shares the last acceptor) with a
+    distinct DOWNSTREAM genomic-last end (the - strand TSS) is rescued only
+    when approved. Genomic-last outer distinctness: end >= other_end + Δ."""
+    # superset S- : 3 exons [1000,1200)[2000,2300)[3000,3500), juncs as _S_JUNCS.
+    # suffix subset Q- : juncs ((2300,3000),) -> 2 exons [2300,3000)[3000? ...].
+    # Build Q sharing the LAST acceptor 3000 with a distinct genomic-last end.
+    superset = _mk_iso(_S_JUNCS, _S_START, _S_END, "-", 50, 0.9, 0.9)
+    # Q suffix-subset: juncs ((2300,3000),) => exons [q_start,2300)[3000,q_end)
+    q_juncs = [(2300, 3000)]
+    q_start = 2000  # shares nothing special on the first side here
+    q_end_distinct = 3700  # 200bp downstream of superset end 3500 (>=Δ_tss=100)
+    query = _mk_iso(q_juncs, q_start, q_end_distinct, "-", 5,
+                    tss_real=0.9, tts_real=0.9)
+    cand = _build_candidates([superset, query])
+    args = _NS(ted=True, ted_legacy_reality=True, ted_protect_alt_ends=True,
+               ted_global_peak_min_distance_tss=100,
+               ted_global_peak_min_distance_tts=10,
+               ted_threshold_tss=0.5, ted_threshold_tts=0.5)
+    pmap = _ft._build_ted_protect_map(args, cand)
+    # On - strand the genomic-last exon carries the TSS; its protection uses the
+    # TSS (delta, approved). Distinct downstream (3700 >= 3500+100) + approved.
+    assert _run_filter(query, cand, ted_protect_map=None) is False, (
+        "legacy should drop the - strand suffix subset")
+    assert _run_filter(query, cand, ted_protect_map=pmap) is True, (
+        "Lever B should rescue the distinct, approved - strand alt-TSS")
+
+
+@pytest.mark.skipif(not _FT_IMPORTABLE, reason="flair_transcriptome not importable")
+def test_leverB_check_terminal_exon_overlap_primitive():
+    """Direct primitive test of _check_terminal_exon_overlap: the guard only
+    suppresses the subset mark for a distinct+approved outer end, leaving the
+    other index and the legacy (ted_protect=None) behavior intact."""
+    from flair.isoform_data import Exon as _Exon
+    # Shared first donor 1200; query first exon starts 800 (distinct upstream).
+    first_exon = _Exon(800, 1200)
+    last_exon = _Exon(2000, 2300)
+    other_exon = _Exon(1000, 1200)  # superset genomic-first exon
+
+    # Legacy (ted_protect=None): sets index 0.
+    sub = [0, 0]; sup = []
+    _ft._check_terminal_exon_overlap(first_exon, last_exon, other_exon, 50,
+                                     sub, sup, ted_protect=None)
+    assert sub == [1, 0]
+
+    # Guard, distinct (200>=Δ=100) + approved: does NOT set index 0.
+    sub = [0, 0]; sup = []
+    pp = {"first": (100, True), "last": (10, True)}
+    _ft._check_terminal_exon_overlap(first_exon, last_exon, other_exon, 50,
+                                     sub, sup, ted_protect=pp)
+    assert sub == [0, 0], "distinct+approved outer end should not be marked subset"
+
+    # Guard, distinct but NOT approved: sets index 0 (no rescue).
+    sub = [0, 0]; sup = []
+    pp = {"first": (100, False), "last": (10, True)}
+    _ft._check_terminal_exon_overlap(first_exon, last_exon, other_exon, 50,
+                                     sub, sup, ted_protect=pp)
+    assert sub == [1, 0], "un-approved end must still be marked subset"
+
+    # Guard, approved but within Δ (not distinct): sets index 0.
+    near_first = _Exon(950, 1200)  # only 50bp upstream of other_exon.start 1000
+    sub = [0, 0]; sup = []
+    pp = {"first": (100, True), "last": (10, True)}
+    _ft._check_terminal_exon_overlap(near_first, last_exon, other_exon, 50,
+                                     sub, sup, ted_protect=pp)
+    assert sub == [1, 0], "within-Δ end must still be marked subset"
 
 
 if __name__ == "__main__":

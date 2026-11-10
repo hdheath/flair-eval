@@ -5,6 +5,7 @@ Just extracts reads from a specific genomic region - no complex metadata trackin
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,39 +23,53 @@ def run_command(cmd):
     return result.stdout
 
 
-def partition_bam(input_bam, output_bam, region):
+def partition_bam(input_bam, output_bam, region, threads=1):
     """Extract reads from BAM file for specified region(s).
 
     Args:
         input_bam: path to input BAM
         output_bam: path to output BAM
         region: a single region string OR a list of region strings
+        threads: extra threads for samtools view/index (BAM (de)compression)
     """
-    # Index input BAM if needed
+    threads = max(1, int(threads))
+    t = str(threads)
+    # Index input BAM only if no usable index is already present.
+    # Nextflow stages whatever index the source BAM provides (.bai OR .csi),
+    # and `samtools view` auto-detects either. Re-indexing a multi-GB
+    # whole-genome BAM is unnecessary and slow: the 23 GB dRNA m6A BAM ships
+    # a .csi (not .bai), so a .bai-only check forced a single-threaded full
+    # re-index that overran the partition step's 15-min walltime (exit 140).
     bai_file = Path(str(input_bam) + ".bai")
-    if not bai_file.exists():
+    csi_file = Path(str(input_bam) + ".csi")
+    if not bai_file.exists() and not csi_file.exists():
         print(f"Indexing input BAM file: {input_bam}")
-        run_command(["samtools", "index", str(input_bam)])
+        run_command(["samtools", "index", "-@", t, str(input_bam)])
 
     regions = region if isinstance(region, list) else [region]
 
+    # NOTE: -@ threads matters here. Subsetting the 23 GB dRNA m6A BAM is
+    # dominated by re-compressing its heavy MM/ML base-modification tags, which
+    # is single-threaded by default and on its own overran the 15-min wall
+    # (exit 140, MaxRSS ~21 MB → time-bound, not memory). Threading the writer
+    # brings it back to minutes.
     if len(regions) == 1:
         # Single region: direct extraction
         print(f"Extracting region {regions[0]} from {input_bam}")
         run_command([
-            "samtools", "view", "-b",
+            "samtools", "view", "-@", t, "-b",
             "-o", str(output_bam),
             str(input_bam), regions[0]
         ])
     else:
         # Multiple regions: samtools view accepts multiple region args
         print(f"Extracting {len(regions)} regions from {input_bam}: {regions}")
-        cmd = ["samtools", "view", "-b", "-o", str(output_bam), str(input_bam)] + regions
+        cmd = ["samtools", "view", "-@", t, "-b", "-o", str(output_bam), str(input_bam)] + regions
         run_command(cmd)
 
     # Index the output BAM file (required for FLAIR transcriptome)
     print(f"Indexing output BAM file: {output_bam}")
-    run_command(["samtools", "index", str(output_bam)])
+    run_command(["samtools", "index", "-@", t, str(output_bam)])
 
 
 def bam_to_bed12(input_bam, output_bed):
@@ -352,6 +367,8 @@ def main():
     parser.add_argument("--drna-peaks", help="dRNA peaks BED file (optional)")
     parser.add_argument("--junctions", help="Junction file (STAR SJ.out.tab or BED format)")
     parser.add_argument("--target-regions", help="Target regions BED file (optional)")
+    parser.add_argument("--threads", type=int, default=(os.cpu_count() or 1),
+                        help="Threads for samtools view/index (default: all available cores)")
     
     args = parser.parse_args()
     
@@ -414,7 +431,7 @@ def main():
             output_bai.symlink_to(input_bai.resolve())
         else:
             print(f"Creating BAM index for: {output_bam}")
-            run_command(["samtools", "index", str(output_bam)])
+            run_command(["samtools", "index", "-@", str(max(1, int(args.threads))), str(output_bam)])
 
         # Handle BED: either symlink existing or generate from BAM
         if args.generate_bed:
@@ -433,7 +450,7 @@ def main():
         print(f"Output BED: {output_bed}")
 
         # Partition BAM first (fast with samtools — supports multiple regions natively)
-        partition_bam(input_bam, output_bam, args.region)
+        partition_bam(input_bam, output_bam, args.region, threads=args.threads)
 
         # Handle BED: either partition existing or generate from partitioned BAM
         if args.generate_bed:
@@ -472,26 +489,29 @@ def main():
         if file_path:
             input_path = Path(file_path)
             
+            if file_type == 'genome':
+                # The reference genome is NOT a partition output. It is the same
+                # 2.8 GB canonical reference for every sample/partition and is
+                # read directly by FLAIR/assemblers (full genome → correct
+                # coordinate matching). Materializing it here as a per-task
+                # output ("{prefix}_genome.fa") caused Nextflow's scratch
+                # staging to dereference the symlink and copy the full genome
+                # into the workDir for every partition task, blowing the disk
+                # quota. The original genome path is now threaded through the
+                # Nextflow channel as a `val` instead. Nothing to create here.
+                print(f"Genome NOT materialized as output (passed through by path): {input_path}")
+                continue
+
             if args.all and input_path.exists():
                 # Pass-through mode: create symlinks
-                if file_type == 'genome':
-                    output_file = Path(f"{args.output_prefix}_genome.fa")
-                elif file_type == 'gtf':
+                if file_type == 'gtf':
                     output_file = Path(f"{args.output_prefix}_annotation.gtf")
                 else:
                     output_file = Path(f"{args.output_prefix}_{file_type}.bed")
-                
+
                 output_file.symlink_to(input_path.resolve())
                 created_files.append(str(output_file))
-                
-            elif file_type == 'genome' and input_path.exists():
-                # For genome FASTA, create symlink to preserve coordinates
-                # DO NOT extract sequence - FLAIR needs full genome for coordinate matching
-                output_genome = Path(f"{args.output_prefix}_genome.fa")
-                print(f"Creating symlink to full genome (preserving coordinates): {input_path}")
-                output_genome.symlink_to(input_path.resolve())
-                created_files.append(str(output_genome))
-                    
+
             elif file_type == 'gtf' and input_path.exists():
                 # For GTF, filter annotations to only include transcripts fully in target region(s)
                 output_gtf = Path(f"{args.output_prefix}_annotation.gtf") 

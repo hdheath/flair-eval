@@ -100,19 +100,31 @@ def load_end_reality(ted_log_path: Path) -> Dict[Tuple[str, str], List[Tuple[int
     only (global_peak partition-summary rows and -1 sentinels dropped).
 
     Imports the schema-aware loader so global-mode partition rows never leak in.
-    Degrades to an empty dict when the file is missing/empty/unparseable.
+    Degrades to an empty dict when the file is missing/empty/unparseable, but a
+    MISSING DEPENDENCY (e.g. pandas not installed) must NOT be silently
+    swallowed: that would drop TED-confidence stratification everywhere while
+    still exiting 0.  ImportError/ModuleNotFoundError propagate so the failure
+    is loud.
     """
     out: Dict[Tuple[str, str], List[Tuple[int, float]]] = defaultdict(list)
     try:
         from ted_log_loader import load_ted_log
     except ImportError:
-        try:
-            from evaluation.ted_log_loader import load_ted_log
-        except ImportError:
-            return {}
+        from evaluation.ted_log_loader import load_ted_log
     try:
+        # Narrow except: only real I/O / parse problems degrade to {}.
+        # ImportError/ModuleNotFoundError (e.g. the loader's lazy `import
+        # pandas`) deliberately propagate — see docstring.  Build the parse-
+        # error tuple lazily so we never import pandas just to name its error
+        # class (and so a missing-pandas ImportError still surfaces above).
+        parse_errors: Tuple[type, ...] = (OSError, ValueError, KeyError)
+        try:
+            from pandas.errors import ParserError, EmptyDataError
+            parse_errors = parse_errors + (ParserError, EmptyDataError)
+        except ImportError:
+            pass
         df = load_ted_log(ted_log_path, drop_partition_summary=True)
-    except Exception:
+    except parse_errors:
         return {}
     if df is None or len(df) == 0:
         return {}

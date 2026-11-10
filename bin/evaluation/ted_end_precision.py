@@ -36,10 +36,13 @@ except ImportError:
 # near one truth peak yields exactly one matched summit, not one per call
 # (the R3 recall inflator).  Same module the logreg fit + pileup PR use.
 try:
-    from peak_matching import build_summit_index, match_positions_one_to_one
+    from peak_matching import (
+        build_summit_index, match_positions_one_to_one,
+        is_canonical_chrom, _match_distance, _peak_lo, _peak_hi)
 except ImportError:
     from evaluation.peak_matching import (
-        build_summit_index, match_positions_one_to_one)
+        build_summit_index, match_positions_one_to_one,
+        is_canonical_chrom, _match_distance, _peak_lo, _peak_hi)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s  %(levelname)-8s  %(message)s")
@@ -287,12 +290,19 @@ def filter_isoforms_by_counts(
     return filtered
 
 
-def parse_peaks_bed(path: str, regions: Optional[List[Region]] = None
+def parse_peaks_bed(path: str, regions: Optional[List[Region]] = None,
+                    canonical_only: bool = True
                     ) -> Dict[Tuple[str, str], List[Tuple[int, int]]]:
     """Parse BED6 peaks into {(chrom, strand): sorted (start, end) intervals}.
 
     Intervals use BED half-open convention [start, end).  Sorted by start so
     binary search can locate nearby peaks efficiently.
+
+    When `canonical_only` is True (default) peaks on non-canonical contigs
+    (chrM and unplaced/alt scaffolds — anything that is not chr1-22/X/Y) are
+    dropped, so the recall denominator and precision are computed only over
+    the canonical human chromosomes.  A `--region` allow-list (regions) is
+    applied on top.
     """
     peaks: Dict[Tuple[str, str], List[Tuple[int, int]]] = defaultdict(list)
     with open(path) as f:
@@ -303,6 +313,8 @@ def parse_peaks_bed(path: str, regions: Optional[List[Region]] = None
             if len(cols) < 6:
                 continue
             chrom, start, end, strand = cols[0], int(cols[1]), int(cols[2]), cols[5]
+            if canonical_only and not is_canonical_chrom(chrom):
+                continue
             if not _overlaps_regions(chrom, start, end, regions):
                 continue
             peaks[(chrom, strand)].append((start, end))
@@ -336,32 +348,80 @@ def _nearest_pos(pos: int, sorted_positions: List[int], window: int
     return None
 
 
-def _nearest_annot(pos: int, sorted_intervals: List[Tuple[int, int]], window: int
-                   ) -> Optional[Tuple[int, int]]:
-    """Return the nearest peak interval within *window* bp of *pos*, or None.
+def _interval_centre(start: int, end: int) -> int:
+    """Summit of a peak with no signal track — the interval centre.
 
-    Distance is the minimum distance from *pos* to any point inside the
-    half-open interval [start, end).  Matches interval-edge semantics of
-    bedtools closest used in ted_core.py — more permissive than midpoint
-    matching for wide peaks (e.g. CAGE).  Returns the (start, end) tuple
-    as a hashable peak identity key.
+    Mirrors peak_matching._interval_summit's no-signal branch so the
+    paired-dedup path uses the SAME summit definition as the one-to-one /
+    single-end paths.
+    """
+    return (int(start) + int(end)) // 2
+
+
+def _nearest_annot(pos: int, sorted_intervals: List[Tuple[int, int]], window: int
+                   ) -> Optional[Tuple[int, int, int]]:
+    """Return the matching peak (summit, start, end) under the OR predicate, or None.
+
+    THE contract predicate (shared with peak_matching.match_positions_one_to_one):
+
+        call c matches peak p  iff  (|c - p.summit| <= W)  OR  (p.start <= c < p.end)
+
+    A call is credited if it is within ±W of the peak SUMMIT (interval centre,
+    no signal track) *or* falls INSIDE the peak interval [start, end).  The
+    interior case gives broad-promoter credit; for peaks with width <= 2W the
+    interval is a subset of summit±W so the OR adds nothing (backward-compat).
+
+    Among competing peaks the one with the smallest match-distance wins
+    (0 when interior, else |c - summit|), tie-broken by |c - summit|, so an
+    interior call still claims the peak it sits inside.  Returns a hashable
+    (summit, start, end) identity so paired-end dedup collapses isoforms that
+    hit the SAME peak.
+
+    A peak's interval may extend beyond ±W from its summit, so the summit
+    bisection bound is widened by the max interval half-extent to never miss
+    an interior match.
     """
     if not sorted_intervals:
         return None
+    # sorted_intervals is sorted by start (parse_peaks_bed); compute summits
+    # and the max half-extent so we can bound the scan and never miss an
+    # interior-but-summit-far peak.
     starts = [iv[0] for iv in sorted_intervals]
-    idx = bisect_left(starts, pos)
-    best_iv = None
-    best_dist = window + 1
-    for i in (idx - 1, idx):
-        if 0 <= i < len(sorted_intervals):
-            s, e = sorted_intervals[i]
-            d = 0 if s <= pos < e else min(abs(pos - s), abs(pos - (e - 1)))
-            if d < best_dist:
-                best_dist = d
-                best_iv = sorted_intervals[i]
-    if best_dist <= window:
-        return best_iv
-    return None
+    max_left = 0   # max (summit - start)
+    max_right = 0  # max (end - summit)
+    for s, e in sorted_intervals:
+        c = _interval_centre(s, e)
+        if c - s > max_left:
+            max_left = c - s
+        if e - c > max_right:
+            max_right = e - c
+    lo_bound = pos - max(window, max_right)
+    hi_bound = pos + max(window, max_left)
+    best_key = None
+    best_match_dist = None
+    best_summit_dist = None
+    # Walk intervals whose start could still bring the peak into range.  Start
+    # a little left of lo_bound's start-position via bisect on starts.
+    i = bisect_left(starts, lo_bound - max_left - 1)
+    n = len(sorted_intervals)
+    while i < n:
+        s, e = sorted_intervals[i]
+        if s > hi_bound:
+            break
+        summit = _interval_centre(s, e)
+        summit_dist = abs(pos - summit)
+        inside = s <= pos < e
+        if inside or summit_dist <= window:
+            match_dist = 0 if inside else summit_dist
+            if (best_match_dist is None
+                    or match_dist < best_match_dist
+                    or (match_dist == best_match_dist
+                        and summit_dist < best_summit_dist)):
+                best_match_dist = match_dist
+                best_summit_dist = summit_dist
+                best_key = (summit, s, e)
+        i += 1
+    return best_key
 
 
 def _summit_index_from_intervals(
@@ -380,21 +440,34 @@ def _summit_index_from_intervals(
     return build_summit_index(rows)
 
 
-def _one_to_one_recall(
+def _one_to_one_match_counts(
     isoforms: List[dict],
     summit_index: Dict[Tuple[str, str], List[int]],
     end_type: str,
     window: int,
-) -> Tuple[int, int]:
-    """One-to-one (greedy nearest) peak-based recall (the R3 fix).
+) -> Tuple[int, int, int]:
+    """One-to-one (greedy nearest) peak matching — shared TP for P AND R.
 
     Buckets all isoform ends by (chrom, strand), matches each bucket to its
     summits with the shared greedy-nearest matcher (each summit consumed at
-    most once), and returns (#summits matched, #summits total).
+    most once), and returns ``(tp, n_calls, n_summits)``.
+
+    Because matching is one-to-one, the number of matched calls equals the
+    number of matched summits, so a single TP count feeds BOTH sides of the
+    F1 (the W1 unification, mirroring ted_core.one_to_one_match_counts):
+
+        precision = tp / n_calls      recall = tp / n_summits
+
+    A fat cluster of called ends near one summit therefore contributes
+    exactly ONE true positive on both sides — removing the many-to-one
+    precision inflator that ``_nearest_annot`` produced (each ref peak could
+    be credited once per nearby call).
     """
     buckets: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+    n_calls = 0
     for iso in isoforms:
         buckets[(iso["chrom"], iso["strand"])].append(int(iso[end_type]))
+        n_calls += 1
     matched = 0
     for key, positions in buckets.items():
         summits = summit_index.get(key, [])
@@ -403,7 +476,120 @@ def _one_to_one_recall(
         assign = match_positions_one_to_one(positions, summits, window)
         matched += sum(1 for j in assign if j >= 0)
     total = sum(len(v) for v in summit_index.values())
-    return matched, total
+    return matched, n_calls, total
+
+
+def _many_to_one_match_counts(
+    isoforms: List[dict],
+    summit_index: Dict[Tuple[str, str], List[int]],
+    end_type: str,
+    window: int,
+) -> Tuple[int, int, int, int]:
+    """MANY-TO-ONE 'near a peak' counts for SINGLE-END precision/recall.
+
+    This is the DEFINITION FOR SINGLE 5'/3' ENDS (hdheath 2026-06-15): a
+    promoter (or cleavage region) that produces several isoforms is EXPECTED,
+    so every isoform end within `window` of a peak is credited — duplication
+    is allowed. Uniqueness / dedup is enforced ONLY in the PAIRED metric
+    (paired_dedup_precision), never here.
+
+    Mirrors bed_utils.near_match_counts (the function ted_core.py /
+    combined_evaluation.tsv use) but on this module's summit_index/isoform
+    structures, so the plotted single-end numbers and combined_evaluation.tsv
+    use the SAME rule and cannot diverge.
+
+      ends_near       = # isoform ends within `window` of ANY summit (precision num)
+      peaks_recovered = # summits with ANY isoform end within `window` (recall num)
+    Returns (ends_near, n_calls, peaks_recovered, n_summits).
+    """
+    ends_by_key: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+    n_calls = 0
+    for iso in isoforms:
+        ends_by_key[(iso["chrom"], iso["strand"])].append(int(iso[end_type]))
+        n_calls += 1
+    n_summits = sum(len(v) for v in summit_index.values())
+
+    def _peak_half_extents(peaks) -> Tuple[int, int]:
+        """(max summit-to-start, max end-to-summit) over a peak bucket."""
+        ml = mr = 0
+        for p in peaks:
+            s = int(p)
+            ml = max(ml, s - _peak_lo(p))
+            mr = max(mr, _peak_hi(p) - s)
+        return ml, mr
+
+    def _end_near_any_peak(e: int, sorted_peaks, ml: int, mr: int) -> bool:
+        """CORRECTED predicate (2026-06-21): e within W of ANY part of the peak
+        INTERVAL, i.e. peak_matching._match_distance(e, peak) <= window.
+
+        This is the documented eval-contract predicate (supported zone
+        [lo-W, (hi-1)+W]); for a wide peak it ALSO credits a call within W of an
+        EDGE, not only within W of the summit.  For width<=2W peaks (e.g. the
+        width-1 dRNA cleavage peaks) the interval is a subset of summit±W so the
+        result is identical to the previous summit-OR-interior predicate — only
+        wide CAGE promoters (median 45 bp, 14% >100 bp on chr22) shift, and they
+        shift toward the contract.  This is the SAME primitive stratified_pr.py /
+        end_dist / peak_matching.match_positions_one_to_one use, so the single-
+        end headline 5prime/3prime precision matches across all eval scripts.
+        """
+        # Scan bound: a peak's summit can sit up to (W + mr) left of e (e past
+        # the right edge) or (W + ml) right of e (e before the left edge) and
+        # still match within W of an edge.  Mirrors
+        # peak_matching.match_positions_one_to_one.
+        lo_bound = e - (window + mr)
+        hi_bound = e + (window + ml)
+        j = bisect_left(sorted_peaks, lo_bound)
+        while j < len(sorted_peaks):
+            p = sorted_peaks[j]
+            s = int(p)
+            if s > hi_bound:
+                break
+            if _match_distance(e, p) <= window:
+                return True
+            j += 1
+        return False
+
+    # ── precision numerator: # ends near ANY peak (interval-OR-summit) ──
+    ends_near = 0
+    for key, ends in ends_by_key.items():
+        peaks = summit_index.get(key, [])
+        if not peaks:
+            continue
+        sp = sorted(peaks)
+        ml, mr = _peak_half_extents(sp)
+        for e in ends:
+            if _end_near_any_peak(e, sp, ml, mr):
+                ends_near += 1
+
+    # ── recall numerator: # peaks recovered by ANY end (SAME corrected predicate) ──
+    peaks_recovered = 0
+    for key, peaks in summit_index.items():
+        ends = ends_by_key.get(key, [])
+        if not ends:
+            continue
+        es = sorted(ends)
+        for p in peaks:
+            s = int(p)
+            lo = _peak_lo(p)
+            hi = _peak_hi(p)
+            # A peak is recovered if any end is within W of ANY part of the
+            # interval, i.e. _match_distance(e, p) <= window (supported zone
+            # [lo-W, (hi-1)+W]).  Scan ends across that zone.
+            scan_lo = min(lo, s) - window
+            scan_hi = max(hi, s + 1) + window
+            i = bisect_left(es, scan_lo)
+            recovered = False
+            while i < len(es):
+                e = es[i]
+                if e >= scan_hi:
+                    break
+                if _match_distance(e, p) <= window:
+                    recovered = True
+                    break
+                i += 1
+            if recovered:
+                peaks_recovered += 1
+    return ends_near, n_calls, peaks_recovered, n_summits
 
 
 def compute_jc_deduplicated_precision_recall(
@@ -575,6 +761,10 @@ def compute_jc_deduplicated_precision_recall(
         ("5prime", total_5p_ends, total_5p_dedup_tp, total_5p_raw_tp, total_5p_redundant),
         ("3prime", total_3p_ends, total_3p_dedup_tp, total_3p_raw_tp, total_3p_redundant),
     ]:
+        # JC-deduplicated (many-to-one via _nearest_annot) and naive (raw)
+        # precision are kept as DESCRIPTIVE columns.  In the peak-based path
+        # the HEADLINE precision below is overridden with the one-to-one value
+        # so it shares the same TP as recall (W1; see ted_core.py ~211-233).
         dedup_precision = total_tp / total_ends if total_ends > 0 else None
         naive_precision = total_raw_tp / total_ends if total_ends > 0 else None
 
@@ -584,18 +774,30 @@ def compute_jc_deduplicated_precision_recall(
         use_peaks = current_peaks is not None
 
         if use_peaks:
-            # Peak-based recall: all isoforms (incl. single-exon) vs all
-            # peaks, collapsed to summits and matched ONE-TO-ONE (greedy
-            # nearest) so a cluster of called ends near one peak credits at
-            # most one summit (R3 fix).  Previously this deduped only by
-            # interval identity, which still let a single fat cluster of
-            # calls saturate recall via overlapping wide intervals.
+            # SINGLE-END headline = MANY-TO-ONE (hdheath 2026-06-15).
+            # An isoform end is credited if it's within `window` of ANY peak,
+            # and a peak is recovered if ANY end is near it — duplication is
+            # ALLOWED, because one promoter/cleavage region legitimately yields
+            # several isoforms. This is the SAME rule as ted_core.near_match_counts
+            # (combined_evaluation.tsv), so the plotted single-end numbers match
+            # those tables. The one-to-one (unique-consumption) logic belongs
+            # ONLY to the PAIRED metric (paired_dedup_precision) below — it is
+            # kept here purely as a labelled diagnostic (*_onetoone_*).
             summit_index = _summit_index_from_intervals(current_peaks)
-            n_matched, total_peaks = _one_to_one_recall(
+            ends_near, n_calls, peaks_rec, total_peaks = _many_to_one_match_counts(
                 isoforms, summit_index, end_type, window)
-            recall = n_matched / total_peaks if total_peaks > 0 else None
-            n_annot_matched = n_matched
+            precision = ends_near / n_calls if n_calls > 0 else None
+            recall = peaks_rec / total_peaks if total_peaks > 0 else None
+            dedup_precision = precision  # -> headline {end}_precision (many-to-one)
+            n_annot_matched = peaks_rec
             n_annot_total = total_peaks
+            # one-to-one kept as a diagnostic only (NOT plotted as the headline)
+            oto_tp, _oto_calls, _oto_summits = _one_to_one_match_counts(
+                isoforms, summit_index, end_type, window)
+            results[f"{end_label}_onetoone_precision"] = (
+                oto_tp / n_calls if n_calls > 0 else None)
+            results[f"{end_label}_onetoone_recall"] = (
+                oto_tp / total_peaks if total_peaks > 0 else None)
         else:
             # GTF-based recall: every distinct annotated TSS/TTS in the
             # reference GTF is a target — same denominator for every tool,
@@ -762,7 +964,12 @@ def main():
                         help="Minimum transcript count retained when --counts is provided")
     parser.add_argument("--outdir", required=True,
                         help="Output directory")
+    parser.add_argument("--all-contigs", action="store_true",
+                        help="Keep peaks/isoforms on ALL contigs (chrM + "
+                             "GL*/KI* scaffolds).  Default restricts matching "
+                             "to the canonical human chromosomes chr1-22,X,Y.")
     args = parser.parse_args()
+    canonical_only = not args.all_contigs
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -785,12 +992,14 @@ def main():
     peaks_3prime = None
     if args.peaks_5prime:
         log.info(f"Parsing 5' peaks (CAGE): {args.peaks_5prime}")
-        peaks_5prime = parse_peaks_bed(args.peaks_5prime, regions)
+        peaks_5prime = parse_peaks_bed(args.peaks_5prime, regions,
+                                       canonical_only=canonical_only)
         n5 = sum(len(v) for v in peaks_5prime.values())
         log.info(f"  {n5} peaks in region")
     if args.peaks_3prime:
         log.info(f"Parsing 3' peaks (dRNA): {args.peaks_3prime}")
-        peaks_3prime = parse_peaks_bed(args.peaks_3prime, regions)
+        peaks_3prime = parse_peaks_bed(args.peaks_3prime, regions,
+                                       canonical_only=canonical_only)
         n3 = sum(len(v) for v in peaks_3prime.values())
         log.info(f"  {n3} peaks in region")
 
@@ -800,6 +1009,12 @@ def main():
     else:
         log.info("Parsing isoforms GTF...")
         isoforms = parse_gtf_transcripts(args.isoforms_gtf, regions)
+    if canonical_only:
+        n_before = len(isoforms)
+        isoforms = [i for i in isoforms if is_canonical_chrom(i["chrom"])]
+        if len(isoforms) != n_before:
+            log.info("Canonical-chrom filter: kept %d/%d isoforms "
+                     "(dropped chrM/scaffolds)", len(isoforms), n_before)
     supported_ids = load_supported_ids(args.counts, args.min_support)
     if supported_ids is not None:
         n_before = len(isoforms)

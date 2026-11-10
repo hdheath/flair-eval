@@ -192,7 +192,10 @@ def _run(outdir, extra):
         "-b", str(_DATA / "tiny_reads.bam"), "-g", str(_DATA / "tiny_genome.fa"),
         "-f", str(_DATA / "tiny_annotation.gtf"),
         "--junction_tab", str(_DATA / "tiny_junctions.tab"),
-        "-t", "1", "-o", str(out), "--sample_name", "dn_test", "--ted", "--ted_log",
+        # NORTH-STAR re-arch: depth-saturation normalization is a LEGACY
+        # reality-path feature -> opt into the heavy path explicitly.
+        "-t", "1", "-o", str(out), "--sample_name", "dn_test",
+        "--ted", "--ted_legacy_reality", "--ted_log",
         *extra,
     ]
     res = subprocess.run(cmd, env=env, cwd=str(outdir), capture_output=True, text=True)

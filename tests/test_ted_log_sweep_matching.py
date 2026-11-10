@@ -48,16 +48,38 @@ def test_parse_peaks_collapses_to_summits(tmp_path):
 
 
 def test_one_to_one_tp_cluster_yields_one():
-    # 5 calls all matched to the SAME summit uid (0) at various distances.
-    uids = np.array([0, 0, 0, 0, 0], dtype=np.int64)
-    dists = np.array([20, 10, 0, 10, 20], dtype=np.int64)
-    assert _one_to_one_tp(uids, dists) == 1
+    # 5 calls all near the SAME single summit (1000) -> exactly one TP.
+    summit_index = {("chr_test", "+"): [1000]}
+    chrom = np.array(["chr_test"] * 5)
+    strand = np.array(["+"] * 5)
+    pos = np.array([980, 990, 1000, 1010, 1020], dtype=np.int64)
+    assert _one_to_one_tp(chrom, strand, pos, summit_index) == 1
 
 
 def test_one_to_one_tp_distinct_summits():
-    uids = np.array([0, 1, 2, -1], dtype=np.int64)   # -1 = unmatched
-    dists = np.array([5, 5, 5, 51], dtype=np.int64)
-    assert _one_to_one_tp(uids, dists) == 3
+    # 3 calls each within W of a distinct summit; a 4th is 51 bp out (miss).
+    summit_index = {("chr_test", "+"): [1000, 2000, 3000]}
+    chrom = np.array(["chr_test"] * 4)
+    strand = np.array(["+"] * 4)
+    pos = np.array([1005, 2005, 3005, 4051], dtype=np.int64)
+    assert _one_to_one_tp(chrom, strand, pos, summit_index) == 3
+
+
+def test_one_to_one_tp_fallback_to_second_nearest():
+    """FIX 3 regression: a call whose nearest summit is stolen by a closer
+    call falls back to its next in-window summit.
+
+    summits=[1000,1040], calls=[1030,1050], W=50.
+      call 1050 is 10 bp from 1040 (nearest); call 1030 is 30 bp from 1040
+      and 30 bp from 1000.  The old nearest-only precompute recorded BOTH
+      calls' nearest as summit 1040, so deduping uids gave TP=1.  The shared
+      matcher assigns 1050->1040 and 1030->1000, giving the correct TP=2.
+    """
+    summit_index = {("chr_test", "+"): [1000, 1040]}
+    chrom = np.array(["chr_test"] * 2)
+    strand = np.array(["+"] * 2)
+    pos = np.array([1030, 1050], dtype=np.int64)
+    assert _one_to_one_tp(chrom, strand, pos, summit_index) == 2
 
 
 def test_sweep_precision_not_inflated_by_cluster(tmp_path):
@@ -81,11 +103,13 @@ def test_sweep_precision_not_inflated_by_cluster(tmp_path):
     ])
     df = _assign_peak_ids(df, cage_idx, drna_idx)
 
-    tss_uid, tts_uid, tss_dist, tts_dist, total_cage, total_drna = _make_arrays(df)
+    (chrom_arr, strand_arr, tss_pos, tts_pos,
+     cage_peaks, drna_peaks, total_cage, total_drna) = _make_arrays(df)
     assert total_cage == 1
     mask = np.ones(len(df), dtype=bool)   # all survive
     p5, r5, f5, p3, r3, f3 = _dedup_pr_one_to_one(
-        mask, tss_uid, tts_uid, tss_dist, tts_dist, total_cage, total_drna)
+        mask, chrom_arr, strand_arr, tss_pos, tts_pos,
+        cage_peaks, drna_peaks, total_cage, total_drna)
 
     # One-to-one: TP_5 = 1 over 5 survivors -> precision 1/5, recall 1/1.
     assert p5 == 1 / 5, "precision must NOT be the inflated 5/5"
@@ -116,7 +140,9 @@ def test_sweep_signal_summit(tmp_path):
 
     a = _make_arrays(df_sig)
     b = _make_arrays(df_centre)
-    p5_sig = _dedup_pr_one_to_one(mask, a[0], a[1], a[2], a[3], a[4], a[5])[0]
-    p5_centre = _dedup_pr_one_to_one(mask, b[0], b[1], b[2], b[3], b[4], b[5])[0]
+    # _make_arrays → (chrom, strand, tss_pos, tts_pos, cage_peaks, drna_peaks,
+    #                 total_cage, total_drna)
+    p5_sig = _dedup_pr_one_to_one(mask, *a)[0]
+    p5_centre = _dedup_pr_one_to_one(mask, *b)[0]
     assert p5_sig == 1.0
     assert p5_centre == 0.0

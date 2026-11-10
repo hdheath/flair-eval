@@ -53,6 +53,62 @@ def isoform_exon_lengths(path: Path) -> np.ndarray:
     return np.asarray(vals, dtype=int)
 
 
+def load_supported_ids(counts_path: Path | None, min_support: int = 1) -> set[str] | None:
+    """Return transcript IDs with count >= min_support from assembler count tables.
+
+    Handles IsoQuant (`feature_id/count`), Bambu (`TXNAME/GENEID/sample_count`),
+    and FLAIR count tables by using column 1 as the transcript ID and summing
+    numeric fields to its right.
+    """
+    if counts_path is None or not counts_path.exists() or counts_path.stat().st_size == 0:
+        return None
+    supported: set[str] = set()
+    n_parsed = 0
+    with open(counts_path) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith("#"):
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 2:
+                continue
+            numeric_values = []
+            for value in parts[1:]:
+                try:
+                    numeric_values.append(float(value))
+                except ValueError:
+                    continue
+            if not numeric_values:
+                continue
+            n_parsed += 1
+            if sum(numeric_values) >= min_support:
+                supported.add(parts[0])
+    return supported if n_parsed else None
+
+
+def is_supported_name(name: str, supported_ids: set[str]) -> bool:
+    if name in supported_ids:
+        return True
+    if "_" in name and name.split("_", 1)[0] in supported_ids:
+        return True
+    return False
+
+
+def isoform_exon_lengths_supported(
+    path: Path,
+    supported_ids: set[str] | None = None,
+) -> np.ndarray:
+    """Return spliced isoform lengths, optionally filtering by count support."""
+    vals = []
+    for iso in parse_isoforms(path):
+        name = str(iso.get("name") or "")
+        if supported_ids is not None and not is_supported_name(name, supported_ids):
+            continue
+        length = int(iso.get("spliced_len") or (iso["end"] - iso["start"]))
+        if length > 0:
+            vals.append(length)
+    return np.asarray(vals, dtype=int)
+
+
 def _parse_label_path_pairs(entries) -> dict[str, Path]:
     pairs = {}
     for entry in entries or []:
@@ -136,6 +192,10 @@ def main() -> None:
                         help="BED12 file with aligned reads")
     parser.add_argument("--bed", nargs="+", required=True,
                         help="label:path pairs for BED12/GTF/GFF isoform files")
+    parser.add_argument("--counts", nargs="*", default=[],
+                        help="Optional label:path pairs for transcript count support filtering")
+    parser.add_argument("--min-support", type=int, default=1,
+                        help="Minimum transcript count retained when --counts is supplied")
     parser.add_argument("--output", required=True, type=Path,
                         help="Output directory")
     parser.add_argument("--verbose", action="store_true")
@@ -149,16 +209,20 @@ def main() -> None:
         print(f"Loading read exon lengths from {args.reads_bed}", file=sys.stderr)
     read_lens = read_exon_lengths(args.reads_bed)
 
+    counts_by_method = _parse_label_path_pairs(args.counts)
     iso_lens_by_method = {}
     for label, path in _parse_label_path_pairs(args.bed).items():
         if not path.exists():
             print(f"WARNING: file not found: {path}", file=sys.stderr)
             continue
-        vals = isoform_exon_lengths(path)
+        supported_ids = load_supported_ids(counts_by_method.get(label), args.min_support)
+        vals = isoform_exon_lengths_supported(path, supported_ids)
         iso_lens_by_method[label] = vals
         if args.verbose:
             median = int(np.median(vals)) if vals.size else 0
-            print(f"  {label}: n={vals.size:,} median={median:,} bp", file=sys.stderr)
+            support_msg = " count-filtered" if supported_ids is not None else ""
+            print(f"  {label}: n={vals.size:,} median={median:,} bp{support_msg}",
+                  file=sys.stderr)
 
     plot_exon_length_distributions(read_lens, iso_lens_by_method, args.output)
 

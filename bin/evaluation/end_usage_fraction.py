@@ -55,12 +55,14 @@ import matplotlib.pyplot as plt
 try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
     from signal_utils import (parse_isoforms, gene_from_name,
-                              load_read_map, lookup_read_count)
+                              load_read_map, lookup_read_count,
+                              group_by_junction_chain)
     from alt_end_enumeration import load_end_reality, reality_at
 except ImportError:
     from evaluation.pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
     from evaluation.signal_utils import (parse_isoforms, gene_from_name,
-                                        load_read_map, lookup_read_count)
+                                        load_read_map, lookup_read_count,
+                                        group_by_junction_chain)
     from evaluation.alt_end_enumeration import load_end_reality, reality_at
 
 apply_rc()
@@ -110,66 +112,119 @@ def _gene_strand(isos: List[dict]) -> str:
     return "+" if plus >= len(isos) - plus else "-"
 
 
-def analyze_gene(isos: List[dict], counts: Dict[str, int], tol: int,
-                 reality_index: Optional[dict], reality_bin: float):
-    """Return (gene_row, site_rows) for one gene."""
-    strand = _gene_strand(isos)
+def _usage(sites: List[Tuple[int, int]]):
+    """[(pos, reads)] → [(pos, reads, usage_fraction)] within this site set."""
+    tot = sum(r for _, r in sites) or 1
+    return [(pos, reads, reads / tot) for pos, reads in sites]
+
+
+def _dom_off_fraction(usages) -> float:
+    """1 - dominant-site usage fraction (ATSS / APA index for one site set)."""
+    if not usages:
+        return 0.0
+    return 1.0 - max(u for _, _, u in usages)
+
+
+def _pdui(pas_usage, strand: str) -> Optional[float]:
+    """Distal-PAS usage fraction. Distal = furthest downstream in txn dir
+    (+: max genomic pos; -: min genomic pos). None when no PAS."""
+    if not pas_usage:
+        return None
+    if strand == "+":
+        distal_pos = max(p for p, _, _ in pas_usage)
+    else:
+        distal_pos = min(p for p, _, _ in pas_usage)
+    return next(u for p, _, u in pas_usage if p == distal_pos)
+
+
+def _chain_usage(isos: List[dict], counts: Dict[str, int], tol: int):
+    """Collapse one junction-chain group's ends into read-weighted usages.
+
+    Returns (tss_usage, pas_usage, n_reads) where each usage is a list of
+    (pos, reads, usage_fraction) computed WITHIN this chain.
+    """
     tss_ends: List[Tuple[int, int]] = []
     pas_ends: List[Tuple[int, int]] = []
+    n_reads = 0
     for iso in isos:
         n = lookup_read_count(iso["name"], counts) if counts else 1
         n = max(n, 1)
+        n_reads += n
         tss_ends.append((int(iso["tss"]), n))
         pas_ends.append((int(iso["tts"]), n))
+    tss_usage = _usage(collapse_sites(tss_ends, tol))
+    pas_usage = _usage(collapse_sites(pas_ends, tol))
+    return tss_usage, pas_usage, n_reads
 
-    tss_sites = collapse_sites(tss_ends, tol)
-    pas_sites = collapse_sites(pas_ends, tol)
-    total_reads = sum(r for _, r in tss_sites) or 1
 
-    def usage(sites):
-        tot = sum(r for _, r in sites) or 1
-        return [(pos, reads, reads / tot) for pos, reads in sites]
+def analyze_gene(isos: List[dict], counts: Dict[str, int], tol: int,
+                 reality_index: Optional[dict], reality_bin: float):
+    """Return (gene_row, site_rows) for one gene.
 
-    tss_usage = usage(tss_sites)
-    pas_usage = usage(pas_sites)
-
-    def index(usages):
-        if not usages:
-            return 0.0
-        return 1.0 - max(u for _, _, u in usages)
-
-    atss_index = index(tss_usage)
-    apa_index = index(pas_usage)
-
-    # PDUI: distal PAS usage / total PAS usage. Distal = furthest downstream in
-    # txn direction (+: max genomic pos; -: min genomic pos).
-    if pas_usage:
-        if strand == "+":
-            distal_pos = max(p for p, _, _ in pas_usage)
-        else:
-            distal_pos = min(p for p, _, _ in pas_usage)
-        distal_u = next(u for p, _, u in pas_usage if p == distal_pos)
-        pdui = distal_u
-    else:
-        pdui = 0.0
-
+    FIX 4: alternative-end usage is a WITHIN-junction-chain concept (an
+    alternative TSS/PAS for the SAME spliced structure).  The gene's
+    multi-exon isoforms are first grouped by splice-junction chain
+    (``group_by_junction_chain``); usage fractions and the ATSS/APA/PDUI
+    dominant-site indices are computed WITHIN each chain, then POOLED to the
+    gene (read-weighted mean of the per-chain indices, weighted by chain
+    reads).  This matches the documented "grouped by splice-junction chain,
+    then pooled to the gene" contract — previously the code pooled all chains
+    of a gene together, mixing structurally distinct isoforms into one
+    dominant-end fraction.
+    """
+    strand = _gene_strand(isos)
     chrom = isos[0]["chrom"]
-    site_rows = []
-    for axis, usages in (("tss", tss_usage), ("pas", pas_usage)):
-        ax_real = "tss" if axis == "tss" else "tts"
-        for pos, reads, frac in usages:
-            rty = None
-            if reality_index:
-                rty = reality_at(ax_real, chrom, pos, reality_index, tol)
-            site_rows.append({
-                "axis": axis, "site_pos": pos,
-                "usage_fraction": round(frac, 5), "reads": reads,
-                "ted_reality": "" if rty is None else round(rty, 4),
-            })
+
+    # Split the gene into junction-chain groups.  Single-exon isoforms carry no
+    # junction chain and are dropped here (the caller already filters by
+    # n_exons >= min_exons, but be defensive).  If grouping yields nothing
+    # (e.g. malformed/degenerate input) fall back to treating the whole gene as
+    # one group so the row is still emitted.
+    sjc_groups = group_by_junction_chain(isos, min_exons=1)
+    chain_iso_lists = list(sjc_groups.values()) if sjc_groups else [isos]
+
+    site_rows: List[dict] = []
+    n_tss = n_pas = 0
+    total_reads = 0
+    # Read-weighted accumulators for pooled indices.
+    atss_num = apa_num = pdui_num = 0.0
+    atss_den = apa_den = pdui_den = 0.0
+
+    for chain_isos in chain_iso_lists:
+        tss_usage, pas_usage, n_reads = _chain_usage(chain_isos, counts, tol)
+        total_reads += n_reads
+        n_tss += len(tss_usage)
+        n_pas += len(pas_usage)
+
+        atss_num += _dom_off_fraction(tss_usage) * n_reads
+        atss_den += n_reads
+        apa_num += _dom_off_fraction(pas_usage) * n_reads
+        apa_den += n_reads
+        pdui_chain = _pdui(pas_usage, strand)
+        if pdui_chain is not None:
+            pdui_num += pdui_chain * n_reads
+            pdui_den += n_reads
+
+        for axis, usages in (("tss", tss_usage), ("pas", pas_usage)):
+            ax_real = "tss" if axis == "tss" else "tts"
+            for pos, reads, frac in usages:
+                rty = None
+                if reality_index:
+                    rty = reality_at(ax_real, chrom, pos, reality_index, tol)
+                site_rows.append({
+                    "axis": axis, "site_pos": pos,
+                    "usage_fraction": round(frac, 5), "reads": reads,
+                    "ted_reality": "" if rty is None else round(rty, 4),
+                })
+
+    atss_index = atss_num / atss_den if atss_den else 0.0
+    apa_index = apa_num / apa_den if apa_den else 0.0
+    pdui = pdui_num / pdui_den if pdui_den else 0.0
+    total_reads = total_reads or 1
 
     gene_row = {
         "strand": strand, "n_isoforms": len(isos), "total_reads": total_reads,
-        "n_tss": len(tss_sites), "n_pas": len(pas_sites),
+        "n_tss": n_tss, "n_pas": n_pas,
         "atss_index": round(atss_index, 5), "apa_index": round(apa_index, 5),
         "pdui": round(pdui, 5),
     }

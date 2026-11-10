@@ -285,12 +285,11 @@ workflow ASSEMBLE {
             [[test_name, dataset_name, align_mode, partition_mode, transcriptome_mode],
              firstpass_bed ?: NO_FIRSTPASS]
         }
-        // The separate CDS BED is OBSOLETE under the new dev FLAIR (productivity
-        // is inline in .isoforms.bed). FlairTranscriptome no longer emits cds_bed,
-        // so this keyed channel is empty: the remainder:true join below fills the
-        // manifest cds_bed/cds_info columns with the NO_CDS placeholder for every
-        // row. Column stays in the 28-col schema for back-compat.
-        flair_cds_keyed = Channel.empty()
+        // NOTE: the separate CDS BED is OBSOLETE under the new dev FLAIR
+        // (productivity is inline in .isoforms.bed cols 7/8/18). FlairTranscriptome
+        // no longer emits cds_bed, so the manifest's cds_bed/cds_info columns are
+        // filled with the NO_CDS placeholder directly in the manifest chain below
+        // (no cds join). Columns stay in the schema for back-compat.
 
         // signal map keyed by test_name
         signal_keyed = dataset_signal_ch.map {
@@ -328,11 +327,13 @@ workflow ASSEMBLE {
                 payload != null ? [key5, payload, firstpass ?: NO_FIRSTPASS] : null
             }
             .filter { it != null }
-            .join(flair_cds_keyed.map { k, cds_bed, cds_info -> [k, cds_bed, cds_info] }, remainder: true)
-            .map { key5, payload, firstpass, cds_bed, cds_info ->
-                payload != null ? [payload, firstpass, cds_bed ?: NO_CDS, cds_info ?: NO_CDS] : null
+            // CDS is OBSOLETE under the new dev FLAIR (productivity inline in
+            // .isoforms.bed cols 7/8/18; no separate CDS file). The cds_keyed
+            // join was removed — inject the NO_CDS placeholder directly so the
+            // manifest's cds_bed/cds_info columns stay populated (back-compat).
+            .map { key5, payload, firstpass ->
+                [payload, firstpass, NO_CDS, NO_CDS]
             }
-            .filter { it != null }
             // attach signals by test_name
             .map { payload, firstpass, cds_bed, cds_info ->
                 def test_name = payload[0][0]

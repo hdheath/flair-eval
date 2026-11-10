@@ -16,6 +16,7 @@ class TestSet {
     Map isoseqModes       // Optional: PacBio IsoSeq assembler modes
     Map flamesModes       // Optional: FLAMES assembler modes
     Map stringtie2Modes   // Optional: StringTie2 assembler modes
+    Map lraaModes         // Optional: LRAA (Long Read Alignment Assembler) modes
 
     // Constructor with simplified parameter structure
     TestSet(String name, Dataset dataset, Map modes) {
@@ -29,6 +30,7 @@ class TestSet {
         this.isoseqModes = modes.isoseq ?: [:]
         this.flamesModes = modes.flames ?: [:]
         this.stringtie2Modes = modes.stringtie2 ?: [:]
+        this.lraaModes = modes.lraa ?: [:]
     }
 
     // Calculate total number of jobs this test set will produce

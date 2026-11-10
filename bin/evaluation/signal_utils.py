@@ -376,6 +376,153 @@ def parse_isoforms(path: str | Path) -> List[dict]:
     return parse_bed12(p)
 
 
+# ── Unified isoform loader (BED12 or assembler GTF) ──────────────────────────
+
+_GTF_SUFFIXES = (".gtf", ".gff", ".gff3")
+
+
+def is_gtf_path(path: str | Path) -> bool:
+    """True when *path* is a GTF/GFF/GFF3 isoform input (by extension)."""
+    return Path(path).suffix.lower() in _GTF_SUFFIXES
+
+
+def _region_overlaps(chrom: str, start: int, end: int, regions) -> bool:
+    """Interval [start, end) overlaps any (chrom, start|None, end|None) region.
+
+    ``regions`` is an empty/None list (no restriction) or a list of region
+    tuples in the SAME shape ted_end_precision.parse_region_values produces.
+    A region with ``start``/``end`` None matches the whole chromosome.
+    """
+    if not regions:
+        return True
+    for rc, rs, re_ in regions:
+        if chrom != rc:
+            continue
+        if rs is None or re_ is None:
+            return True
+        if not (end < rs or start > re_):
+            return True
+    return False
+
+
+def load_isoforms_any(path: str | Path, regions=None,
+                      canonical_only: bool = True, counts=None) -> List[dict]:
+    """Load isoforms from a BED12 OR an assembler GTF into ONE common shape.
+
+    This is the SHARED entry point used by the assembly-comparison figure
+    scripts (stratified_pr.py, end_dist_boxplot.py) so a BED tool (FLAIR/TED)
+    and a GTF tool (StringTie2/IsoSeq/Bambu/LRAA/IsoQuant) produce structurally
+    identical per-isoform records and therefore identical downstream geometry.
+
+    Auto-detection is purely by extension:
+      * ``.bed``                  -> :func:`parse_bed12`   (UNCHANGED BED path;
+                                     inline FlairBed read_support / BED col5).
+      * ``.gtf``/``.gff``/``.gff3`` -> ``ted_end_precision.parse_gtf_transcripts``
+                                     (the SAME parser the headline single-end
+                                     metric uses; groups exons into junction
+                                     chains, derives strand-aware tss/tts).
+
+    Every returned dict has the keys the figure scripts consume downstream::
+
+        chrom, strand, start, end, name, tss, tts,
+        junctions (tuple of (donor, acceptor)), n_exons (int),
+        read_support (float|None), has_support (bool)
+
+    READ-SUPPORT semantics (the contract for GTF tools):
+      * BED tools keep their inline support (FlairBed col16 / BED col5); a
+        ``counts`` map, when given, overrides it via :func:`lookup_read_count`.
+      * GTF tools have NO inline support — ``read_support`` comes ONLY from the
+        ``counts`` map (looked up by transcript id).  When no count is found the
+        record gets ``read_support=None`` and ``has_support=False`` so callers
+        can OMIT the whole tool from read-support-stratified figures rather than
+        silently treating it as 0 reads.
+
+    Region/canonical filtering is applied here so both scripts filter
+    identically (canonical-chrom predicate UNCHANGED — peak_matching.is_canonical_chrom).
+    """
+    # local imports: avoid import-time cycles + heavy deps at module load.
+    try:
+        from peak_matching import is_canonical_chrom
+    except ImportError:
+        from evaluation.peak_matching import is_canonical_chrom
+
+    p = Path(path)
+    gtf = is_gtf_path(p)
+    if gtf:
+        # Reuse the headline parser so junction chains / tss / tts match exactly.
+        try:
+            from ted_end_precision import parse_gtf_transcripts
+        except ImportError:
+            from evaluation.ted_end_precision import parse_gtf_transcripts
+        raw = parse_gtf_transcripts(str(p), regions)
+        records = []
+        for tx in raw:
+            records.append(dict(
+                chrom=tx["chrom"], strand=tx["strand"],
+                start=tx["start"], end=tx["end"],
+                name=tx["tx_id"], tss=tx["tss"], tts=tx["tts"],
+                junctions=tuple(tx.get("junctions", ())),
+                n_exons=int(tx.get("n_exons", 1)),
+                _is_gtf=True,
+            ))
+    else:
+        records = []
+        for iso in parse_bed12(p):
+            records.append(dict(
+                chrom=iso["chrom"], strand=iso["strand"],
+                start=iso["start"], end=iso["end"],
+                name=iso["name"], tss=iso["tss"], tts=iso["tts"],
+                junctions=tuple(iso.get("junctions", ())),
+                n_exons=int(iso.get("n_exons", 1)),
+                _is_gtf=False,
+                _inline_read_support=iso.get("read_support"),
+                _inline_score=iso.get("score"),
+            ))
+
+    out = []
+    for r in records:
+        chrom = r["chrom"]
+        if canonical_only and not is_canonical_chrom(chrom):
+            continue
+        if not _region_overlaps(chrom, r["start"], r["end"], regions):
+            continue
+        rs, has = _resolve_isoform_support(r, counts)
+        r.pop("_inline_read_support", None)
+        r.pop("_inline_score", None)
+        r["read_support"] = rs
+        r["has_support"] = has
+        out.append(r)
+    return out
+
+
+def _resolve_isoform_support(rec: dict, counts):
+    """Return (read_support_float_or_None, has_support_bool) for one record.
+
+    GTF record  -> support ONLY from the counts map (None/absent -> no support).
+    BED record  -> counts map override, else inline FlairBed col16, else BED col5.
+    """
+    name = rec.get("name", "")
+    if counts:
+        c = lookup_read_count(name, counts)
+        if c:
+            return float(c), True
+    if rec.get("_is_gtf"):
+        return None, False
+    inline = rec.get("_inline_read_support")
+    if inline is not None:
+        try:
+            return float(inline), True
+        except (TypeError, ValueError):
+            pass
+    score = rec.get("_inline_score")
+    try:
+        if score is not None:
+            return float(score), True
+    except (TypeError, ValueError):
+        pass
+    return 0.0, True
+
+
 # ── BedGraph signal track ──────────────────────────────────────────────────
 
 class BedGraphTrack:
@@ -591,6 +738,64 @@ def load_read_map(path: str | Path) -> Dict[str, int]:
     if n_total > 0 and n_self / n_total > 0.9:
         return {}
     return counts
+
+
+def load_support_table(path) -> Optional[Dict[str, float]]:
+    """Load a per-isoform read-support source -> {transcript_id: count}.
+
+    Auto-detects the two file shapes the multimethod manifest provides:
+
+      * READ-MAP   ``isoform_id<TAB>read1,read2,...``  -> count = #reads.
+        Detected when the first data row's second column contains a comma; this
+        path delegates to :func:`load_read_map` (which also drops self-ref maps).
+      * NUMERIC COUNTS ``id<TAB>count[<TAB>count]``    -> count = MAX numeric
+        column to the right of the id.  Using MAX (not sum) keeps FLAIR/TED
+        ``id count count`` duplicate-column tables from double-counting, while a
+        single numeric column (IsoQuant ``#feature_id count``) is returned as-is
+        and a Bambu ``TXNAME GENEID sample`` row skips the non-numeric GENEID.
+
+    Returns None when the path is missing/unreadable or nothing parses, so
+    callers can fall back to the FlairBed inline read_support (col16) / BED col5.
+    """
+    if not path:
+        return None
+    p = Path(path)
+    if not p.exists():
+        return None
+    # Peek at the first data row to decide the shape.
+    is_readmap = False
+    with open(p) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith("#"):
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 2 and "," in parts[1]:
+                is_readmap = True
+            break
+    if is_readmap:
+        rm = load_read_map(p)
+        return rm or None
+    counts: Dict[str, float] = {}
+    n = 0
+    with open(p) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith("#"):
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 2:
+                continue
+            best = None
+            for v in parts[1:]:
+                try:
+                    fv = float(v)
+                except ValueError:
+                    continue
+                best = fv if best is None else max(best, fv)
+            if best is None:
+                continue
+            n += 1
+            counts[parts[0]] = best
+    return counts if n else None
 
 
 def lookup_read_count(name: str, counts: Dict[str, int]) -> int:

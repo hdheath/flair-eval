@@ -281,33 +281,115 @@ def one_to_one_match_counts(
 
     from .peak_matching import match_positions_one_to_one, _interval_summit
 
-    # Collapse each peak to a single summit; bucket by chrom/strand.
+    # Collapse each peak to a single summit; bucket by (chrom, strand).
+    #
+    # A strand-agnostic ('.') peak is placed in EXACTLY ONE bucket — its own
+    # '.' bucket — so it contributes a single summit (one recall target).  The
+    # old code placed it in BOTH the '+' and '-' buckets but counted it once in
+    # the denominator, so a '+' call and a '-' call near one '.' peak each
+    # claimed it (TP=2 for a single peak) and recall could exceed 1.0.  Here
+    # each peak contributes exactly one summit, so n_summits == #peak intervals.
     summits_by_cs = defaultdict(list)  # (chrom, strand) -> [summit_pos, ...]
     for row in peaks_rows:
-        strands = ['+', '-'] if row['Strand'] == '.' else [row['Strand']]
-        for strand in strands:
-            sig = signal.get((row['Chrom'], strand)) if signal else None
-            summit = _interval_summit(int(row['Start']), int(row['End']), sig)
-            summits_by_cs[(row['Chrom'], strand)].append(summit)
+        strand = row['Strand']
+        sig = signal.get((row['Chrom'], strand)) if signal else None
+        # '.' peaks have no per-strand signal track; fall back to '+' then '-'.
+        if sig is None and signal and strand == '.':
+            sig = (signal.get((row['Chrom'], '+'))
+                   or signal.get((row['Chrom'], '-')))
+        summit = _interval_summit(int(row['Start']), int(row['End']), sig)
+        summits_by_cs[(row['Chrom'], strand)].append(summit)
     for key in summits_by_cs:
         summits_by_cs[key].sort()
+    # One summit per peak interval — the recall denominator.
+    n_summits = sum(len(v) for v in summits_by_cs.values())
 
-    # Group called ends (single-position endpoints) by chrom/strand.
+    # Group called ends (single-position endpoints) by (chrom, strand).
     ends_by_cs = defaultdict(list)
     for row in bed_rows:
         ends_by_cs[(row['Chrom'], row['Strand'])].append(int(row['Start']))
 
-    matched_keys = set()  # (chrom, strand, summit) — dedup '.' double-placement
-    for key, positions in ends_by_cs.items():
-        summits = summits_by_cs.get(key)
-        if not summits:
+    matched_keys = set()  # (chrom, strand, summit) — distinct matched summits
+    for (chrom, strand), positions in ends_by_cs.items():
+        # A call may match a summit on its own strand OR a strand-agnostic
+        # ('.') summit on the same chrom.  Merge both candidate summit sets
+        # (tagging each with its source bucket) and run ONE one-to-one match
+        # so the call is consumed once and each summit is credited once —
+        # preserving precision = TP/n_calls <= 1 and recall = TP/n_summits <= 1.
+        candidates: List[Tuple[int, str]] = []
+        for bucket_strand in (strand, '.'):
+            if bucket_strand == '.' and strand == '.':
+                continue  # '.' calls already covered by their own bucket below
+            for s in summits_by_cs.get((chrom, bucket_strand), ()):
+                candidates.append((s, bucket_strand))
+        # '.' calls match only '.' summits (no strand to disambiguate).
+        if strand == '.':
+            candidates = [(s, '.') for s in summits_by_cs.get((chrom, '.'), ())]
+        if not candidates:
             continue
-        assign = match_positions_one_to_one(positions, summits, window)
+        candidates.sort()
+        cand_pos = [p for p, _ in candidates]
+        assign = match_positions_one_to_one(positions, cand_pos, window)
         for j in assign:
             if j >= 0:
-                matched_keys.add((key[0], key[1], summits[j]))
+                summit_pos, bucket_strand = candidates[j]
+                matched_keys.add((chrom, bucket_strand, summit_pos))
 
     tp = len(matched_keys)
-    # Denominator is the count of distinct peak intervals (one summit each);
-    # strand-agnostic peaks counted once in the input list.
-    return tp, n_calls, len(peaks_rows)
+    # Clamp TP to the summit count as a final guard so recall (TP/n_summits)
+    # can never exceed 1.0 regardless of bucketing.
+    if tp > n_summits:
+        tp = n_summits
+    return tp, n_calls, n_summits
+
+
+def near_match_counts(bed_rows, peaks_rows, window, signal=None):
+    """MANY-TO-ONE 'near a peak' counts (NO one-to-one consumption).
+
+    Returns (ends_near, n_calls, peaks_recovered, n_peaks):
+      ends_near       = # called ends within `window` of ANY peak summit  (precision numerator)
+      peaks_recovered = # peak summits with ANY called end within `window` (recall numerator)
+    A promoter producing several isoforms therefore credits EVERY nearby end
+    (hdheath 2026-06-15: alt-TSS within one promoter are expected, not duplicates).
+    Summit construction mirrors one_to_one_match_counts (peak centre / dominant
+    signal, strand-aware) so only the consumption rule differs.
+    """
+    from bisect import bisect_left
+    from collections import defaultdict
+    from .peak_matching import _interval_summit
+    n_calls = len(bed_rows)
+    if not peaks_rows:
+        return 0, n_calls, 0, 0
+    summits_by_cs = defaultdict(list)
+    for row in peaks_rows:
+        strand = row['Strand']
+        sig = signal.get((row['Chrom'], strand)) if signal else None
+        if sig is None and signal and strand == '.':
+            sig = (signal.get((row['Chrom'], '+')) or signal.get((row['Chrom'], '-')))
+        summits_by_cs[(row['Chrom'], strand)].append(
+            _interval_summit(int(row['Start']), int(row['End']), sig))
+    for k in summits_by_cs:
+        summits_by_cs[k].sort()
+    calls_by_cs = defaultdict(list)
+    for row in bed_rows:
+        calls_by_cs[(row['Chrom'], row['Strand'])].append(int(row['Start']))
+    for k in calls_by_cs:
+        calls_by_cs[k].sort()
+    def _near(pos, arr):
+        if not arr:
+            return False
+        i = bisect_left(arr, pos)
+        for j in (i - 1, i):
+            if 0 <= j < len(arr) and abs(pos - arr[j]) <= window:
+                return True
+        return False
+    ends_near = 0
+    for (c, st), poss in calls_by_cs.items():
+        summ = summits_by_cs.get((c, st), [])
+        ends_near += sum(1 for p in poss if _near(p, summ))
+    n_peaks = sum(len(v) for v in summits_by_cs.values())
+    peaks_recovered = 0
+    for (c, st), summ in summits_by_cs.items():
+        cl = calls_by_cs.get((c, st), [])
+        peaks_recovered += sum(1 for p in summ if _near(p, cl))
+    return ends_near, n_calls, peaks_recovered, n_peaks

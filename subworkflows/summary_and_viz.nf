@@ -46,6 +46,7 @@ include { InternalPrimingAnalysis  } from '../modules/visualization/summary/main
 include { SignalReadSupport        } from '../modules/visualization/summary/main'
 include { PrSignalBalance          } from '../modules/visualization/summary/main'
 include { SqantiPrecision          } from '../modules/visualization/summary/main'
+include { NovelEndCarveout         } from '../modules/visualization/summary/main'
 include { ClusterSpreadPlots       } from '../modules/visualization/summary/main'
 include { TedLogAnalysis           } from '../modules/visualization/summary/main'
 include { TedRejectionAnalysis     } from '../modules/visualization/summary/main'
@@ -87,7 +88,7 @@ workflow SUMMARY_AND_VIZ {
         ted_precision_metrics      // tuple [test_name, dataset_name, transcriptome_mode, precision_recall_summary.tsv, per_junction_chain.tsv]
         ted_gtf_precision          // tuple [test_name, dataset_name, transcriptome_mode, gtf_precision_recall_summary.tsv]
         flair_firstpass            // tuple [test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode, firstpass_bed]
-        flair_cds_bed              // tuple [test_name, dataset_name, align_mode, partition_mode, partition_args, transcriptome_mode, isoforms.CDS.bed, isoforms.CDS.info.tsv]
+        flair_cds_bed              // DEPRECATED/unused: permanently empty (Channel.empty()); CDS analyses now read inline productivity from isoforms_per_gene_ch. Kept in take: for caller-signature compatibility.
 
     main:
 
@@ -210,29 +211,31 @@ workflow SUMMARY_AND_VIZ {
         // and productivity-class transitions (PRO->PTC, etc.) between
         // sibling isoforms. Historically consumed the *.isoforms.CDS.bed files
         // from --predict_cds (predictProductivity). The new dev FLAIR makes
-        // productivity INLINE in .isoforms.bed (cols 7/8) and no longer writes
-        // a separate CDS BED, so flair_cds_bed is now an EMPTY channel: this
-        // channel is empty and AltEndCDSAnalysis / CDSCoverageRecovery below
-        // are effectively no-op. FOLLOW-UP (hdheath): re-enable them by reading
-        // inline productivity from the regular .isoforms.bed.
-        cds_bed_ch = flair_cds_bed
-            .filter { it[6] != null }      // skip modes without CDS BED
-            .map { test_name, dataset_name, align_mode, partition_mode,
-                   partition_args, transcriptome_mode, cds_bed, cds_info ->
-                [test_name, transcriptome_mode, cds_bed]
-            }
-            .groupTuple(by: [0])
-            .map { test_name, labels, files ->
-                [test_name, labels, files.flatten()]
-            }
-        AltEndCDSAnalysis(cds_bed_ch)
+        // productivity INLINE in the regular 30-col .isoforms.bed (ORF span in
+        // cols 7/8, productivity class in col 18) and no longer writes a
+        // separate CDS BED, so the old flair_cds_bed channel is permanently
+        // empty (Channel.empty() in both ASSEMBLE and ASSEMBLE_AND_EVAL, and the
+        // manifest path always injects NO_CDS).
+        //
+        // RESOLVED FOLLOW-UP (hdheath, 2026-06-06): both CDS scripts now read
+        // inline productivity straight from the regular *.isoforms.bed (see the
+        // module headers in bin/evaluation/{alt_end_cds_analysis,
+        // cds_coverage_recovery}.py — they parse cols 7/8 + col 18, with a
+        // graceful skip when no CDS prediction is present). So feed them the
+        // SAME [test_name, labels, files] channel that GeneRecoveryAnalysis
+        // already uses (isoforms_per_gene_ch). The process input shape is
+        // identical for all three (tuple val(test_name), val(bed_labels),
+        // path(bed_files)), so no reshape is needed. Non-FLAIR modes whose
+        // isoform file is a GTF (Bambu/IsoQuant) hit the scripts' graceful
+        // no-CDS skip, exactly as they already do under GeneRecoveryAnalysis.
+        AltEndCDSAnalysis(isoforms_per_gene_ch)
 
         // --- CDS coverage recovery: per-mode productivity diff vs FLAIR baseline ---
         // Tracks PRO/PTC/NGO/NST class transitions per gene: how many
         // productive ORFs survive after TED's TSS/TTS choices, and
-        // how many flip to PTC (NMD) or NGO (no-good-ORF). Reuses the
-        // same CDS-BED channel as AltEndCDSAnalysis.
-        CDSCoverageRecovery(cds_bed_ch)
+        // how many flip to PTC (NMD) or NGO (no-good-ORF). Same inline-CDS
+        // .isoforms.bed channel as AltEndCDSAnalysis / GeneRecoveryAnalysis.
+        CDSCoverageRecovery(isoforms_per_gene_ch)
 
         // --- Read vs isoform exon-length distributions ---
         reads_bed_by_test = all_eval_inputs
@@ -560,6 +563,32 @@ workflow SUMMARY_AND_VIZ {
             }
 
         SqantiPrecision(sqanti_prec_ch)
+
+        // --- Novel-end carve-out PR: per-(test,dataset) multi-method comparison ---
+        // First-class, default-on version of analysis/novel_end_pr/novel_end_pr.py.
+        // Grouped by [test_name, dataset_name] (NOT test_name alone) for two
+        // reasons: (1) correctness — each dataset's calls must be scored against
+        // ITS OWN cage/drna truth (truth is per-dataset, not per-test); (2)
+        // collision-safety — the per-method isoform BED basenames embed
+        // dataset_name+modes (modules/transcriptome/flair/main.nf), so BEDs never
+        // collide on stage-in (the CombineGtfPrecisionRecall trap), and one
+        // comparison output set lands per dataset.  gtf/cage/drna are identical
+        // across transcriptome modes within a (test_name, dataset_name) — all
+        // modes share one partition annotation + one truth set — so [0] is safe.
+        novel_end_pr_ch = all_eval_inputs
+            .map { items ->
+                def iso = items[5].name.contains('NO_ISOFORMS_BED') ? items[6] : items[5]
+                // [test_name, dataset_name, mode-label, iso_bed, gtf, cage, drna]
+                [items[0], items[1], items[4], iso, items[14], items[15], items[16]]
+            }
+            .filter { !it[3].name.contains('NO_ISOFORMS') }
+            .filter { it[5].name != 'NO_CAGE' || it[6].name != 'NO_DRNA' }  // need >=1 truth
+            .groupTuple(by: [0, 1])                                          // (test_name, dataset_name)
+            .map { test_name, dataset_name, labels, beds, gtfs, cages, drnas ->
+                [test_name, dataset_name, labels, beds.flatten(), gtfs[0], cages[0], drnas[0]]
+            }
+
+        NovelEndCarveout(novel_end_pr_ch)
 
         // --- P/R × boundary-signal balance: 3-axis scatter, Pareto, dead-zone bar ---
         // Joins cumulative_signal_inputs (bed + signal tracks) with the combined

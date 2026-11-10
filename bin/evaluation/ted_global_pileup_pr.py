@@ -43,7 +43,8 @@ from ted_log_loader import load_ted_log
 # match called ends one-to-one (greedy nearest).  Same module the logreg
 # fit uses, so "TP" means the same thing.  (R3 fix, 2026-05-28 memo §5.2.)
 from peak_matching import (
-    build_summit_index, match_positions_one_to_one, count_summits,
+    match_positions_one_to_one, count_summits,
+    load_summit_index_from_bed,
 )
 
 logging.basicConfig(level=logging.INFO,
@@ -64,24 +65,19 @@ STAGE_LABEL = {
 END_LABEL = {"tss": "5prime", "tts": "3prime"}
 
 
-def _parse_peaks(path: str) -> PeakIndex:
+def _parse_peaks(path: str, chroms: Optional[Iterable[str]] = None) -> PeakIndex:
     """Parse BED6 peaks into a (chrom, strand) -> sorted summit index.
 
     Each peak interval is collapsed to ONE summit (peak centre; no signal
     bedGraph wired in here) so downstream one-to-one matching can credit at
     most one called end per peak.  (R3 fix.)
+
+    `chroms`, when given, restricts the truth peak set to those chromosomes.
+    On a scoped run (candidates only exist on one chromosome) this keeps the
+    recall denominator (total summits) on the same chromosome as the
+    candidates, otherwise recall/F1 are deflated by the genome/chrom ratio.
     """
-    rows: List[Tuple[str, int, int, str]] = []
-    with open(path) as fh:
-        for line in fh:
-            if not line.strip() or line.startswith("#"):
-                continue
-            cols = line.rstrip("\n").split("\t")
-            if len(cols) < 6:
-                continue
-            chrom, start, end, strand = cols[0], int(cols[1]), int(cols[2]), cols[5]
-            rows.append((chrom, start, end, strand))
-    return build_summit_index(rows)
+    return load_summit_index_from_bed(path, chroms=chroms)
 
 
 def _parse_chrom(junc_id: str) -> str:
@@ -374,6 +370,13 @@ def main() -> None:
     parser.add_argument("--drna-peaks", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--window", type=int, default=50)
+    parser.add_argument(
+        "--chrom", "--region", dest="chrom", default=None,
+        help="Restrict truth CAGE/dRNA peaks to this chromosome (e.g. chr22). "
+             "On scoped runs the global_peak candidates only exist on the "
+             "scoped chromosome, so without this the recall denominator spans "
+             "the whole genome and deflates recall/F1. Default: no restriction "
+             "(genome-wide, preserves prior behaviour).")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -382,9 +385,12 @@ def main() -> None:
 
     outdir = Path(args.output)
     outdir.mkdir(parents=True, exist_ok=True)
+    chroms = {args.chrom} if args.chrom else None
+    if chroms:
+        log.info("Restricting truth peaks to chromosome: %s", args.chrom)
     peaks_by_end = {
-        "tss": _parse_peaks(args.cage_peaks),
-        "tts": _parse_peaks(args.drna_peaks),
+        "tss": _parse_peaks(args.cage_peaks, chroms=chroms),
+        "tts": _parse_peaks(args.drna_peaks, chroms=chroms),
     }
 
     metric_rows = []

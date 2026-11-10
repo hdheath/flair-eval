@@ -1173,6 +1173,56 @@ process TedGlobalPileupPrecisionRecall {
 }
 
 // -----------------------------------------------------------------
+// Novel-end carve-out precision/recall (default-on, first-class).
+// For each (test_name, dataset_name): FULL + NOVEL (ends >--annot-dist
+// bp from the nearest annotated end) TSS-vs-CAGE / TTS-vs-dRNA P/R per
+// method, plus the multi-method pr_scatter + novel_f1_bars comparison.
+//
+// Inherits the FIXED end metric (interval-OR-summit Peak.lo/.hi matching
+// + canonical-chrom default) because novel_end_pr.py imports and calls
+// evaluation.peak_matching.precision_recall — no metric is reimplemented
+// here, so the just-applied matching fix flows through automatically.
+//
+// Grouped by (test_name, dataset_name) — NOT test_name alone — so each
+// dataset's calls are scored against ITS OWN cage/drna truth, and the
+// per-dataset isoform BED basenames (which embed dataset+modes) never
+// collide on the stage-in (the CombineGtfPrecisionRecall trap).  Each
+// dataset emits its own pr_scatter_<dataset>.png / novel_f1_bars_<dataset>.png.
+//
+// Default-on via errorStrategy 'ignore' + `|| true` + optional outputs:
+// a single-dataset edge case can never abort the eval.
+// -----------------------------------------------------------------
+process NovelEndCarveout {
+    publishDir "${params.outdir}/evaluations/per_sample/${test_name}/summary/end_accuracy/novel", mode: 'copy'
+    tag "${test_name}/${dataset_name}"
+    errorStrategy 'ignore'
+
+    input:
+    tuple val(test_name), val(dataset_name), val(bed_labels), path(bed_files),
+          path(gtf), path(cage_peaks), path(drna_peaks)
+
+    output:
+    path "*.tsv", optional: true
+    path "*.png", optional: true
+
+    script:
+    def bed_paths = bed_files.collect { it.name }.join(' ')
+    def bed_lab_arg = bed_labels.join(' ')
+    def cage_arg = cage_peaks.name != 'NO_CAGE' ? "--cage ${cage_peaks}" : ""
+    def drna_arg = drna_peaks.name != 'NO_DRNA' ? "--drna ${drna_peaks}" : ""
+    """
+    python ${projectDir}/analysis/novel_end_pr/novel_end_pr.py \\
+        --beds ${bed_paths} \\
+        --labels ${bed_lab_arg} \\
+        --dataset ${dataset_name} \\
+        ${cage_arg} ${drna_arg} \\
+        --gtf ${gtf} \\
+        --output . \\
+        --annot-dist 100 --primary-window 50 || true
+    """
+}
+
+// -----------------------------------------------------------------
 // Isoform end AUC-ROC: treats each isoform as a binary prediction
 // (TP = end within --window bp of a reference peak), uses orthogonal
 // signal at the called end as the classifier score, and plots TPR vs

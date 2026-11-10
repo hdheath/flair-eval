@@ -23,8 +23,9 @@ Two complementary views are produced for each signal type (CAGE=5', dRNA=3'):
    Treat peak recovery as a binary classifier:
      "Would this tool recover a peak given that it has enough reads?"
    Sweep signal threshold high→low; peaks above threshold are "called":
-     TPR(t) = recovered_above_t  / total_recoverable
-     FPR(t) = missed_above_t     / total_recoverable
+     TPR(t) = recovered_above_t / total_recoverable    (= TP / (TP + FN))
+     FPR(t) = non_recovered_above_t / total_non_recoverable
+            = FP / (FP + TN)                            (classic FPR)
    Diagonal = random classifier. AUC measured vs FPR axis.
 
 4. 5'-vs-3' normalised overlay (new)
@@ -149,14 +150,15 @@ def _tpr_fpr_roc_curve(rows):
     """ROC curve: TPR vs FPR by sweeping signal threshold.
 
     At each threshold t (high→low), peaks with score >= t are "called positive".
-    Among recoverable peaks:
-        TPR(t) = recovered_at_or_above_t / total_recoverable
-        FPR(t) = missed_at_or_above_t   / total_recoverable
+    Peaks are labelled recovered (positive) or non-recovered (negative):
+        TPR(t) = recovered_at_or_above_t / total_recovered
+               = TP / (TP + FN)
+        FPR(t) = non_recovered_at_or_above_t / total_non_recovered
+               = FP / (FP + TN)                       (classic FPR)
 
-    FPR here measures how many recoverable peaks are *missed* at each
-    threshold — i.e. called positive but not actually recovered.
-    This is more interpretable than a traditional FPR because every peak
-    is a potential TP (there are no true negatives in the classical sense).
+    FPR is the standard false-positive rate: of the peaks that are NOT
+    recovered (true negatives), the fraction called positive at threshold t.
+    Both rates are bounded in [0, 1].
     """
     if not rows:
         return np.array([0.0, 1.0]), np.array([0.0, 0.0]), 0.0
@@ -319,7 +321,7 @@ def plot_tpr_fpr_roc(roc_by_tool, output_path, title):
             tool, label=f"{tool}  (AUC={auc:.3f})", markersize=6))
 
     _finish(fig, ax, handles, output_path,
-            xlabel="FPR — Missed recoverable peaks (%)",
+            xlabel="False Positive Rate (non-recovered peaks called) (%)",
             ylabel="TPR — Recovered peaks (%)",
             title=title,
             xlim=(-2, 102), ylim=(-2, 102))
@@ -488,7 +490,7 @@ def plot_cross_tech_roc(per_tool_per_dataset, output_path, title, n_grid=200):
             tool, label=f"{tool}  (AUC={auc:.3f})", markersize=6))
 
     _finish(fig, ax, handles, output_path,
-            xlabel="FPR — Missed recoverable peaks (%)",
+            xlabel="False Positive Rate (non-recovered peaks called) (%)",
             ylabel="TPR — Recovered peaks (%)",
             title=title,
             xlim=(-2, 102), ylim=(-2, 102))

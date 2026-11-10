@@ -26,6 +26,7 @@ from pathlib import Path
 from evaluation import (
     parse_gtf_transcripts,
     build_reference_structures,
+    build_reference_chain_ends,
     classify_transcripts_per_isoform,
 )
 
@@ -181,10 +182,12 @@ def main():
     if args.verbose:
         print(f"Building reference structures", flush=True)
     refjuncs, refjuncchains, refseends = build_reference_structures(transcripttoexons)
+    # Terminal coords per reference intron chain -> lets FSM be split into CIM/FSM5/FSM3/FSMTE
+    refchainends = build_reference_chain_ends(transcripttoexons)
 
     # Use per-isoform classification so we can both count totals AND emit labels
     iso_classifications = classify_transcripts_per_isoform(
-        isoforms_bed, refjuncs, refjuncchains, refseends
+        isoforms_bed, refjuncs, refjuncchains, refseends, refchainends=refchainends
     )
     fsm = sum(1 for r in iso_classifications if r["category"] == "FSM")
     ism = sum(1 for r in iso_classifications if r["category"] == "ISM")
@@ -197,9 +200,9 @@ def main():
     # Write per-isoform category TSV if requested (consumed downstream by sqanti_precision.py)
     if args.categories_output:
         with open(args.categories_output, 'w') as cat_out:
-            cat_out.write("isoform_name\tcategory\n")
+            cat_out.write("isoform_name\tcategory\tcategory_fine\n")
             for r in iso_classifications:
-                cat_out.write(f"{r['name']}\t{r['category']}\n")
+                cat_out.write(f"{r['name']}\t{r['category']}\t{r['category_fine']}\n")
 
     # Write output as simple TSV (one header row, one data row)
     with open(args.output, 'w') as outfile:

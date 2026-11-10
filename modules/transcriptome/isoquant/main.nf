@@ -8,12 +8,14 @@
 process IsoQuantAssembly {
     publishDir "${params.outdir}/assemblers/isoquant/${test_name}", mode: 'symlink'
     publishDir "${params.outdir}/logs/${test_name}", mode: 'copy', pattern: '.command.{log,err}', saveAs: { "${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}_${it}" }
-    errorStrategy 'terminate'
+    // Benchmark assembler: a broken tool (e.g. FLAMES container, missing dep) must
+    // NOT abort the whole comparison run. Ignore failures so the other tools + FLAIR/TED proceed.
+    errorStrategy 'ignore'
     tag "${dataset_name}_${align_mode}_${partition_mode}_isoquant_${isoquant_mode}"
 
     input:
     tuple val(test_name), val(dataset_name), val(align_mode), val(partition_mode),
-          path(bam), path(bai), path(genome), path(gtf),
+          path(bam), path(bai), val(genome), path(gtf),
           val(isoquant_mode), val(isoquant_args)
 
     output:

@@ -85,12 +85,20 @@ def test_usage_fraction_and_indices(tmp_path):
 
 
 def test_minus_strand_pdui(tmp_path):
-    """- strand: distal PAS = smallest genomic coord. TSS at end, TTS at start."""
+    """- strand: distal PAS = smallest genomic coord. TSS at end, TTS at start.
+
+    Both isoforms must GENUINELY share the same junction chain (donor 1300,
+    acceptor 4000) so the two distinct PAS (genomic 1000 vs 1100) are
+    alternative ends of the SAME spliced structure.  This was the case the
+    SJC-grouping fix (FIX 4) corrects: the indices are computed within the
+    chain, so distal (1000) usage = 0.5.
+    """
     bed = tmp_path / "iso.bed"
-    # both isoforms share SJC; PAS (genomic start) at 1000 (distal) and 1300 (proximal)
+    # Shared junction (1300, 4000): exon1 ends at 1300, exon2 = 4000..5000.
+    # PAS (genomic start, - strand) at 1000 (distal) and 1100 (proximal).
     bed.write_text(
-        _bed12_line("chr1", 1000, 5000, "tA1_GENEA", "-", [(0, 200), (3900, 100)]) +
-        _bed12_line("chr1", 1300, 5000, "tA2_GENEA", "-", [(0, 100), (3600, 100)])
+        _bed12_line("chr1", 1000, 5000, "tA1_GENEA", "-", [(0, 300), (3000, 1000)]) +
+        _bed12_line("chr1", 1100, 5000, "tA2_GENEA", "-", [(0, 200), (2900, 1000)])
     )
     out = tmp_path / "out"
     rc = M.main(["--bed", f"ted:{bed}", "--output-prefix", "t",
@@ -103,6 +111,43 @@ def test_minus_strand_pdui(tmp_path):
     assert g["n_pas"] == "2"
     # equal weight (no read map → 1 each) → distal (1000) usage = 0.5
     assert abs(float(g["pdui"]) - 0.5) < 1e-6
+
+
+def test_sjc_grouping_distinct_from_gene_pooling(tmp_path):
+    """FIX 4: ATSS index is computed WITHIN junction chains, then pooled.
+
+    One gene, two distinct junction chains:
+      Chain A (junction 2500-4000): 2 isoforms with distinct TSS
+                                     (1000, 2000) → within-chain ATSS = 0.5.
+      Chain B (junction 3500-4200): 2 isoforms both with TSS 3000
+                                     → within-chain ATSS = 0.0.
+
+    SJC-grouped (correct): read-weighted mean = (0.5*2 + 0.0*2)/4 = 0.25.
+    Old gene-pooled (wrong): all TSS pooled → sites 1000(1),2000(1),3000(2);
+        dominant = 3000 (0.5) → ATSS = 0.5.
+
+    Asserting 0.25 proves SJC grouping is in effect (not the pooled 0.5).
+    """
+    bed = tmp_path / "iso.bed"
+    bed.write_text(
+        # Chain A: shared junction (2500, 4000); TSS 1000 and 2000.
+        _bed12_line("chr1", 1000, 5000, "tA1_GENEX", "+", [(0, 1500), (3000, 1000)]) +
+        _bed12_line("chr1", 2000, 5000, "tA2_GENEX", "+", [(0, 500), (2000, 1000)]) +
+        # Chain B: shared junction (3500, 4200); both TSS 3000.
+        _bed12_line("chr1", 3000, 5000, "tB1_GENEX", "+", [(0, 500), (1200, 800)]) +
+        _bed12_line("chr1", 3000, 5000, "tB2_GENEX", "+", [(0, 500), (1200, 800)])
+    )
+    out = tmp_path / "out"
+    rc = M.main(["--bed", f"ted:{bed}", "--output-prefix", "t",
+                 "--output-dir", str(out)])
+    assert rc == 0
+    grows = list(csv.DictReader(
+        (out / "t_end_usage_fraction.gene.tsv").open(), delimiter="\t"))
+    g = {r["gene_id"]: r for r in grows}["GENEX"]
+    # SJC-grouped ATSS = 0.25 (NOT the gene-pooled 0.5).
+    assert abs(float(g["atss_index"]) - 0.25) < 1e-6, (
+        f"expected SJC-grouped ATSS 0.25, got {g['atss_index']} "
+        "(0.5 would mean gene-level pooling — the bug)")
 
 
 def test_reality_attached_to_sites(tmp_path):

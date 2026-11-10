@@ -64,9 +64,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # one summit and match one-to-one, so the weight-selection F1 is the same
 # objective the headline F1 reports.
 try:
-    from peak_matching import build_summit_index, load_signal_bedgraphs
+    from peak_matching import (
+        build_summit_index, load_signal_bedgraphs, match_positions_one_to_one,
+    )
 except ImportError:
-    from evaluation.peak_matching import build_summit_index, load_signal_bedgraphs
+    from evaluation.peak_matching import (
+        build_summit_index, load_signal_bedgraphs, match_positions_one_to_one,
+    )
 
 try:
     from pub_style import apply_rc, style_ax, savefig, W1, W2, PALETTE
@@ -182,155 +186,109 @@ def load_all_logs(entries: List[str], chrom: str = None) -> Dict[str, pd.DataFra
 
 
 # ── Core metric replay ──────────────────────────────────────────────────────
-# Strategy: precompute per-row peak hit IDs once (expensive), then all sweep
-# iterations work on integer arrays with no Python loops over rows.
-
-def _nearest_summit(
-    pos_arr: np.ndarray,
-    chrom_arr: np.ndarray,
-    strand_arr: np.ndarray,
-    summit_index: Dict[Tuple[str, str], List[int]],
-    uid_base: Dict[Tuple[str, str], int],
-) -> Tuple[np.ndarray, np.ndarray]:
-    """For each call, return (nearest-summit global uid within W, distance).
-
-    uid == -1 and distance == WINDOW+1 when no summit lies within WINDOW.
-    The uid is GLOBAL (uid_base[(chrom,strand)] + local summit index), so a
-    later one-to-one assignment can dedup across the whole peak set.  This is
-    the per-row precompute (done once per config); the actual one-to-one
-    assignment runs per sweep point in `_dedup_pr_one_to_one` because which
-    calls compete for a summit depends on which calls survive the threshold.
-    """
-    n = len(pos_arr)
-    uids = np.full(n, -1, dtype=np.int64)
-    dists = np.full(n, WINDOW + 1, dtype=np.int64)
-    for key, summits in summit_index.items():
-        if not summits:
-            continue
-        c, s = key
-        mask = (chrom_arr == c) & (strand_arr == s)
-        if not mask.any():
-            continue
-        idxs = np.where(mask)[0]
-        summ = np.asarray(summits, dtype=np.int64)
-        pos = pos_arr[idxs]
-        ins = np.searchsorted(summ, pos)
-        base = uid_base[key]
-        for gi, p, ins_i in zip(idxs, pos, ins):
-            best_li, best_d = -1, WINDOW + 1
-            for ci in (ins_i - 1, ins_i):
-                if 0 <= ci < len(summ):
-                    d = int(abs(int(p) - int(summ[ci])))
-                    if d < best_d:
-                        best_d, best_li = d, ci
-            if best_d <= WINDOW:
-                uids[gi] = base + best_li
-                dists[gi] = best_d
-    return uids, dists
-
-
-def _build_uid_base(summit_index: Dict[Tuple[str, str], List[int]]
-                    ) -> Tuple[Dict[Tuple[str, str], int], int]:
-    """Assign each summit a global uid; return (uid_base map, total summits)."""
-    uid_base: Dict[Tuple[str, str], int] = {}
-    base = 0
-    for key in summit_index:
-        uid_base[key] = base
-        base += len(summit_index[key])
-    return uid_base, base
-
+# Strategy: precompute per-row (chrom, strand, end-position) once, then at each
+# sweep point run the SHARED contract matcher (match_positions_one_to_one) over
+# the survivors so the sweep's "TP" is byte-for-byte the evaluator's TP.
 
 def _assign_peak_ids(
     df: pd.DataFrame,
     cage_peaks: Dict[Tuple[str, str], List[int]],
     drna_peaks: Dict[Tuple[str, str], List[int]],
 ) -> pd.DataFrame:
-    """Precompute per-row nearest-summit uid + distance (once per config).
+    """Precompute per-row (chrom, strand) + carry the summit index (once/config).
 
-    W2: instead of interval-membership peak ids (which let one peak be
-    credited to many survivors → many-to-one inflation), we store the nearest
-    SUMMIT uid and its distance for every candidate.  The threshold/weight
-    sweep then runs a one-to-one greedy assignment over the SURVIVORS at each
-    sweep point (see `_dedup_pr_one_to_one`), so a fat cluster of survivors
-    near one summit yields exactly one TP — the same accounting the headline
-    F1 uses.
+    FIX 3: the previous precompute stored only each call's SINGLE nearest
+    summit (`_nearest_summit` → uid/dist), then deduped uids in
+    `_one_to_one_tp`.  That undercounts TPs vs the contract matcher: if a
+    call's nearest summit is stolen by a closer call, the loser had no record
+    of its 2nd-nearest summit and could never fall back to it
+    (e.g. summits=[1000,1040], calls=[1030,1050], W=50 → old TP=1 vs
+    correct TP=2).  We now keep the raw end positions and the per-bucket
+    summit lists, and the sweep runs the SHARED
+    `match_positions_one_to_one` over the survivors at each point — the same
+    TP definition (with fallback) the evaluator and logreg fit use.
 
-    Adds columns: _tss_uid, _tss_dist, _tts_uid, _tts_dist, _total_cage,
-    _total_drna.
+    Adds columns: _chrom, _strand, _total_cage, _total_drna.  The CAGE/dRNA
+    summit indices ride along in ``df.attrs`` (config-level, not per-row).
     """
-    cage_uid_base, total_cage = _build_uid_base(cage_peaks)
-    drna_uid_base, total_drna = _build_uid_base(drna_peaks)
+    total_cage = sum(len(v) for v in cage_peaks.values())
+    total_drna = sum(len(v) for v in drna_peaks.values())
 
     junc_ids = df["junc_id"].astype(str).values
     chrom_arr  = np.array([_parse_chrom(j) for j in junc_ids])
     strand_arr = np.array([_parse_strand(j) for j in junc_ids])
-    tss_pos = df["tss_pos"].values.astype(np.int64)
-    tts_pos = df["tts_pos"].values.astype(np.int64)
-
-    tss_uid, tss_dist = _nearest_summit(
-        tss_pos, chrom_arr, strand_arr, cage_peaks, cage_uid_base)
-    tts_uid, tts_dist = _nearest_summit(
-        tts_pos, chrom_arr, strand_arr, drna_peaks, drna_uid_base)
 
     df = df.copy()
-    df["_tss_uid"]    = tss_uid    # global summit uid for nearest CAGE, -1=miss
-    df["_tss_dist"]   = tss_dist
-    df["_tts_uid"]    = tts_uid    # global summit uid for nearest dRNA, -1=miss
-    df["_tts_dist"]   = tts_dist
     df["_chrom"]      = chrom_arr
     df["_strand"]     = strand_arr
     df["_total_cage"] = total_cage
     df["_total_drna"] = total_drna
+    # Summit indices are config-level; stash on attrs so _make_arrays can carry
+    # them to the matcher without exploding them into per-row columns.
+    df.attrs["_cage_peaks"] = cage_peaks
+    df.attrs["_drna_peaks"] = drna_peaks
     return df
 
 
-def _one_to_one_tp(uids: np.ndarray, dists: np.ndarray) -> int:
-    """Greedy one-to-one TP count from per-call (nearest-summit uid, dist).
+def _one_to_one_tp(
+    chrom_arr: np.ndarray,
+    strand_arr: np.ndarray,
+    pos_arr: np.ndarray,
+    summit_index: Dict[Tuple[str, str], List[int]],
+) -> int:
+    """Shared-contract one-to-one TP for a set of called ends.
 
-    Each call carries its nearest summit (uid) and the distance to it.  Sort
-    all matched calls by (distance, uid) and assign greedily so each summit
-    uid is claimed at most once.  Returns the number of distinct summits
-    matched == number of calls matched (one-to-one) — the shared TP.
+    Buckets the calls by (chrom, strand) and runs the SHARED
+    `match_positions_one_to_one` (peak_matching.py) over each bucket — the
+    SAME matcher the evaluator and logreg fit use, so a call whose nearest
+    summit is taken can still fall back to its next in-window summit.  Returns
+    the number of calls assigned a summit (== number of distinct summits
+    matched, since the matcher is one-to-one).
     """
-    matched = uids >= 0
-    if not matched.any():
+    n = len(pos_arr)
+    if n == 0:
         return 0
-    u = uids[matched]
-    d = dists[matched]
-    order = np.lexsort((u, d))      # primary key = distance, tie-break = uid
-    used = set()
     tp = 0
-    for k in order:
-        uid = int(u[k])
-        if uid in used:
+    buckets: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+    for i in range(n):
+        buckets[(str(chrom_arr[i]), str(strand_arr[i]))].append(i)
+    for key, idxs in buckets.items():
+        summits = summit_index.get(key)
+        if not summits:
             continue
-        used.add(uid)
-        tp += 1
+        positions = [int(pos_arr[i]) for i in idxs]
+        assign = match_positions_one_to_one(positions, summits, WINDOW)
+        tp += sum(1 for j in assign if j >= 0)
     return tp
 
 
 def _dedup_pr_one_to_one(
     mask: np.ndarray,
-    tss_uid: np.ndarray,
-    tts_uid: np.ndarray,
-    tss_dist: np.ndarray,
-    tts_dist: np.ndarray,
+    chrom_arr: np.ndarray,
+    strand_arr: np.ndarray,
+    tss_pos: np.ndarray,
+    tts_pos: np.ndarray,
+    cage_peaks: Dict[Tuple[str, str], List[int]],
+    drna_peaks: Dict[Tuple[str, str], List[int]],
     total_cage: int,
     total_drna: int,
 ) -> Tuple[float, float, float, float, float, float]:
-    """One-to-one P/R/F1 for the survivor set defined by `mask` (W2 fix).
+    """One-to-one P/R/F1 for the survivor set defined by `mask` (FIX 3).
 
     precision = TP / (#survivors)         (each survivor is one called end)
     recall    = TP / (#truth summits)
-    with TP = #distinct summits matched one-to-one == #survivors matched.
+    with TP = #distinct summits matched one-to-one == #survivors matched,
+    using the SHARED contract matcher (with next-summit fallback).
     Computed independently for 5' (CAGE) and 3' (dRNA).
     """
     if not mask.any():
         return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     n_surv = int(mask.sum())
-    tp5 = _one_to_one_tp(tss_uid[mask], tss_dist[mask])
-    tp3 = _one_to_one_tp(tts_uid[mask], tts_dist[mask])
+    c = chrom_arr[mask]
+    s = strand_arr[mask]
+    tp5 = _one_to_one_tp(c, s, tss_pos[mask], cage_peaks)
+    tp3 = _one_to_one_tp(c, s, tts_pos[mask], drna_peaks)
 
     prec_5 = tp5 / n_surv if n_surv else 0.0
     prec_3 = tp3 / n_surv if n_surv else 0.0
@@ -344,12 +302,19 @@ def _dedup_pr_one_to_one(
 
 
 def _make_arrays(df: pd.DataFrame):
-    """Extract numpy arrays from an _assign_peak_ids-enriched DataFrame."""
+    """Extract arrays + summit indices from an _assign_peak_ids-enriched frame.
+
+    Returns (chrom_arr, strand_arr, tss_pos, tts_pos, cage_peaks, drna_peaks,
+    total_cage, total_drna) — everything `_dedup_pr_one_to_one` needs to run
+    the shared one-to-one matcher per sweep point.
+    """
     return (
-        df["_tss_uid"].values.astype(np.int64),
-        df["_tts_uid"].values.astype(np.int64),
-        df["_tss_dist"].values.astype(np.int64),
-        df["_tts_dist"].values.astype(np.int64),
+        df["_chrom"].values.astype(str),
+        df["_strand"].values.astype(str),
+        df["tss_pos"].values.astype(np.int64),
+        df["tts_pos"].values.astype(np.int64),
+        df.attrs["_cage_peaks"],
+        df.attrs["_drna_peaks"],
         int(df["_total_cage"].iloc[0]),
         int(df["_total_drna"].iloc[0]),
     )
@@ -383,7 +348,8 @@ def _sweep_weights(
     if fixed_other_weights is None:
         fixed_other_weights = {"wd": 0.33, "wm": 0.34, "wa": 0.33}
 
-    tss_uid, tts_uid, tss_dist, tts_dist, total_cage, total_drna = _make_arrays(df)
+    (chrom_arr, strand_arr, tss_pos, tts_pos,
+     cage_peaks, drna_peaks, total_cage, total_drna) = _make_arrays(df)
     depth, tss_model, tss_annot, tts_model, tts_annot = _score_arrays(df)
 
     fo = fixed_other_weights
@@ -409,13 +375,13 @@ def _sweep_weights(
                 if end == "tss":
                     mask = (sweep_score >= t) & (fixed_tts >= fixed_other_thresh)
                     _, _, f1, _, _, _ = _dedup_pr_one_to_one(
-                        mask, tss_uid, tts_uid, tss_dist, tts_dist,
-                        total_cage, total_drna)
+                        mask, chrom_arr, strand_arr, tss_pos, tts_pos,
+                        cage_peaks, drna_peaks, total_cage, total_drna)
                 else:
                     mask = (fixed_tss >= fixed_other_thresh) & (sweep_score >= t)
                     _, _, _, _, _, f1 = _dedup_pr_one_to_one(
-                        mask, tss_uid, tts_uid, tss_dist, tts_dist,
-                        total_cage, total_drna)
+                        mask, chrom_arr, strand_arr, tss_pos, tts_pos,
+                        cage_peaks, drna_peaks, total_cage, total_drna)
                 if f1 > best_f1:
                     best_f1, best_t = f1, float(t)
 
@@ -440,7 +406,8 @@ def _joint_threshold_sweep(
     n_steps: int = 21,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """2D (t_tss × t_tts) sweep using optimal weights. All numpy, no iterrows."""
-    tss_uid, tts_uid, tss_dist, tts_dist, total_cage, total_drna = _make_arrays(df)
+    (chrom_arr, strand_arr, tss_pos, tts_pos,
+     cage_peaks, drna_peaks, total_cage, total_drna) = _make_arrays(df)
     depth, tss_model, tss_annot, tts_model, tts_annot = _score_arrays(df)
 
     tss_score = (opt_5["w_depth"] * depth
@@ -463,8 +430,8 @@ def _joint_threshold_sweep(
         for tj, t_tts in enumerate(grid):
             mask = tss_mask & (tts_score >= t_tts)
             p5, r5, f5, p3, r3, f3 = _dedup_pr_one_to_one(
-                mask, tss_uid, tts_uid, tss_dist, tts_dist,
-                total_cage, total_drna)
+                mask, chrom_arr, strand_arr, tss_pos, tts_pos,
+                cage_peaks, drna_peaks, total_cage, total_drna)
             f1_5_grid[ti, tj]  = f5
             f1_3_grid[ti, tj]  = f3
             prec5_grid[ti, tj] = p5

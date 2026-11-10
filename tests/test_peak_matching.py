@@ -216,7 +216,10 @@ def test_window_recall_nondecreasing_with_more_calls():
 # ── BED loader on the tiny fixtures ───────────────────────────────────────
 
 def test_load_summit_index_from_tiny_cage(data_dir):
-    idx = load_summit_index_from_bed(str(data_dir / "tiny_cage_peaks.bed"))
+    # Fixtures live on synthetic 'chr_test', which the canonical-chrom default
+    # (chr1-22,X,Y) drops — opt out so this loader test still sees the peaks.
+    idx = load_summit_index_from_bed(str(data_dir / "tiny_cage_peaks.bed"),
+                                     canonical_only=False)
     # 6 CAGE peaks in the fixture -> 6 summits.
     assert count_summits(idx) == 6
     # cage_peak_1 at [950,1050) on + -> summit 1000.

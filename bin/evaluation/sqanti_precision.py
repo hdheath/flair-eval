@@ -50,6 +50,7 @@ from pub_style import apply_rc, style_ax, savefig, W1, W2, ModeStyler
 from flair_structural import (
     classify_transcripts_per_isoform,
     build_reference_structures,
+    parse_gtf_transcripts as parse_gtf_transcripts_nested,
 )
 from ted_end_precision import (
     parse_gtf_ends,
@@ -395,7 +396,12 @@ def main() -> None:
         if args.verbose:
             print("  Parsing reference GTF for classification "
                   f"(needed for: {', '.join(needs_classification)})...", file=sys.stderr)
-        transcripttoexons = parse_gtf_transcripts(args.gtf)
+        # NOTE: build_reference_structures expects the *nested*
+        # {(chrom, strand): {tx_id: [(start, end), ...]}} mapping produced
+        # by flair_structural.parse_gtf_transcripts — NOT the List[dict]
+        # returned by ted_end_precision.parse_gtf_transcripts (which would
+        # raise "too many values to unpack" when iterated as (chrom, strand)).
+        transcripttoexons = parse_gtf_transcripts_nested(args.gtf)
         refjuncs, refjuncchains, refseends = build_reference_structures(transcripttoexons)
     else:
         refjuncs = refjuncchains = refseends = None
@@ -430,13 +436,22 @@ def main() -> None:
             isoforms = None
 
         if isoforms is None:
-            # Slow path: classify from BED + GTF reference structures
+            # Slow path: classify from BED + GTF reference structures.
+            # classify_transcripts_per_isoform returns per-isoform category
+            # labels but NOT the junctions/tss/tts geometry that
+            # compute_jc_deduplicated_precision_recall requires, so we build
+            # the geometry from the BED (via _parse_bed_isoforms) and merge
+            # the categories in by isoform name — mirroring the fast path.
             if args.verbose:
                 print(f"  Classifying {label} from BED...", file=sys.stderr)
             try:
-                isoforms = classify_transcripts_per_isoform(
+                classified = classify_transcripts_per_isoform(
                     path, refjuncs, refjuncchains, refseends
                 )
+                name_to_cat = {c["name"]: c["category"] for c in classified}
+                isoforms = _parse_bed_isoforms(path)
+                for iso in isoforms:
+                    iso["category"] = name_to_cat.get(iso["name"], "UNK")
             except Exception as e:
                 print(f"WARNING: classification failed for {label}: {e}", file=sys.stderr)
                 continue

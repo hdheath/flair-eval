@@ -20,6 +20,7 @@ from .bed_utils import (
     extract_signed_distances,
     vectorized_overlap_counts,
     one_to_one_match_counts,
+    near_match_counts,
 )
 from .peak_matching import load_signal_bedgraphs
 from .read_analysis import (
@@ -68,6 +69,40 @@ logger = get_logger()
 # can sibling-import the shim directly. See ted_log_loader.py for the
 # canonical docstring.
 from .ted_log_loader import is_global_mode, load_ted_log  # noqa: F401
+
+
+# ── Novel-only end evaluation ────────────────────────────────────────────────
+# NOVEL = a called end / truth peak that is >NOVEL_DIST bp from any ANNOTATED end
+# (the ref_tss/ref_tts peaks built from the GTF).  The novel-only precision/recall
+# carries the IDENTICAL one_to_one_match_counts logic as the headline metric — it
+# just restricts BOTH the isoform ends and the truth peaks to the novel subset
+# first.  Mirrors the project-wide novel definition (>100 bp from gencode).
+NOVEL_DIST = 100
+
+
+def _build_annot_index(annot_rows: List[dict]) -> Dict[Tuple[str, str], List[int]]:
+    """(chrom,strand) -> sorted annotated-end center positions, from BED6 rows."""
+    idx: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+    for r in annot_rows:
+        idx[(r['Chrom'], r['Strand'])].append((int(r['Start']) + int(r['End'])) // 2)
+    for k in idx:
+        idx[k].sort()
+    return idx
+
+
+def _row_is_novel(row: dict, annot_idx: Dict[Tuple[str, str], List[int]],
+                  dist: int) -> bool:
+    """True iff the row's center is >dist bp from every annotated end on its strand."""
+    from bisect import bisect_left
+    pos = (int(row['Start']) + int(row['End'])) // 2
+    positions = annot_idx.get((row['Chrom'], row['Strand']))
+    if not positions:
+        return True
+    i = bisect_left(positions, pos)
+    for j in (i - 1, i):
+        if 0 <= j < len(positions) and abs(pos - positions[j]) <= dist:
+            return False
+    return True
 
 
 def _parse_feature_attributes(attr_string: str) -> dict:
@@ -224,20 +259,46 @@ def tss_tts_metrics(
             # Read endpoint BED as rows (one row per isoform end = one call).
             endpoint_rows = read_bed6(endpoint_bed)
             sig = signal_tracks.get(key) if signal_tracks else None
-            tp, n_calls, t = one_to_one_match_counts(
+            # MANY-TO-ONE precision/recall (no one-to-one consumption): an end
+            # is a hit if within `window` of ANY peak; a peak is recovered if ANY
+            # end is near it. Multiple isoforms from one promoter each count.
+            _ends_near, n_calls, _peaks_rec, t = near_match_counts(
                 endpoint_rows, peaks_rows, window, signal=sig)
-            precision = (tp / n_calls) if n_calls else None
-            recall = (tp / t) if t else None
+            precision = (_ends_near / n_calls) if n_calls else None
+            recall = (_peaks_rec / t) if t else None
             f1 = safe_f1(precision, recall)
 
-            return precision, recall, f1, signed_dists, recov_mask, recoverable_ids, closest_rows
+            # ── Novel-only P/R: same one-to-one matcher, restricted to ends +
+            #    peaks that are >NOVEL_DIST from any annotated end (ref peaks).
+            #    Only for the orthogonal sides (CAGE prime5 / dRNA prime3); the
+            #    ref_* sides have no meaningful novel subset. Defensive: a failure
+            #    here NEVER affects the standard metrics above.
+            novel = None
+            if key in ("prime5", "prime3"):
+                try:
+                    ref_key = "ref_prime5" if key == "prime5" else "ref_prime3"
+                    ref_pth = peaks.get(ref_key)
+                    if ref_pth is not None and ref_pth.exists() and ref_pth.stat().st_size > 0:
+                        annot_idx = _build_annot_index(read_bed6(ref_pth))
+                        nov_end = [r for r in endpoint_rows if _row_is_novel(r, annot_idx, NOVEL_DIST)]
+                        nov_pk = [r for r in peaks_rows if _row_is_novel(r, annot_idx, NOVEL_DIST)]
+                        _enn, ncn, _prn, tn = near_match_counts(nov_end, nov_pk, window, signal=sig)
+                        pn = (_enn / ncn) if ncn else None
+                        rn = (_prn / tn) if tn else None
+                        novel = {"precision": pn, "recall": rn, "f1": safe_f1(pn, rn),
+                                 "tp": _enn, "n_calls": ncn, "n_peaks": tn}
+                except Exception as e:
+                    logger.warning(f"novel-only P/R for '{key}' failed: {e}")
+                    novel = None
+
+            return precision, recall, f1, signed_dists, recov_mask, recoverable_ids, closest_rows, novel
 
         # Use TSS bed for 5' peaks, TTS bed for 3' peaks
         # CAGE/dRNA get read end positions for recoverability; ref peaks do not
-        p5, r5, f5, dists_5prime, mask_5prime, recov_5prime, closest_5prime = _side("prime5", "5", tss_sorted, read_tss_positions)
-        p3, r3, f3, dists_3prime, mask_3prime, recov_3prime, closest_3prime = _side("prime3", "3", tts_sorted, read_tts_positions)
-        rp5, rr5, rf5, dists_ref5prime, _, _, _ = _side("ref_prime5", "ref5", tss_sorted, [])
-        rp3, rr3, rf3, dists_ref3prime, _, _, _ = _side("ref_prime3", "ref3", tts_sorted, [])
+        p5, r5, f5, dists_5prime, mask_5prime, recov_5prime, closest_5prime, novel5 = _side("prime5", "5", tss_sorted, read_tss_positions)
+        p3, r3, f3, dists_3prime, mask_3prime, recov_3prime, closest_3prime, novel3 = _side("prime3", "3", tts_sorted, read_tts_positions)
+        rp5, rr5, rf5, dists_ref5prime, _, _, _, _ = _side("ref_prime5", "ref5", tss_sorted, [])
+        rp3, rr3, rf3, dists_ref3prime, _, _, _, _ = _side("ref_prime3", "ref3", tts_sorted, [])
 
         signed_distances["prime5"] = dists_5prime
         signed_distances["prime3"] = dists_3prime
@@ -262,6 +323,18 @@ def tss_tts_metrics(
             "ref5prime_precision": rp5, "ref5prime_recall": rr5, "ref5prime_f1": rf5,
             "ref3prime_precision": rp3, "ref3prime_recall": rr3, "ref3prime_f1": rf3,
         })
+
+        # Novel-only end metrics (same matcher, ends/peaks >NOVEL_DIST from annotation)
+        for _short, _nv in (("5prime", novel5), ("3prime", novel3)):
+            if _nv:
+                metrics.update({
+                    f"{_short}_novel_precision": _nv["precision"],
+                    f"{_short}_novel_recall": _nv["recall"],
+                    f"{_short}_novel_f1": _nv["f1"],
+                    f"{_short}_novel_tp": _nv["tp"],
+                    f"{_short}_novel_n_calls": _nv["n_calls"],
+                    f"{_short}_novel_n_peaks": _nv["n_peaks"],
+                })
 
         # Write recoverable peaks BED files
         if test_regions_dir:

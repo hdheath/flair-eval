@@ -52,7 +52,88 @@ SWEEP_WINDOWS: Tuple[int, ...] = (10, 25, 50, 100)
 PRIMARY_WINDOW: int = 50
 SECONDARY_3PRIME_WINDOW: int = 25
 
-# A (chrom, strand) -> sorted list of summit positions.
+
+# ── Canonical chromosome allow-list ──────────────────────────────────────────
+# Truth-peak matching is restricted by default to the canonical human
+# chromosomes: chr1-22, chrX, chrY.  This excludes the mitochondrion (chrM)
+# and the unplaced / alt scaffolds (GL000*, KI270*, etc.).  Those carry no
+# orthogonal CAGE/dRNA truth in our peak sets, and isoforms there would be
+# scored against an empty truth bucket — pure noise in precision.  Callers
+# can override with an explicit `chroms=` set.
+CANONICAL_CHROMS: Tuple[str, ...] = tuple(
+    [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
+)
+CANONICAL_CHROMS_SET = frozenset(CANONICAL_CHROMS)
+
+
+def is_canonical_chrom(chrom: str) -> bool:
+    """True iff `chrom` is one of chr1-22, chrX, chrY (excludes chrM / scaffolds)."""
+    return chrom in CANONICAL_CHROMS_SET
+
+
+# ── Peak: a summit position that also remembers its [start, end) interval ─────
+#
+# A Peak is an int (its summit position) so it is a drop-in replacement
+# anywhere the index value used to be a plain summit int — bisect, sort,
+# comparisons, int coercion and f-string formatting all behave identically.
+# It additionally carries .lo / .hi (the BED half-open interval bounds) so
+# the matcher can credit a call that falls INSIDE the interval, not just
+# within ±W of the summit.  Plain ints are treated as zero-width intervals
+# (lo == hi == summit) by the matcher, so legacy scalar-summit inputs keep
+# the exact old summit±W behaviour.
+class Peak(int):
+    """An int-valued summit that also carries its [lo, hi) interval bounds."""
+
+    def __new__(cls, summit: int, lo: int, hi: int) -> "Peak":
+        obj = int.__new__(cls, int(summit))
+        obj.lo = int(lo)
+        obj.hi = int(hi)
+        return obj
+
+
+def _peak_lo(p) -> int:
+    """Interval start of a Peak, or the position itself for a plain int."""
+    return getattr(p, "lo", int(p))
+
+
+def _peak_hi(p) -> int:
+    """Interval end (exclusive) of a Peak, or position+? for a plain int.
+
+    For a plain scalar summit we treat the interval as the single point
+    [pos, pos] (inclusive), so the inside-interval test (lo <= c <= hi-?)
+    collapses to c == pos and the predicate reduces to pure summit±W.
+    """
+    return getattr(p, "hi", int(p))
+
+
+def _match_distance(call: int, peak) -> int:
+    """Distance from a called end to the truth-peak INTERVAL [lo, hi).
+
+    The match predicate is "within W of ANY part of the peak": a call is a
+    true positive iff this distance <= W.  Concretely:
+      * 0 if the call is INSIDE the interval (lo <= call < hi);
+      * else the distance to the nearest interval edge — (lo - call) before
+        the start, (call - (hi - 1)) after the last covered base.
+    So the supported zone of a peak is [lo - W, (hi - 1) + W]: a call anywhere
+    along the peak, or up to W bp beyond either edge, matches (summit±W is
+    always a subset of this, since the summit lies inside [lo, hi)).
+
+    For a plain-int / zero-width peak (lo == hi == summit) the interval is a
+    single point, so this reduces to |call - summit| — the classic summit±W,
+    the backward-compat guarantee for legacy plain-int callers.
+    """
+    lo = _peak_lo(peak)
+    hi = _peak_hi(peak)
+    if hi <= lo:                       # zero-width (plain-int summit): classic summit distance
+        return abs(call - int(peak))
+    if lo <= call < hi:                # inside the interval
+        return 0
+    if call < lo:                      # before the start
+        return lo - call
+    return call - (hi - 1)             # after the last covered base
+
+
+# A (chrom, strand) -> sorted list of summit positions (Peak ints).
 SummitIndex = Dict[Tuple[str, str], List[int]]
 
 
@@ -130,8 +211,12 @@ def build_summit_index(
         sig = None
         if signal is not None:
             sig = signal.get((chrom, strand))
-        summit = _interval_summit(int(start), int(end), sig)
-        index[(chrom, strand)].append(summit)
+        s, e = int(start), int(end)
+        summit = _interval_summit(s, e, sig)
+        # Carry the [start, end) interval on the summit so the matcher can
+        # credit interior calls (broad-promoter fix).  Peak is an int, so it
+        # is a drop-in replacement for the old scalar summit everywhere.
+        index[(chrom, strand)].append(Peak(summit, s, e))
     for key in index:
         index[key].sort()
     return index
@@ -141,13 +226,26 @@ def load_summit_index_from_bed(
     path: str,
     chroms: Optional[Iterable[str]] = None,
     signal: Optional[Dict[Tuple[str, str], Sequence[Tuple[int, float]]]] = None,
+    canonical_only: bool = True,
 ) -> SummitIndex:
     """Read a BED6 peak file and return a summit index (one summit/peak).
 
     `chroms` optionally restricts to a set/iterable of chromosome names.
+    When `chroms` is None and `canonical_only` is True (the default), peaks
+    are restricted to the canonical human chromosomes (chr1-22, chrX, chrY),
+    excluding chrM and unplaced/alt scaffolds (GL*/KI* etc.).  Pass an
+    explicit `chroms=` to override, or `canonical_only=False` to keep every
+    contig.  When `chroms` is given it takes precedence and `canonical_only`
+    is ignored (the caller has specified the exact allow-list).
+
     Lines beginning with '#' and rows with < 6 columns are skipped.
     """
-    chroms_set = set(chroms) if chroms is not None else None
+    if chroms is not None:
+        chroms_set = set(chroms)
+    elif canonical_only:
+        chroms_set = set(CANONICAL_CHROMS_SET)
+    else:
+        chroms_set = None
     rows: List[Tuple[str, int, int, str]] = []
     with open(path) as fh:
         for line in fh:
@@ -209,9 +307,16 @@ def load_signal_bedgraphs(
             return
         with fh:
             for line in fh:
-                if not line or line[0] in "#tb":  # skip comments/track/browser
-                    if not line[0].isdigit() and not line.startswith("chr"):
-                        continue
+                if not line:
+                    continue
+                # Token-based header detection (mirror BedGraphTrack.from_file
+                # in signal_utils.py).  Only skip true UCSC track/browser
+                # directives or '#' comments — NOT real data lines whose
+                # chrom/scaffold happens to start with 't' or 'b'
+                # (e.g. "tig00000123", "blob_scaffold_4").
+                first_tok = line.split(None, 1)[0] if line.strip() else ""
+                if first_tok in ("track", "browser") or line[0] == "#":
+                    continue
                 cols = line.rstrip("\n").split("\t")
                 if len(cols) < 4:
                     continue
@@ -246,49 +351,95 @@ def match_positions_one_to_one(
     summits: Sequence[int],
     window: int,
 ) -> List[int]:
-    """Greedy nearest one-to-one assignment of called ends to summits.
+    """Greedy nearest one-to-one assignment of called ends to truth peaks.
 
     Parameters
     ----------
     positions : called end positions for ONE (chrom, strand) bucket.
-    summits   : sorted summit positions for the SAME bucket.
-    window    : max |distance| (bp) for a valid match.
+    summits   : sorted truth peaks for the SAME bucket.  Each element is a
+        Peak (an int summit carrying .lo/.hi interval bounds, as produced by
+        build_summit_index) OR a plain scalar summit int (legacy / ad-hoc
+        callers).  Plain ints are treated as zero-width peaks, so the match
+        predicate reduces to the classic summit±W.
+    window    : max |call - summit| (bp) for a summit-distance match.
 
     Returns
     -------
     assignment : list, len == len(positions).  assignment[i] is the index
         into `summits` that call i is matched to, or -1 if unmatched.
-        Each summit index appears AT MOST ONCE across the returned list.
+        Each peak index appears AT MOST ONCE across the returned list.
 
-    Algorithm
-    ---------
-    Enumerate every (call_i, summit_j) pair with |pos_i - summit_j| <= W,
-    sort by (distance, call_i, summit_j) for determinism, then walk the
-    sorted pairs assigning greedily: a pair is taken only if neither its
-    call nor its summit is already used.  This is the standard greedy
-    nearest-match used by CAGEr/CAGEfightR-style peak benchmarking and
-    guarantees one summit is never credited to more than one call.
+    Match predicate (THE contract)
+    ------------------------------
+        call c matches peak p  iff  dist(c, [p.lo, p.hi)) <= W
 
-    Greedy-nearest is not globally optimal (that would need Hungarian),
-    but it is the field convention, is order-independent, and — crucially
-    for the R3 fix — it makes a fat cluster of N calls near a single
-    summit yield exactly ONE true positive.
+    i.e. a call is credited if it is within W bp of ANY part of the peak
+    interval — the supported zone is [p.lo - W, (p.hi - 1) + W].  A call inside
+    the peak, or up to W bp past either edge, matches; summit±W is always a
+    subset of this since the summit lies inside [lo, hi).  This gives full
+    edge-margin credit on BROAD promoters (a wide CAGE peak whose summit is >W
+    from a real call still matches, and so does a call a few bp past the peak
+    edge — the chr1:PGD alternative-TSS case).  For a plain-int / zero-width
+    peak (lo == hi == summit) the interval is a single point, so the predicate
+    reduces to |c - summit| <= W — byte-for-byte the old summit±W behaviour,
+    the backward-compat guarantee for legacy plain-int callers.
+
+    Ordering / accounting
+    ---------------------
+    Each valid (call, peak) pair is given a match-distance (`_match_distance`):
+    0 if the call is INSIDE the interval, else the distance to the nearest
+    interval edge.  Pairs are sorted by (match_distance, summit_distance,
+    call_idx, peak_idx) and walked greedily: a pair is taken only if neither
+    its call nor its peak is already used.  The summit_distance tie-break means
+    among several equally-near (e.g. interior) calls the one closest to the
+    summit wins the peak.  This keeps the one-to-one accounting (each peak
+    matched at most once) so a fat cluster of N calls on one wide peak yields
+    exactly ONE true positive — never N.
     """
     n = len(positions)
     assignment = [-1] * n
     if n == 0 or len(summits) == 0 or window < 0:
         return assignment
 
-    sorted_summits = summits  # caller guarantees sorted; do not re-sort here
-    pairs: List[Tuple[int, int, int]] = []  # (distance, call_idx, summit_idx)
+    sorted_summits = summits  # caller guarantees sorted by summit; do not re-sort
+
+    # A peak's interval can extend beyond ±W from its summit, so a call that
+    # is interior-but-summit-far must still be discoverable.  Pre-scan the
+    # max half-extent (how far an interval reaches on either side of its
+    # summit) so the bisection bound can be widened to never miss an
+    # interior match.  For plain-int (zero-width) peaks this extent is 0 and
+    # the scan bound is exactly the old `pos ± window`.
+    max_left = 0   # max (summit - lo) over peaks
+    max_right = 0  # max (hi - summit) over peaks
+    for p in sorted_summits:
+        lo = _peak_lo(p)
+        hi = _peak_hi(p)
+        s = int(p)
+        if s - lo > max_left:
+            max_left = s - lo
+        if hi - s > max_right:
+            max_right = hi - s
+
+    # (match_distance, summit_distance, call_idx, peak_idx)
+    pairs: List[Tuple[int, int, int, int]] = []
     for i, pos in enumerate(positions):
-        lo = bisect_left(sorted_summits, pos - window)
-        j = lo
+        # Match predicate: a call matches a peak iff it is within W of ANY
+        # part of the peak interval, i.e. pos in [lo - W, (hi-1) + W].  A
+        # peak's interval can reach up to max_left/max_right from its summit,
+        # so the matching summit can sit as far as (W + max_right) to the left
+        # or (W + max_left) to the right of pos — widen the bisection scan by
+        # that much so a within-W-of-edge match on a wide peak is never missed.
+        lo_bound = pos - (window + max_right)
+        hi_bound = pos + (window + max_left)
+        j = bisect_left(sorted_summits, lo_bound)
         while j < len(sorted_summits):
-            s = sorted_summits[j]
-            if s > pos + window:
+            peak = sorted_summits[j]
+            s = int(peak)
+            if s > hi_bound:
                 break
-            pairs.append((abs(pos - s), i, j))
+            match_dist = _match_distance(pos, peak)   # 0 inside; else dist to interval edge
+            if match_dist <= window:
+                pairs.append((match_dist, abs(pos - s), i, j))
             j += 1
 
     if not pairs:
@@ -297,7 +448,7 @@ def match_positions_one_to_one(
     pairs.sort()
     call_used = [False] * n
     summit_used = [False] * len(sorted_summits)
-    for dist, i, j in pairs:
+    for _md, _sd, i, j in pairs:
         if call_used[i] or summit_used[j]:
             continue
         assignment[i] = j

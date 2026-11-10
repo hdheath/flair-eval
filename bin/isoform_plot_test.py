@@ -12,6 +12,7 @@ Panels:
 from __future__ import annotations
 
 import argparse
+import bisect
 import colorsys
 import hashlib
 import math
@@ -23,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "evaluation"))
 
 import matplotlib.colors as mcolors
 import matplotlib.patches as mplpatches
+import matplotlib.transforms as mtransforms
 import matplotlib.pyplot as plt
 import pysam
 
@@ -403,6 +405,65 @@ def select_balanced_main_alignments(
     return selected_alignments, full_counts, selected_counts, redundant_dropped, post_redundancy_total
 
 
+def build_intron_compression(
+    covered: Iterable[Tuple[int, int]],
+    region_start: int,
+    region_end: int,
+    display_bp: int,
+):
+    """
+    Piecewise-linear genomic -> display transform for --intron-display-bp.
+
+    Stretches covered by any drawn exon / read block keep their true scale. Every
+    uncovered stretch longer than display_bp is drawn display_bp wide, positions inside it
+    mapped linearly. Display coordinates start at region_start; positions outside the
+    region keep a 1:1 offset so clipping logic still works.
+    Returns (tx, segments, gaps): segments = [(g0, g1, d0, d1)], gaps = [(d0, d1, true_len)].
+    """
+    merged: List[List[int]] = []
+    for s, e in sorted((max(region_start, s), min(region_end, e)) for s, e in covered):
+        if e <= s:
+            continue
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    segments: List[Tuple[int, int, float, float]] = []
+    gaps: List[Tuple[float, float, int]] = []
+    pos, disp = region_start, float(region_start)
+
+    def add_gap(g0: int, g1: int):
+        nonlocal disp
+        length = g1 - g0
+        if length <= 0:
+            return
+        width = float(min(length, display_bp))
+        segments.append((g0, g1, disp, disp + width))
+        if length > display_bp:
+            gaps.append((disp, disp + width, length))
+        disp += width
+
+    for s, e in merged:
+        add_gap(pos, s)
+        segments.append((s, e, disp, disp + (e - s)))
+        disp += e - s
+        pos = e
+    add_gap(pos, region_end)
+    seg_starts = [seg[0] for seg in segments]
+    display_end = disp
+
+    def tx(x: float) -> float:
+        if x <= region_start:
+            return float(x)
+        if x >= region_end:
+            return display_end + (x - region_end)
+        i = max(0, bisect.bisect_right(seg_starts, x) - 1)
+        g0, g1, d0, d1 = segments[i]
+        return d0 + (x - g0) * (d1 - d0) / float(g1 - g0)
+
+    return tx, segments, gaps
+
+
 def draw_alignment(
     ax,
     aln: pysam.AlignedSegment,
@@ -410,10 +471,13 @@ def draw_alignment(
     color: str,
     alpha: float = 0.92,
     height: float = 0.70,
+    tx=None,
 ):
     blocks = aln.get_blocks()
     if not blocks:
         return
+    if tx is not None:
+        blocks = [(tx(s), tx(e)) for s, e in blocks]
 
     ax.add_patch(
         mplpatches.Rectangle(
@@ -563,7 +627,7 @@ def draw_direction_arrows(
     if width < 80:
         return
 
-    n_arrows = max(1, min(4, width // 3000 + 1))
+    n_arrows = int(max(1, min(4, width // 3000 + 1)))
     spacing = width / float(n_arrows + 1)
     arrow_len = max(24.0, min(120.0, width * 0.10))
 
@@ -762,6 +826,20 @@ def main():
         help="Start/end tolerance (bp) for near-identical pattern grouping",
     )
     parser.add_argument("--orth-bins", type=int, default=300, help="Number of bins for orthogonal pileups")
+    parser.add_argument(
+        "--intron-display-bp",
+        type=int,
+        default=0,
+        help="Compress the x axis: every stretch covered by no drawn exon or read block and longer than this "
+             "is drawn this many bp wide, with a break mark and its true length (<=0: off, true scale)",
+    )
+    parser.add_argument(
+        "--min-isoform-reads",
+        type=int,
+        default=0,
+        help="Hide isoforms with fewer assigned reads (read map) than this, and their reads; noted on the plot (<=0: off)",
+    )
+    parser.add_argument("--dpi", type=int, default=2200, help="PNG resolution")
     args = parser.parse_args()
 
     bam_path = Path(args.bam)
@@ -782,6 +860,15 @@ def main():
         isoforms = filter_isoforms_to_region(isoforms, chrom, region_start, region_end)
     print(f"[plot] Region: {chrom}:{region_start}-{region_end}")
 
+    hidden_reads: set = set()
+    n_hidden_isoforms = 0
+    if args.min_isoform_reads > 0:
+        hidden = [i for i in isoforms if len(iso_to_reads.get(i, [])) < args.min_isoform_reads]
+        for iso_id in hidden:
+            hidden_reads.update(iso_to_reads.get(iso_id, []))
+            del isoforms[iso_id]
+        n_hidden_isoforms = len(hidden)
+
     # Limit mapping dictionaries to isoforms currently in scope
     iso_ids_in_scope = set(isoforms.keys())
     if iso_ids_in_scope:
@@ -796,6 +883,8 @@ def main():
         region_end,
         max_reads=0,
     )
+    if hidden_reads:
+        all_main_alignments = {k: v for k, v in all_main_alignments.items() if k not in hidden_reads}
     main_alignments, full_group_counts, kept_group_counts, redundant_dropped, post_redundancy_total = select_balanced_main_alignments(
         alignments=all_main_alignments,
         read_to_iso=read_to_iso,
@@ -841,6 +930,21 @@ def main():
         iso_order = sorted(isoforms.keys(), key=lambda x: isoforms[x]["start"])
     iso_color_map = build_isoform_colors(iso_order)
 
+    tx = None
+    compress_gaps: List[Tuple[float, float, int]] = []
+    compress_segments: List[Tuple[int, int, float, float]] = []
+    orth_bins = args.orth_bins
+    if args.intron_display_bp > 0:
+        covered = [b for iso_id in iso_order if iso_id in isoforms for b in isoforms[iso_id]["blocks"]]
+        covered += [b for aln in main_alignments.values() for b in aln.get_blocks()]
+        tx, compress_segments, compress_gaps = build_intron_compression(
+            covered, region_start, region_end, args.intron_display_bp)
+        # bin the signal finely enough (~25 bp) that true-scale exons keep their shape
+        orth_bins = max(args.orth_bins, (region_end - region_start) // 25)
+        print(f"[plot] Intron compression: {len(compress_gaps)} stretches > {args.intron_display_bp} bp drawn "
+              f"{args.intron_display_bp} bp wide; x span {region_end - region_start:,} -> "
+              f"{int(tx(region_end) - region_start):,} bp")
+
     cage_signal_paths = [Path(p) for p in (args.cage_signal_plus, args.cage_signal_minus) if p]
     drna_signal_paths = [Path(p) for p in (args.drna_signal_plus, args.drna_signal_minus) if p]
 
@@ -852,7 +956,7 @@ def main():
         chrom=chrom,
         region_start=region_start,
         region_end=region_end,
-        n_bins=args.orth_bins,
+        n_bins=orth_bins,
     )
     has_cage_signal = bool(x_cage) and max(y_cage) > 0
     if cage_signal_paths and not has_cage_signal:
@@ -863,7 +967,7 @@ def main():
         chrom=chrom,
         region_start=region_start,
         region_end=region_end,
-        n_bins=args.orth_bins,
+        n_bins=orth_bins,
     )
     has_drna_signal = bool(x_quant) and max(y_quant) > 0
     if drna_signal_paths and not has_drna_signal:
@@ -897,6 +1001,14 @@ def main():
     ax_cage = axes_by_name.get("cage")
     ax_quant = axes_by_name.get("quant")
     all_axes = list(axes_by_name.values())
+    if tx is not None:
+        cage_peaks = [(tx(s), tx(e)) for s, e in cage_peaks]
+        drna_peaks = [(tx(s), tx(e)) for s, e in drna_peaks]
+        x_cage = [tx(x) for x in x_cage]
+        x_quant = [tx(x) for x in x_quant]
+        for g0, g1, _ in compress_gaps:
+            for ax in all_axes:
+                ax.axvspan(g0, g1, color="#000000", alpha=0.05, linewidth=0, zorder=0)
     add_vertical_peak_highlights(all_axes, cage_peaks, color="#d62728")
     add_vertical_peak_highlights(all_axes, drna_peaks, color="#1f77b4")
 
@@ -917,12 +1029,12 @@ def main():
             continue
         draw_isoform_model(
             ax_models,
-            info["blocks"],
+            info["blocks"] if tx is None else [(tx(s), tx(e)) for s, e in info["blocks"]],
             y,
             iso_color_map.get(iso_id, "#555555"),
             strand=info.get("strand", "+"),
             region_start=region_start,
-            region_end=region_end,
+            region_end=region_end if tx is None else tx(region_end),
             exon_height=model_block_height,
             backbone_height=model_backbone_height,
         )
@@ -939,6 +1051,11 @@ def main():
     ax_models.set_ylim(-0.8, model_top)
     ax_models.set_yticks([])
     ax_models.set_title("Transcript Models", fontsize=8, fontweight="normal", loc="left")
+    if n_hidden_isoforms:
+        ax_models.set_title(
+            f"Transcript Models ({n_hidden_isoforms} isoform{'s' if n_hidden_isoforms > 1 else ''} with "
+            f"< {args.min_isoform_reads} reads hidden, with their reads)",
+            fontsize=8, fontweight="normal", loc="left")
 
     # Optional CAGE signal panel
     if ax_cage is not None:
@@ -955,7 +1072,7 @@ def main():
             aln = main_alignments.get(read_id)
             if aln is None:
                 continue
-            draw_alignment(ax_reads, aln, read_y, color="#D0D0D0", alpha=0.88, height=read_block_height)
+            draw_alignment(ax_reads, aln, read_y, color="#D0D0D0", alpha=0.88, height=read_block_height, tx=tx)
             read_y += 1.0
         read_y += 0.55
 
@@ -968,7 +1085,7 @@ def main():
             aln = main_alignments.get(read_id)
             if aln is None:
                 continue
-            draw_alignment(ax_reads, aln, read_y, color=col, alpha=0.92, height=read_block_height)
+            draw_alignment(ax_reads, aln, read_y, color=col, alpha=0.92, height=read_block_height, tx=tx)
             read_y += 1.0
         read_y += 0.55
     if read_y == 0:
@@ -995,10 +1112,45 @@ def main():
     for ax in all_axes[:-1]:
         ax.tick_params(axis="x", labelbottom=False)
     all_axes[-1].set_xlabel(f"{chrom}:{region_start:,}-{region_end:,}")
+    if tx is not None:
+        # x axis in display coordinates: ticks at the edges of true-scale stretches, labelled genomic
+        display_end = tx(region_end)
+        for ax in all_axes:
+            ax.set_xlim(region_start, display_end)
+        ticks: List[Tuple[float, int]] = []
+        for g0, g1, d0, d1 in compress_segments:
+            if (g1 - g0) > args.intron_display_bp and (d1 - d0) < (g1 - g0):
+                continue
+            ticks += [(d0, g0), (d1, g1)]
+        min_gap = 0.035 * (display_end - region_start)
+        tick_pos, tick_lab, last = [], [], None
+        for d, g in sorted(set(ticks)):
+            tick_pos.append(d)
+            if last is None or d - last >= min_gap:
+                tick_lab.append(f"{g:,}")
+                last = d
+            else:
+                tick_lab.append("")
+        all_axes[-1].set_xticks(tick_pos)
+        all_axes[-1].set_xticklabels(tick_lab, rotation=90, fontsize=4.5)
+        all_axes[-1].tick_params(axis="x", length=2, width=0.4)
+        top_tf = mtransforms.blended_transform_factory(ax_models.transData, ax_models.transAxes)
+        bot_tf = mtransforms.blended_transform_factory(all_axes[-1].transData, all_axes[-1].transAxes)
+        for d0, d1, length in compress_gaps:
+            mid = (d0 + d1) / 2.0
+            ax_models.text(mid, 1.0, f"{length / 1000.0:.1f} kb", transform=top_tf, ha="center", va="bottom",
+                           fontsize=4, color="#555555", rotation=90, clip_on=False)
+            all_axes[-1].text(mid, 0.0, "//", transform=bot_tf, ha="center", va="center", fontsize=6,
+                              color="#333333", clip_on=False, zorder=10,
+                              bbox=dict(facecolor="white", edgecolor="none", pad=0.2))
+        all_axes[-1].set_xlabel(
+            f"{chrom}:{region_start:,}-{region_end:,} (gaps without exons/reads > "
+            f"{args.intron_display_bp} bp drawn {args.intron_display_bp} bp wide, true length above; "
+            f"ticks = genomic coordinates)", fontsize=6)
 
     out_png = str(out_prefix) + ".png"
     print(f"[plot] Saving {out_png}")
-    fig.savefig(out_png, dpi=2200, bbox_inches="tight")
+    fig.savefig(out_png, dpi=args.dpi, bbox_inches="tight")
     plt.close(fig)
 
     print("[plot] Done")

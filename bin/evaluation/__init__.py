@@ -111,9 +111,13 @@ from .flair_structural import (
     extract_sj_info,
     parse_gtf_transcripts,
     build_reference_structures,
+    build_reference_chain_ends,
     classify_transcripts,
     classify_transcripts_per_isoform,
+    fsm_subcategory,
     SINGLE_EXON_END_WINDOW,
+    FSM_END_WINDOW,
+    FSM_SUBCATEGORIES,
 )
 
 from .synthesize import (
@@ -214,9 +218,13 @@ __all__ = [
     'extract_sj_info',
     'parse_gtf_transcripts',
     'build_reference_structures',
+    'build_reference_chain_ends',
     'classify_transcripts',
     'classify_transcripts_per_isoform',
+    'fsm_subcategory',
     'SINGLE_EXON_END_WINDOW',
+    'FSM_END_WINDOW',
+    'FSM_SUBCATEGORIES',
     # synthesize
     'parse_filename_metadata',
     'parse_tsv_file',
