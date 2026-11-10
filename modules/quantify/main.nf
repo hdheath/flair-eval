@@ -14,7 +14,7 @@ process QUANTIFY {
     container { flair_env.container ?: null }
 
     input:
-    tuple val(meta), path(assemble), path(reads), path(bam), path(bai), path(genome), val(flair_env)
+    tuple val(meta), path(assemble), path(reads), path(bam), path(bai), path(genome), path(genome_fai), val(flair_env)
 
     output:
     tuple val(meta), path('quantify', type: 'dir'), emit: dir

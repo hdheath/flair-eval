@@ -14,7 +14,7 @@ nextflow_process {
                 input[0] = [
                     [id: 's/r', sample: 's', run_id: 'r', platform: 'ont', library: 'dRNA', run: [id: 'r', transcriptome_args: "--stringent --note it's here"]],
                     file("\${d}/sampleC.bam"), file("\${d}/sampleC.bam.bai"), file("\${d}/sampleA.fastq"),
-                    file("\${d}/genome.fa"), file("\${d}/annotation.gtf"),
+                    file("\${d}/genome.fa"), [], file("\${d}/annotation.gtf"),
                     [conda_prefix: "\${d}/fake_flair_prefix", container: null],
                 ]
                 input[1] = file("\${d}/regions.bed")
@@ -46,7 +46,7 @@ nextflow_process {
                 input[0] = [
                     [id: 's/r', sample: 's', run_id: 'r', platform: null, library: null, run: [id: 'r', transcriptome_args: '']],
                     file("\${d}/sampleC.bam"), file("\${d}/sampleC.bam.bai"), [],
-                    file("\${d}/genome.fa"), file("\${d}/annotation.gtf"),
+                    file("\${d}/genome.fa"), [], file("\${d}/annotation.gtf"),
                     [conda_prefix: "\${d}/fake_flair_prefix", container: null],
                 ]
                 input[1] = []

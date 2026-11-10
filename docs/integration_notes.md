@@ -10,9 +10,8 @@ end-to-end job. Each item names the owning stream and file. Core did not edit th
   (core now passes all of them; `tests/nf-test/adapter_flags.nf.test` checks QUANTIFY and
   PRODUCTIVITY against the merged adapter's real `--help`), and the FLAIR_ENV stub writes a real
   `source`. The report draws the section 8 panels.
-- Still open, adapter: `bin/flair_adapter.py` does not write `quantify_input` to
-  `adapter_log.json` yet (A21). Core copies it into `sections.quant.input` as soon as it is
-  there; until then that key is absent in real runs.
+- Fixed in round 3: the adapter writes `quantify_input`; the final run shows `sections.quant.input`
+  = `bam` for dev and `reads` for the others, and the report's not-like-for-like note.
 - Still open, adapter: `nextflow lint` warns on `modules/flair_env/main.nf:33`
   (`containsKey(it)`, implicit closure parameter, deprecated in strict syntax). Suggested:
   `kinds.find { k -> run.flair instanceof Map && run.flair.containsKey(k) }`.
@@ -73,3 +72,64 @@ productivity panel yet. Concordance and these panels are the report stream's rou
 | assemble | 2.2.0 2.0 min, 3.0.1 1.6 min, dev 1.6 min, TED 11.3 min (see above) |
 | wall time | launch 1: 21 min, cancelled (dev and TED slow on the full reference); launch 2 (`-resume`, PREP_REFERENCE): 15.3 min; launch 3 (`-resume`, BUNDLE fix): 1.8 min |
 | result | `results/report/report.html`: 4 runs, every bundle filled; Overview, Single run and Compare render with no console errors (headless Chromium) |
+
+## Final real end-to-end run (round 4, 2026-11-09, merged `v2` dc8f54d + core)
+
+Same data, reference and region as above; `-profile slurm,conda --regions`; fresh launch (no
+`-resume`; FLAIR envs reused from `env_cache`).
+
+### Core fix found on the way: stage the genome `.fai` with the genome
+The first round-4 launch failed in `QUANTIFY (wtc11_pacbio/dev-tip)`:
+
+```
+flair quantify --manifest quantify/.work/manifest.tsv --genome genome.fa \
+  --isoform_bed assemble/isoforms.flair.bed --threads 8 --output quantify/.work/quant ...
+  File "flair/flair_quantify.py", line 390, in write_batch_reference
+    seq = ''.join(genome.fetch(bed.chrom, block.start, block.end) ...)
+KeyError: "sequence 'chr17' not present"
+```
+
+`genome.fa` did hold chr17. Core staged the genome without its `.fai`, so dev quantify's pool
+workers built the index concurrently and some read it half-written. Re-running the identical
+command in the same work dir once the `.fai` existed exited 0. Core now stages `<genome>.fai`
+next to the genome for ASSEMBLE, QUANTIFY, PRODUCTIVITY and EVALUATE_STRUCTURE (the original
+genome's `.fai` when it exists, else PREP_REFERENCE's). The underlying race is in FLAIR dev
+quantify (it should build the index once before forking); worth a FLAIR issue.
+
+### Runs and results (`results_final/`)
+
+| run_index | run id | label | FLAIR | isoforms | FSM | quant input | assemble |
+|---|---|---|---|---|---|---|---|
+| 0 | flair-2.2.0 | FLAIR 2.2.0 | release 2.2.0 | 280 | 129 | reads | 48 s |
+| 1 | flair-3.0.1 | FLAIR 3.0.1 | release 3.0.1 | 253 | 138 | reads | 29 s |
+| 2 | dev-tip | dev (tip) | git dev @389748e (the tip; a separate @389748e run would duplicate it) | 143 | 97 | bam | 71 s |
+| 3 | dev-425b260 | dev @425b260 | git 425b260, `quantify: false` (its quantify crashes in FLAIR) | 128 | 89 | (none) | 93 s |
+| 4 | ted | TED | env flair-ted-52826 @20c0f47 | 134 | 91 | reads | 6.0 min |
+
+- 31 tasks: 5 FLAIR_ENV (all cache hits, 1-7 s), 1 PREP_REFERENCE (14 s), 5 ASSEMBLE, 4 QUANTIFY,
+  5 PRODUCTIVITY, 5 EVALUATE_STRUCTURE, 5 BUNDLE, 1 REPORT. No ALIGN (BAM given).
+- Wall time of the launch: 11.0 min (SLURM job 46962781), dominated by TED's assemble.
+- Report: `results_final/report/report.html` (127 KB). Checked in headless Chromium: every tab
+  (Overview, Structure, Agreement, Expression, Runtime, Run detail, Guide) renders with no console
+  errors and no NaN/undefined; runs listed in runs.yaml order; Expression shows the
+  "Not like for like ... dev (tip) counts from the genome BAM" note; quant, productivity
+  ("Coding potential"), agreement and runtime panels are populated.
+
+### Second-run reuse (`results_add/`)
+Launch with only `release: 3.0.0` (`inputs/runs_add.yaml`) and
+`--bundles results_final/bundles`, into a separate outdir:
+- 8 tasks, all for the new run (FLAIR_ENV cold build 2.6 min, PREP_REFERENCE, ASSEMBLE 29 s,
+  QUANTIFY, PRODUCTIVITY, EVALUATE_STRUCTURE, BUNDLE) plus REPORT; none of the five earlier runs
+  was recomputed. Wall time 6.8 min (SLURM job 46963330).
+- `results_add/report/report.html` (131 KB) shows all 6 runs, no console errors.
+- FLAIR 3.0.0 and 3.0.1 give identical isoform structures on this region (separate envs,
+  different pip freezes; `isoforms.bed` columns 1-12 identical).
+- Design note for integration: per A5 core passes this launch's first run as `--baseline`, so in
+  an "add a run" launch the new run (3.0.0) becomes the baseline and is listed first. A user adding
+  to earlier results probably wants the old baseline; they can pass `--baseline flair-2.2.0`. A
+  possible amendment: when `--bundles` is given and no `--baseline`, use the baseline recorded in
+  the earlier bundles, or let the report choose by `run_index`.
+
+Paths: `/private/groups/brookslab/hdheath/claude-tmp/09_11_26_flair_eval_e2e/`
+(`inputs/runs_final.yaml`, `inputs/runs_add.yaml`, `run_final.sbatch`, `results_final/`,
+`results_add/`, `driver_final_<jobid>.log`).

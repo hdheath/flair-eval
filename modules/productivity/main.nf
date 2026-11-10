@@ -12,7 +12,7 @@ process PRODUCTIVITY {
     container { flair_env.container ?: null }
 
     input:
-    tuple val(meta), path(assemble), path(genome), path(gtf), val(flair_env)
+    tuple val(meta), path(assemble), path(genome), path(genome_fai), path(gtf), val(flair_env)
 
     output:
     tuple val(meta), path('productivity', type: 'dir'), emit: dir

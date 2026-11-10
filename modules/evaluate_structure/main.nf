@@ -8,7 +8,7 @@ process EVALUATE_STRUCTURE {
     label 'process_single'
 
     input:
-    tuple val(meta), path(assemble), path(gtf), path(genome), path(env_json), val(inputs)
+    tuple val(meta), path(assemble), path(gtf), path(genome), path(genome_fai), path(env_json), val(inputs)
     path(regions)
 
     output:

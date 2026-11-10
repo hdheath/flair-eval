@@ -116,26 +116,28 @@ workflow FLAIR_EVAL {
     // coordinates). Alignment above keeps the full genome.
     def regions = params.regions ? file(params.regions, checkIfExists: true) : []
     def refs = samples.collect { s -> [refKey(s), s.genome, s.gtf] }.unique { r -> r[0] }
+    // The genome's .fai is staged next to it when it exists: FLAIR dev quantify otherwise builds it
+    // in several pool workers at once and fails with "sequence 'chrN' not present".
     if (params.regions) {
         PREP_REFERENCE(channel.fromList(refs), regions)
-        ch_ref = PREP_REFERENCE.out.ref.map { k, g, _fai, a -> [k, g, a] }
+        ch_ref = PREP_REFERENCE.out.ref           // [key, genome, fai, gtf]
     }
     else {
-        ch_ref = channel.fromList(refs)
+        ch_ref = channel.fromList(refs).map { k, g, a -> [k, g, genomeIndex(g), a] }
     }
     ch_job_ref = channel.fromList(jobs)
         .map { j -> [refKey(S[j.sample]), j.id] }
         .combine(ch_ref, by: 0)
-        .map { _k, id, g, a -> [id, g, a] }    // [id, genome, gtf]
+        .map { _k, id, g, fai, a -> [id, g, fai, a] }    // [id, genome, fai, gtf]
 
     // ---- assemble, quantify, productivity -----------------------------------------------------
     ASSEMBLE(
         ch_job_bam
             .join(ch_jobenv)
             .join(ch_job_ref)
-            .map { id, bam, bai, _json, env, g, a ->
+            .map { id, bam, bai, _json, env, g, fai, a ->
                 def j = J[id]
-                [j, bam, bai, S[j.sample].reads ?: [], g, a, env]
+                [j, bam, bai, S[j.sample].reads ?: [], g, fai, a, env]
             },
         regions
     )
@@ -143,28 +145,28 @@ workflow FLAIR_EVAL {
         .map { j, d -> [j.id, d] }
         .join(ch_jobenv)                       // [id, assemble_dir, flair_env.json, env]
         .join(ch_job_bam)                      // + [bam, bai]
-        .join(ch_job_ref)                      // + [genome, gtf]
+        .join(ch_job_ref)                      // + [genome, fai, gtf]
 
     // A6/A7: QUANTIFY runs for every quantify: true run. It gets reads when the sample has them,
     // plus the job's BAM, genome and isoforms; the adapter writes skipped.json if the FLAIR
     // version needs something that is missing.
     QUANTIFY(
         ch_asm
-            .filter { id, _d, _json, _env, _bam, _bai, _g, _a -> J[id].run.quantify }
-            .map { id, d, _json, env, bam, bai, g, _a -> [J[id], d, S[J[id].sample].reads ?: [], bam, bai, g, env] }
+            .filter { id, _d, _json, _env, _bam, _bai, _g, _fai, _a -> J[id].run.quantify }
+            .map { id, d, _json, env, bam, bai, g, fai, _a -> [J[id], d, S[J[id].sample].reads ?: [], bam, bai, g, fai, env] }
     )
     PRODUCTIVITY(
         ch_asm
-            .filter { id, _d, _json, _env, _bam, _bai, _g, _a -> J[id].run.productivity }
-            .map { id, d, _json, env, _bam, _bai, g, a -> [J[id], d, g, a, env] }
+            .filter { id, _d, _json, _env, _bam, _bai, _g, _fai, _a -> J[id].run.productivity }
+            .map { id, d, _json, env, _bam, _bai, g, fai, a -> [J[id], d, g, fai, a, env] }
     )
 
     // ---- evaluate and bundle ------------------------------------------------------------------
     // A13: always the genome (junction motifs); reads/BAM paths are recorded in bundle inputs.
     EVALUATE_STRUCTURE(
-        ch_asm.map { id, d, json, _env, _bam, _bai, g, a ->
+        ch_asm.map { id, d, json, _env, _bam, _bai, g, fai, a ->
             def s = S[J[id].sample]
-            [J[id], d, a, g, json, [reads: s.reads?.toString(), bam: s.bam?.toString()]]
+            [J[id], d, a, g, fai, json, [reads: s.reads?.toString(), bam: s.bam?.toString()]]
         },
         regions
     )
@@ -276,6 +278,12 @@ def readTaskTrace(Object stepDir) {
 def traceNum(Map raw, String k) {
     def v = raw[k]
     return v != null && v.isNumber() ? v.toBigDecimal() : null
+}
+
+// <genome>.fai next to the genome, or [] (nothing to stage).
+def genomeIndex(Object genome) {
+    def f = file(genome.toString() + '.fai')
+    return f.exists() ? f : []
 }
 
 // Samples with the same genome + GTF share one PREP_REFERENCE task.

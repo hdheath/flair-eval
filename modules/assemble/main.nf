@@ -12,7 +12,7 @@ process ASSEMBLE {
     container { flair_env.container ?: null }
 
     input:
-    tuple val(meta), path(bam), path(bai), path(reads), path(genome), path(gtf), val(flair_env)
+    tuple val(meta), path(bam), path(bai), path(reads), path(genome), path(genome_fai), path(gtf), val(flair_env)
     path(regions)
 
     output:

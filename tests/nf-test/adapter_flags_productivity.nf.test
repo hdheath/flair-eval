@@ -15,7 +15,7 @@ nextflow_process {
                 def d = "${projectDir}/tests/nf-test/inputs"
                 input[0] = [
                     [id: 's/r', sample: 's', run_id: 'r', platform: 'pacbio', library: 'cDNA', run: [id: 'r']],
-                    file("\${d}/fake_assemble"), file("\${d}/genome.fa"), file("\${d}/annotation.gtf"),
+                    file("\${d}/fake_assemble"), file("\${d}/genome.fa"), [], file("\${d}/annotation.gtf"),
                     [conda_prefix: "\${d}/real_help_prefix", container: null],
                 ]
                 """
