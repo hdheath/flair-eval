@@ -1,0 +1,400 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "flair-eval/bundle/1",
+  "title": "flair-eval bundle.json",
+  "type": "object",
+  "required": [
+    "schema",
+    "sample",
+    "run_id",
+    "flair",
+    "pipeline",
+    "summary",
+    "categories",
+    "fsm_subcategories",
+    "junctions",
+    "histograms",
+    "sections"
+  ],
+  "properties": {
+    "schema": {
+      "const": "flair-eval/bundle/1"
+    },
+    "sample": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "label": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "flair": {
+      "type": "object",
+      "required": [
+        "source",
+        "requested",
+        "version"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "release",
+            "git",
+            "env",
+            "container"
+          ]
+        },
+        "requested": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "required": [
+        "version",
+        "created"
+      ],
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created": {
+          "type": "string"
+        }
+      }
+    },
+    "inputs": {
+      "type": "object"
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "isoforms",
+        "genes",
+        "loci",
+        "mono_exon",
+        "multi_exon",
+        "ref_transcripts_total",
+        "ref_transcripts_fsm",
+        "ref_transcripts_cim",
+        "ref_genes_detected"
+      ],
+      "properties": {
+        "isoforms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "genes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "loci": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mono_exon": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "multi_exon": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ref_transcripts_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ref_transcripts_fsm": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ref_transcripts_cim": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ref_genes_detected": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "categories": {
+      "type": "object",
+      "required": [
+        "FSM",
+        "ISM",
+        "NIC",
+        "NNC",
+        "genic",
+        "genic_intron",
+        "antisense",
+        "intergenic",
+        "fusion"
+      ],
+      "properties": {
+        "FSM": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ISM": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "NIC": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "NNC": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "genic": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "genic_intron": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "antisense": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "intergenic": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fusion": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "fsm_subcategories": {
+      "type": "object",
+      "required": [
+        "CIM",
+        "FSM5",
+        "FSM3",
+        "FSMTE"
+      ],
+      "properties": {
+        "CIM": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "FSM5": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "FSM3": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "FSMTE": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "junctions": {
+      "type": "object",
+      "required": [
+        "total",
+        "known",
+        "novel_canonical",
+        "novel_noncanonical"
+      ],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "known": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "novel_canonical": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "novel_noncanonical": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "histograms": {
+      "type": "object",
+      "required": [
+        "isoforms_per_gene",
+        "transcript_length",
+        "exon_length",
+        "exons_per_isoform"
+      ],
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "edges",
+          "counts"
+        ],
+        "properties": {
+          "edges": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "counts": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      },
+      "properties": {
+        "isoforms_per_gene": {
+          "type": "object",
+          "required": [
+            "edges",
+            "counts"
+          ],
+          "properties": {
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "counts": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "transcript_length": {
+          "type": "object",
+          "required": [
+            "edges",
+            "counts"
+          ],
+          "properties": {
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "counts": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "exon_length": {
+          "type": "object",
+          "required": [
+            "edges",
+            "counts"
+          ],
+          "properties": {
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "counts": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        "exons_per_isoform": {
+          "type": "object",
+          "required": [
+            "edges",
+            "counts"
+          ],
+          "properties": {
+            "edges": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "counts": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "compute": {
+      "type": "object",
+      "properties": {
+        "cpu_hours": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "peak_rss_gb": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "wall_minutes": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "sections": {
+      "type": "object"
+    }
+  }
+}

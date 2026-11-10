@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>flair-eval Config Builder</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Set up a flair-eval run: samples, FLAIR runs and the exact nextflow command.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: form on the left (samples, runs, options), a sticky launch panel on the right
+   that always shows the exact command; one column below 980px. */
+:root {
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --surface-2: #eceff4;
+  --ink: #17202c;
+  --ink-2: #4b5667;
+  --line: #d5dbe4;
+  --accent: #2442b5;
+  --accent-ink: #ffffff;
+  --accent-soft: #e5eafb;
+  --ok: #1b7446;
+  --ok-soft: #e1f2e8;
+  --warn: #8f5b00;
+  --warn-soft: #fbf0d7;
+  --bad: #b42318;
+  --bad-soft: #fcebe9;
+  --code-bg: #111925;
+  --code-ink: #e4ebf5;
+  --code-dim: #8d9bb0;
+  --font-ui: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "IBM Plex Sans Condensed", "IBM Plex Sans", "Arial Narrow", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --r: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e131a; --surface: #151c26; --surface-2: #1c2531; --ink: #e5eaf1; --ink-2: #a2adbc;
+    --line: #2a3543; --accent: #8fa3ff; --accent-ink: #0c1330; --accent-soft: #1e2950;
+    --ok: #63d29b; --ok-soft: #143021; --warn: #efb54e; --warn-soft: #33270e;
+    --bad: #ff8c82; --bad-soft: #3a1613; --code-bg: #090d13; --code-ink: #dde6f2; --code-dim: #7d8ba0;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e131a; --surface: #151c26; --surface-2: #1c2531; --ink: #e5eaf1; --ink-2: #a2adbc;
+  --line: #2a3543; --accent: #8fa3ff; --accent-ink: #0c1330; --accent-soft: #1e2950;
+  --ok: #63d29b; --ok-soft: #143021; --warn: #efb54e; --warn-soft: #33270e;
+  --bad: #ff8c82; --bad-soft: #3a1613; --code-bg: #090d13; --code-ink: #dde6f2; --code-dim: #7d8ba0;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 var(--font-ui);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 48px;
+}
+[hidden] { display: none !important; }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; margin: 0; letter-spacing: 0.005em; }
+h1 { font-size: 1.9rem; line-height: 1.15; }
+h2 { font-size: 1.3rem; }
+h3 { font-size: 1.05rem; }
+p { margin: 0; }
+a { color: var(--accent); }
+code, .mono { font-family: var(--font-mono); font-size: 0.92em; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wrap { max-width: 1260px; margin: 0 auto; }
+header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; padding-block: 28px 20px; }
+.brand { display: grid; gap: 8px; max-width: 64ch; }
+.brand .glyph { width: 168px; height: 22px; display: block; }
+.brand p { color: var(--ink-2); }
+.top-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 24px; align-items: start; }
+@media (max-width: 980px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+.col { display: grid; gap: 24px; min-width: 0; }
+
+section.block { display: grid; gap: 14px; }
+.block-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
+.block-head p { color: var(--ink-2); max-width: 62ch; }
+.count { font: 500 0.8rem var(--font-mono); color: var(--ink-2); letter-spacing: 0.04em; text-transform: uppercase; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.card-head .title { font: 600 1rem var(--font-display); }
+.card-head .spacer { flex: 1 1 auto; }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.field { display: grid; gap: 4px; min-width: 0; align-content: start; }
+.field.wide { grid-column: 1 / -1; }
+label, .label { font-size: 0.82rem; font-weight: 600; color: var(--ink-2); letter-spacing: 0.01em; }
+.hint { font-size: 0.8rem; color: var(--ink-2); }
+.err { font-size: 0.8rem; color: var(--bad); }
+.warn-text { font-size: 0.8rem; color: var(--warn); }
+input[type="text"], select, textarea {
+  width: 100%; min-width: 0; font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px;
+}
+input.mono, textarea.mono { font-family: var(--font-mono); font-size: 0.88rem; }
+input[aria-invalid="true"], select[aria-invalid="true"] { border-color: var(--bad); background: var(--bad-soft); }
+input::placeholder { color: var(--ink-2); opacity: 0.7; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.check { display: inline-flex; align-items: center; gap: 6px; font-size: 0.9rem; color: var(--ink); font-weight: 400; }
+.check input { width: 16px; height: 16px; accent-color: var(--accent); }
+
+button { font: inherit; cursor: pointer; }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-weight: 500; font-size: 0.9rem; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); padding-inline: 8px; }
+.btn.ghost:hover { color: var(--bad); border-color: transparent; }
+.btn.add { border-style: dashed; color: var(--accent); background: transparent; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.adders { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface-2); }
+.seg button { border: 0; background: transparent; color: var(--ink-2); padding: 6px 12px; font-size: 0.86rem; font-weight: 500; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; font: 500 0.78rem var(--font-mono); padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); max-width: 100%; overflow-wrap: anywhere; }
+.chip.accent { background: var(--accent-soft); color: var(--accent); }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+
+details.more > summary { cursor: pointer; font-size: 0.86rem; color: var(--ink-2); font-weight: 500; }
+details.more[open] > summary { margin-bottom: 10px; }
+
+.banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 14px; border-radius: var(--r); background: var(--accent-soft); color: var(--ink); }
+.banner p { flex: 1 1 280px; }
+
+/* launch panel */
+aside.panel { position: sticky; top: max(16px, env(safe-area-inset-top, 0px)); display: grid; gap: 14px; min-width: 0; }
+@media (max-width: 980px) { aside.panel { position: static; } }
+.status { display: grid; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; }
+.status-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-weight: 600; font-size: 0.85rem; }
+.pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.jobs { font: 500 0.86rem var(--font-mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.issues { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 220px; overflow: auto; }
+.issues li button { all: unset; cursor: pointer; display: block; font-size: 0.85rem; padding: 3px 6px; border-radius: 4px; }
+.issues li button:hover, .issues li button:focus-visible { background: var(--surface-2); }
+.issues li.error button { color: var(--bad); }
+.issues li.warning button { color: var(--warn); }
+.issues .where { font-weight: 600; }
+
+.term { background: var(--code-bg); color: var(--code-ink); border-radius: var(--r); overflow: hidden; display: grid; min-width: 0; }
+.term-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.term-head .mode { font-size: 0.85rem; font-weight: 600; }
+.term-head .why { font-size: 0.78rem; color: var(--code-dim); }
+.term pre { margin: 0; padding: 14px; overflow-x: auto; font: 0.84rem/1.6 var(--font-mono); white-space: pre; }
+.term .btn { background: transparent; color: var(--code-ink); border-color: rgba(255,255,255,0.22); font-size: 0.8rem; padding: 4px 10px; }
+.term .btn:hover { border-color: var(--code-ink); }
+.why-list { margin: 0; padding: 0 14px 10px 30px; font-size: 0.78rem; color: var(--code-dim); }
+
+.files { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); display: grid; min-width: 0; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 8px 0; border-bottom: 1px solid var(--line); }
+.tabs button { border: 0; background: transparent; padding: 6px 10px; font: 500 0.84rem var(--font-mono); color: var(--ink-2); border-bottom: 2px solid transparent; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.files pre { margin: 0; padding: 12px 14px; max-height: 280px; overflow: auto; font: 0.8rem/1.55 var(--font-mono); white-space: pre; color: var(--ink); }
+.file-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: center; }
+.file-actions .hint { flex: 1 1 160px; }
+.toast { font-size: 0.8rem; color: var(--ok); }
+
+footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: grid; gap: 4px; }
+@media (prefers-reduced-motion: no-preference) { .btn, .seg button, input { transition: border-color 120ms, background-color 120ms; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <svg class="glyph" viewBox="0 0 168 22" aria-hidden="true">
+        <line x1="2" y1="11" x2="166" y2="11" stroke="var(--ink-2)" stroke-width="1.5"/>
+        <rect x="2" y="4" width="20" height="14" rx="2" fill="var(--accent)"/>
+        <rect x="46" y="4" width="14" height="14" rx="2" fill="var(--accent)"/>
+        <rect x="84" y="4" width="26" height="14" rx="2" fill="var(--accent)"/>
+        <rect x="136" y="4" width="30" height="14" rx="2" fill="var(--accent)"/>
+      </svg>
+      <h1>flair-eval config builder</h1>
+      <p>Describe your samples and the FLAIR runs you want to compare. The page writes the
+        <code>nextflow run</code> command and, when you need them, <code>samples.csv</code> and
+        <code>runs.yaml</code>. Nothing leaves your browser.</p>
+    </div>
+    <div class="top-actions">
+      <button class="btn" type="button" id="btn-example">Load example</button>
+      <button class="btn" type="button" id="btn-reset">Start blank</button>
+    </div>
+  </header>
+
+  <div class="banner" id="example-banner" hidden>
+    <p><strong>This is an example.</strong> Replace the paths with your own files; the command updates as you type.</p>
+    <button class="btn" type="button" id="btn-reset-2">Start blank</button>
+  </div>
+
+  <div class="layout" style="margin-top:16px">
+    <main class="col">
+      <section class="block" aria-labelledby="h-samples">
+        <div class="block-head">
+          <h2 id="h-samples">Samples</h2>
+          <span class="count" id="sample-count"></span>
+        </div>
+        <p class="hint">One dataset each: long reads (or an aligned BAM) plus the genome and annotation to compare against.</p>
+        <div class="col" id="samples" style="gap:12px"></div>
+        <div class="adders"><button class="btn add" type="button" id="add-sample">+ Add sample</button></div>
+      </section>
+
+      <section class="block" aria-labelledby="h-runs">
+        <div class="block-head">
+          <h2 id="h-runs">Runs</h2>
+          <span class="count" id="run-count"></span>
+        </div>
+        <p class="hint">One card per FLAIR configuration: which FLAIR, and which settings. Every run is applied to every sample.</p>
+        <div class="col" id="runs" style="gap:12px"></div>
+        <div class="adders" id="run-adders">
+          <button class="btn add" type="button" data-add-run="release">+ FLAIR release</button>
+          <button class="btn add" type="button" data-add-run="git">+ Git branch</button>
+          <button class="btn add" type="button" data-add-run="env">+ Conda env</button>
+          <button class="btn add" type="button" data-add-run="container">+ Container</button>
+        </div>
+      </section>
+
+      <section class="block" aria-labelledby="h-opts">
+        <div class="block-head"><h2 id="h-opts">Launch options</h2></div>
+        <div class="card">
+          <div class="grid two">
+            <div class="field">
+              <label for="o-outdir">Output folder</label>
+              <input type="text" class="mono" id="o-outdir" data-opt="outdir" placeholder="./flair-eval-results">
+              <span class="hint">Results and the report go here. Use storage with room to spare.</span>
+            </div>
+            <div class="field">
+              <label for="o-profile">Nextflow profile</label>
+              <input type="text" class="mono" id="o-profile" data-opt="profile" list="profiles" placeholder="none">
+              <datalist id="profiles"><option value="slurm"><option value="local"><option value="test"><option value="singularity"><option value="docker"><option value="conda"></datalist>
+              <span class="hint">How jobs run: <code>slurm</code> on a cluster, <code>local</code> on one machine.</span>
+            </div>
+            <div class="field">
+              <label for="o-baseline">Baseline run</label>
+              <select id="o-baseline" data-opt="baseline"></select>
+              <span class="hint">The report shows differences against this run.</span>
+            </div>
+            <div class="field">
+              <label for="o-title">Report title</label>
+              <input type="text" id="o-title" data-opt="report_title" placeholder="FLAIR comparison">
+            </div>
+          </div>
+          <div class="checks">
+            <label class="check"><input type="checkbox" id="o-resume" data-opt="resume"> Resume an earlier launch (<code>-resume</code>)</label>
+            <label class="check"><input type="checkbox" id="o-files" data-opt="prefer_files"> Always use config files</label>
+          </div>
+          <details class="more">
+            <summary>More options</summary>
+            <div class="grid two">
+              <div class="field">
+                <label for="o-ref">Pipeline version</label>
+                <input type="text" class="mono" id="o-ref" data-opt="ref" placeholder="v2">
+                <span class="hint">Branch, tag or commit of hdheath/flair-eval (<code>-r</code>).</span>
+              </div>
+              <div class="field">
+                <label for="o-align">FLAIR for the shared alignment</label>
+                <input type="text" class="mono" id="o-align" data-opt="align_flair" placeholder="3.0.1">
+                <span class="hint">Every run gets the same BAM, aligned once per sample with this release.</span>
+              </div>
+              <div class="field">
+                <label for="o-regions">Regions BED</label>
+                <input type="text" class="mono" id="o-regions" data-opt="regions" placeholder="optional">
+                <span class="hint">Restrict assembly and evaluation to these regions.</span>
+              </div>
+              <div class="field">
+                <label for="o-bundles">Earlier results to include</label>
+                <input type="text" class="mono" id="o-bundles" data-opt="bundles" placeholder="optional, comma-separated folders">
+                <span class="hint">Bundle folders from earlier launches, added to this report.</span>
+              </div>
+              <div class="field">
+                <label for="o-envcache">FLAIR environment cache</label>
+                <input type="text" class="mono" id="o-envcache" data-opt="env_cache" placeholder="./flair-env-cache">
+                <span class="hint">Where FLAIR builds are kept, so each version is built once.</span>
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
+    </main>
+
+    <aside class="panel" aria-label="Launch">
+      <div class="status">
+        <div class="status-row">
+          <span class="pill ok" id="pill">Ready</span>
+          <span class="jobs" id="jobs"></span>
+        </div>
+        <ul class="issues" id="issues"></ul>
+      </div>
+
+      <div class="term">
+        <div class="term-head">
+          <div>
+            <div class="mode" id="mode"></div>
+            <div class="why" id="mode-sub"></div>
+          </div>
+          <button class="btn" type="button" id="copy-cmd">Copy</button>
+        </div>
+        <pre id="cmd" aria-label="nextflow command"></pre>
+        <ul class="why-list" id="why" hidden></ul>
+      </div>
+
+      <div class="files">
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" id="tab-samples" aria-selected="true" data-tab="samples">samples.csv</button>
+          <button type="button" role="tab" id="tab-runs" aria-selected="false" data-tab="runs">runs.yaml</button>
+        </div>
+        <pre id="file-view" aria-live="polite"></pre>
+        <div class="file-actions">
+          <span class="hint" id="file-hint"></span>
+          <button class="btn" type="button" id="copy-file">Copy</button>
+          <button class="btn primary" type="button" id="dl-file">Download</button>
+          <span class="toast" id="toast" role="status"></span>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <footer>
+    <p>Same rules as <code>flair-eval check</code> and the pipeline's schemas (<code>assets/schema/*.json</code>). Your entries are kept in this browser only.</p>
+    <p><a href="https://github.com/hdheath/flair-eval" rel="noopener">hdheath/flair-eval</a> · <a href="https://github.com/hdheath/flair-eval/blob/v2/docs/usage_cli.md" rel="noopener">pip CLI guide</a></p>
+  </footer>
+</div>
+<script src="schemas.js"></script>
+<script src="logic.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
