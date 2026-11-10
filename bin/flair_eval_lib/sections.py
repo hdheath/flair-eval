@@ -2,11 +2,17 @@
 from the adapter's counts.tsv / productivity.tsv. Core's BUNDLE step can call these; the report
 fixtures are made with them too.
 
-    python3 -m flair_eval_lib.sections BUNDLE_DIR   # adds both sections when the TSVs exist
+    python3 -m flair_eval_lib.sections BUNDLE_DIR [...] [--quant-input reads|bam]
+
+adds both sections when the TSVs exist. `sections.quant.input` (CONTRACTS A21) says whether
+FLAIR quantify counted from reads or from the genome BAM: --quant-input if given, else
+`quantify_input` from provenance/adapter_quantify.json, else inferred from the quantify command
+that log records (`--manifest` = BAM manifest, `-r` = reads manifest), else left out.
 """
 
 from __future__ import annotations
 
+import argparse
 import bisect
 import json
 import os
@@ -47,7 +53,35 @@ def productivity_section(productivity_tsv: str, isoform_ids: Optional[set] = Non
     return {"class_counts": dict(sorted(classes.items()))}
 
 
-def add_sections(bundle_dir: str) -> dict:
+QUANT_INPUTS = ("reads", "bam")
+
+
+def quant_input_from_log(log: dict) -> Optional[str]:
+    """'reads' or 'bam' from an adapter_quantify.json, or None if it cannot tell."""
+    v = log.get("quantify_input")
+    if v in QUANT_INPUTS:
+        return v
+    for c in log.get("commands") or []:
+        argv = [str(a) for a in c.get("argv") or []]
+        if "quantify" not in argv:
+            continue
+        if "--manifest" in argv:
+            return "bam"
+        if "-r" in argv or "--reads" in argv:
+            return "reads"
+    return None
+
+
+def quant_input_from_dir(bundle_dir: str) -> Optional[str]:
+    path = os.path.join(bundle_dir, "provenance", "adapter_quantify.json")
+    try:
+        with open(path) as fh:
+            return quant_input_from_log(json.load(fh))
+    except (OSError, ValueError):
+        return None
+
+
+def add_sections(bundle_dir: str, quant_input: Optional[str] = None) -> dict:
     path = os.path.join(bundle_dir, "bundle.json")
     with open(path) as fh:
         bundle = json.load(fh)
@@ -58,6 +92,9 @@ def add_sections(bundle_dir: str) -> dict:
     sec = bundle.setdefault("sections", {})
     if os.path.exists(os.path.join(bundle_dir, "counts.tsv")):
         sec["quant"] = quant_section(os.path.join(bundle_dir, "counts.tsv"), ids)
+        qi = quant_input or quant_input_from_dir(bundle_dir)
+        if qi:
+            sec["quant"]["input"] = qi
     if os.path.exists(os.path.join(bundle_dir, "productivity.tsv")):
         sec["productivity"] = productivity_section(os.path.join(bundle_dir, "productivity.tsv"), ids)
     with open(path, "w") as fh:
@@ -67,6 +104,11 @@ def add_sections(bundle_dir: str) -> dict:
 
 
 if __name__ == "__main__":
-    for d in sys.argv[1:]:
-        b = add_sections(d)
-        print(d, sorted(b.get("sections", {})), file=sys.stderr)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("bundle_dirs", nargs="+")
+    ap.add_argument("--quant-input", choices=QUANT_INPUTS)
+    a = ap.parse_args()
+    for d in a.bundle_dirs:
+        b = add_sections(d, a.quant_input)
+        q = b.get("sections", {}).get("quant", {})
+        print(d, sorted(b.get("sections", {})), "quant input:", q.get("input"), file=sys.stderr)

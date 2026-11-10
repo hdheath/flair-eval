@@ -13,6 +13,8 @@ Each bundle folder holds what the report reads:
 | `productivity.tsv` | `bin/flair_adapter.py productivity` (FLAIR predictProductivity) |
 | `sections.quant`, `sections.productivity` | `python3 -m flair_eval_lib.sections <bundle dir>` |
 | `compute` | `/usr/bin/time -v` of the quantify + productivity steps on the slice |
+| `run_index` | the run order above (A17) |
+| `sections.quant.input` | `reads` for 2.2.0 / 3.0.1, `bam` for the dev runs (A21) |
 
 ## Samples and runs
 
@@ -34,8 +36,9 @@ The assemblies were genome-wide runs; quantify and productivity were run on the 
 (reads from the shared BAMs over chr17:7.4-9.4 Mb: 27,799 PacBio, 110,973 ONT).
 
 Caveats, so the numbers are not over-read:
-- **Quantify differs by version.** FLAIR 2.2.0 and 3.0.1 quantify from reads (via the adapter).
-  The dev branch quantifies from the genome BAM. The adapter's dev path passed `-g`, which this
+- **Quantify differs by version** (A21, recorded in `sections.quant.input`; the report notes it).
+  FLAIR 2.2.0 and 3.0.1 quantify from reads (via the adapter). The dev branch quantifies from
+  the genome BAM. The adapter's dev path passed `-g`, which this
   dev `flair quantify` rejects (it only accepts `--genome`), so the dev counts were made with the
   same command and `--genome` spelled out. FLAIR itself was not changed.
 - CPM is relative to the slice's reads, so values are much higher than genome-wide CPM.

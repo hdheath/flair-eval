@@ -15,7 +15,7 @@
   var SUBS = ['CIM', 'FSM5', 'FSM3', 'FSMTE'];
   var SUB_LABEL = { CIM: 'CIM · both ends match', FSM5: "FSM5 · 5' end new", FSM3: "FSM3 · 3' end new", FSMTE: 'FSMTE · both ends new' };
   var PROD_ORDER = ['PRO', 'PTC', 'NST', 'NGO'];
-  var PROD_LABEL = { PRO: 'PRO · productive', PTC: 'PTC · premature stop', NST: 'NST · no stop codon', NGO: 'NGO · no annotated start' };
+  var PROD_LABEL = { PRO: 'PRO · productive', PTC: 'PTC · premature stop', NST: 'NST · no stop codon', NGO: 'NGO · no annotated start', NA: 'NA · not classified' };
   var HISTS = [
     { key: 'transcript_length', title: 'Transcript length', unit: 'nt', of: 'isoforms', cont: true },
     { key: 'exons_per_isoform', title: 'Exons per isoform', unit: 'exons', of: 'isoforms', cont: false },
@@ -33,10 +33,18 @@
   var SECTION_PANELS = {};
 
   // ------------------------------------------------------------------ data
+  // Display name: the run's label, or a readable form of its id (CONTRACTS A1 id patterns).
+  function prettyId(id) {
+    var m;
+    if ((m = /^flair-(.+)$/.exec(id))) return 'FLAIR ' + m[1];
+    if ((m = /^env-(.+)$/.exec(id))) return m[1] + ' (env)';
+    if ((m = /^ctr-(.+)$/.exec(id))) return m[1] + ' (container)';
+    return id;
+  }
   var bundles = DATA.bundles.map(function (b) {
     var o = Object.assign({}, b);
     o.key = b.sample + '/' + b.run_id;
-    o.label = b.label || b.run_id;
+    o.label = b.label && b.label !== b.run_id ? b.label : prettyId(b.run_id);
     return o;
   });
   var runOrder = DATA.runs.slice();
@@ -47,6 +55,28 @@
   function runIndex(id) { return runOrder.indexOf(id); }
   function runColor(id) { return SLOT(runIndex(id)); }
   function runLabel(id) { return runInfo[id] ? runInfo[id].label : id; }
+  // "3.0.1", or "3.0.0+dev @ 389748e" for git/env/container builds; long strings are cut.
+  function versionText(b, full) {
+    var f = b.flair || {}, v = f.version || '?';
+    if (!full && v.length > 18) v = v.slice(0, 17) + '…';
+    if (f.commit && f.source !== 'release') v += ' @ ' + String(f.commit).slice(0, 7);
+    return v;
+  }
+  // A21: how each run's quantify counted reads.
+  var QUANT_INPUT = { reads: 'from reads', bam: 'from the genome BAM' };
+  function quantInput(b) { return get(b, 'sections.quant.input') || null; }
+  function quantNote(list) {
+    var withQ = list.filter(function (b) { return get(b, 'sections.quant'); });
+    var kinds = uniq(withQ.map(function (b) { return quantInput(b) || 'unknown'; }));
+    var known = kinds.filter(function (k) { return k !== 'unknown'; });
+    if (known.length < 2 && !(known.length && kinds.length > 1)) return null;
+    var parts = kinds.map(function (k) {
+      var names = withQ.filter(function (b) { return (quantInput(b) || 'unknown') === k; }).map(function (b) { return b.label; });
+      return names.join(', ') + (k === 'unknown' ? ' (input not recorded)' : (names.length === 1 ? ' counts ' : ' count ') + QUANT_INPUT[k]);
+    });
+    return parts.join('; ') + '. Reads assigned and CPM depend on what FLAIR quantify counts, so compare these runs with care.';
+  }
+  function noteBox(text) { return text ? el('p', { class: 'callout', role: 'note' }, el('strong', { text: 'Not like for like. ' }), text) : null; }
 
   var state = {
     view: 'overview', sample: samples[0], baseline: DATA.baseline, hidden: {},
@@ -103,6 +133,11 @@
   function fmtInt(v) { return isNum(v) ? nf.format(Math.round(v)) : '—'; }
   function fmtPct(v, d) { return isNum(v) ? v.toFixed(d === undefined ? 1 : d) + '%' : '—'; }
   function fmtNum(v, d) { return isNum(v) ? v.toFixed(d === undefined ? 2 : d) : '—'; }
+  // CPU time in hours from the bundle; shown in CPU-minutes when every value is under an hour.
+  function cpuUnit(vals) { return vals.filter(isNum).every(function (v) { return v < 1; }) ? 'min' : 'h'; }
+  function fmtCpu(v, unit) { return !isNum(v) ? '—' : unit === 'min' ? (v * 60).toFixed(v * 60 >= 10 ? 0 : 1) + ' CPU-min' : v.toFixed(2) + ' CPU-h'; }
+  function fmtWall(v) { return !isNum(v) ? '—' : v >= 120 ? (v / 60).toFixed(1) + ' h' : v >= 10 ? v.toFixed(0) + ' min' : v.toFixed(1) + ' min'; }
+  function fmtMem(v) { return !isNum(v) ? '—' : v < 1 ? Math.round(v * 1024) + ' MB' : v.toFixed(v >= 10 ? 0 : 1) + ' GB'; }
   function fmtSmart(v) { return !isNum(v) ? '—' : Math.abs(v) >= 100 ? fmtInt(v) : Math.abs(v) >= 10 ? v.toFixed(1) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3); }
   function compact(v) {
     if (!isNum(v)) return '';
@@ -530,9 +565,9 @@
     { key: 'jaccard', label: 'Structures shared with baseline', sub: 'Jaccard index', kind: 'ratio', get: jaccardVsBase },
     { key: 'cpm_r', label: 'CPM agreement with baseline', sub: 'Pearson r, log CPM', kind: 'ratio', get: rVsBase },
     { key: 'pro', label: 'Productive (PRO)', sub: '% of isoforms', kind: 'pct', get: function (b) { return prodPct(b, 'PRO'); } },
-    { key: 'cpu', label: 'CPU hours', kind: 'num', get: function (b) { return get(b, 'compute.cpu_hours'); } },
-    { key: 'wall', label: 'Wall time', sub: 'minutes', kind: 'num', get: function (b) { return get(b, 'compute.wall_minutes'); } },
-    { key: 'rss', label: 'Peak memory', sub: 'GB', kind: 'num', get: function (b) { return get(b, 'compute.peak_rss_gb'); } }
+    { key: 'cpu', label: 'CPU time', sub: 'FLAIR tasks', kind: 'cpu', get: function (b) { return get(b, 'compute.cpu_hours'); } },
+    { key: 'wall', label: 'Wall time', kind: 'wall', get: function (b) { return get(b, 'compute.wall_minutes'); } },
+    { key: 'rss', label: 'Peak memory', kind: 'mem', get: function (b) { return get(b, 'compute.peak_rss_gb'); } }
   ];
   function M(key) { return METRICS.find(function (m) { return m.key === key; }); }
   function mval(m, b) { var v = m.get(b); return isNum(v) ? v : null; }
@@ -541,6 +576,9 @@
     if (m.kind === 'pct') return fmtPct(v);
     if (m.kind === 'ratio') return v.toFixed(2);
     if (m.kind === 'num') return fmtSmart(v);
+    if (m.kind === 'cpu') return fmtCpu(v, v < 1 ? 'min' : 'h');
+    if (m.kind === 'wall') return fmtWall(v);
+    if (m.kind === 'mem') return fmtMem(v);
     var out = fmtInt(v);
     if (withOf !== false && m.of && b) { var d = m.of(b); if (d) out += ' (' + fmtPct(pct(v, d), 0) + ')'; }
     return out;
@@ -551,6 +589,7 @@
     if (m.kind === 'pct') return sign + Math.abs(d).toFixed(1) + ' pp';
     if (m.kind === 'ratio') return sign + Math.abs(d).toFixed(2);
     if (m.kind === 'num') return sign + fmtSmart(Math.abs(d));
+    if (m.kind === 'cpu' || m.kind === 'wall' || m.kind === 'mem') return sign + fmtMetric(m, Math.abs(d));
     if (d === 0) return '±0';
     return sign + fmtInt(Math.abs(d)) + (bv ? ' (' + sign + Math.abs(100 * d / bv).toFixed(0) + '%)' : '');
   }
@@ -558,8 +597,17 @@
 
   // ------------------------------------------------------------------ filtering
   var versions = uniq(bundles.map(function (b) { return get(b, 'flair.version') || ''; }));
+  // A tag becomes a filter only when it groups runs: two or more values, at least one shared by
+  // several runs, and not just a copy of the FLAIR version or source.
   var tagKeys = uniq([].concat.apply([], bundles.map(function (b) { return Object.keys(b.tags || {}); }))).filter(function (k) {
-    return !(k === 'version' && bundles.every(function (b) { return !b.tags || b.tags.version === undefined || b.tags.version === get(b, 'flair.version'); }));
+    var byRun = {};
+    bundles.forEach(function (b) { if (b.tags && b.tags[k] !== undefined) byRun[b.run_id] = b.tags[k]; });
+    var vals = Object.keys(byRun).map(function (r) { return byRun[r]; });
+    var counts = {};
+    vals.forEach(function (v) { counts[v] = (counts[v] || 0) + 1; });
+    var groups = Object.keys(counts).length >= 2 && Object.keys(counts).some(function (v) { return counts[v] >= 2; });
+    var dup = (k === 'version' || k === 'source') && bundles.every(function (b) { return !b.tags || b.tags[k] === undefined || b.tags[k] === get(b, 'flair.' + k); });
+    return groups && !dup;
   });
   function passes(b) {
     if (state.filters.version && get(b, 'flair.version') !== state.filters.version) return false;
@@ -595,7 +643,7 @@
     bar.appendChild(el('div', { class: 'field' }, el('span', { class: 'label', text: 'Runs' }), chips));
     var more = el('div', { class: 'more' });
     if (runOrder.length > 1) more.appendChild(selectField('Baseline', state.baseline, runOrder.map(function (r) { return [r, runLabel(r)]; }), function (v) { state.baseline = v; render(); }));
-    if (versions.length > 1) more.appendChild(selectField('Version', state.filters.version, [['', 'All']].concat(versions.map(function (x) { return [x, x]; })), function (v) { state.filters.version = v; render(); }));
+    if (versions.length > 1 && versions.length < bundles.length) more.appendChild(selectField('FLAIR version', state.filters.version, [['', 'All']].concat(versions.map(function (x) { return [x, x.length > 18 ? x.slice(0, 17) + '…' : x]; })), function (v) { state.filters.version = v; render(); }));
     tagKeys.forEach(function (k) {
       var vals = uniq(bundles.map(function (b) { return (b.tags || {})[k] || ''; }));
       if (vals.length < 2) return;
@@ -634,9 +682,9 @@
       }
     }
     var rs = list.map(rVsBase).filter(isNum);
-    if (rs.length) items.push(['Expression', ['On isoforms shared with the baseline, CPM correlates at r = ' + Math.min.apply(null, rs).toFixed(2) + (rs.length > 1 ? '–' + Math.max.apply(null, rs).toFixed(2) : '') + ' (log scale).']]);
+    if (rs.length) items.push(['Expression', ['On isoforms shared with the baseline, CPM correlates at r = ' + Math.min.apply(null, rs).toFixed(2) + (rs.length > 1 ? '–' + Math.max.apply(null, rs).toFixed(2) : '') + ' (log scale).' + (quantNote(list) ? ' Quantification inputs differ between runs; see Expression.' : '')]]);
     e = ext(function (b) { return get(b, 'compute.cpu_hours'); });
-    if (e) items.push(['Cost', [runName(e.lo.b.run_id), ' used the least CPU time (' + fmtSmart(e.lo.v) + ' h); ', runName(e.hi.b.run_id), ' the most (' + fmtSmart(e.hi.v) + ' h).']]);
+    if (e) { var cu = cpuUnit([e.lo.v, e.hi.v]); items.push(['Cost', [runName(e.lo.b.run_id), ' used the least CPU time (' + fmtCpu(e.lo.v, cu) + '); ', runName(e.hi.b.run_id), ' the most (' + fmtCpu(e.hi.v, cu) + ').']]); }
     return items;
   }
 
@@ -662,9 +710,10 @@
     var rows = ['isoforms', 'fsm', 'novel', 'other', 'ref_cim', 'ref_genes', 'junc_known', 'jaccard', 'cpm_r', 'pro', 'cpu'].map(M)
       .filter(function (m) { return present(m, list); }).map(function (m) {
         var asShare = m.key === 'ref_cim';
+        var cu = cpuUnit(list.map(function (b) { return mval(m, b); }));
         return {
           label: m.label, sub: asShare ? '% of reference transcripts in scope' : m.sub,
-          fmt: function (v) { return asShare ? fmtPct(v) : fmtMetric(m, v, null, false); },
+          fmt: function (v) { return asShare ? fmtPct(v) : m.kind === 'cpu' ? fmtCpu(v, cu) : fmtMetric(m, v, null, false); },
           get: function (id) { var b = byId[id]; if (!b) return null; var v = mval(m, b); return asShare && isNum(v) ? pct(v, b.summary.ref_transcripts_total) : v; }
         };
       });
@@ -681,7 +730,7 @@
       var tr = el('tr', { class: 'clickable', tabindex: '0', title: 'Open ' + b.label, onclick: open, onkeydown: function (ev) { if (ev.key === 'Enter') open(); } });
       tr.appendChild(el('td', null, el('div', { class: 'runcell' }, swatch(runColor(b.run_id)),
         el('div', null, el('span', { class: 'name', text: b.label }), isBase ? el('span', { class: 'pill', text: 'baseline' }) : null,
-          el('span', { class: 'meta', text: 'FLAIR ' + (get(b, 'flair.version') || '?') + ' · ' + b.run_id })))));
+          el('span', { class: 'meta', text: 'FLAIR ' + versionText(b) + ' · ' + b.run_id, title: 'FLAIR ' + versionText(b, true) })))));
       keys.forEach(function (m) {
         var v = mval(m, b);
         tr.appendChild(el('td', null, fmtMetric(m, v, b), base && !isBase ? el('span', { class: 'delta', text: fmtDelta(m, v, mval(m, base)) }) : null));
@@ -849,7 +898,8 @@
         var mx = Math.max.apply(null, counts);
         var btn = el('button', { class: 'copy', type: 'button', text: 'Copy', 'aria-label': 'Copy ' + coord });
         btn.addEventListener('click', function () { copyText(coord, btn); });
-        return el('tr', null, el('td', { class: 'strong', text: (l.genes && l.genes.length ? l.genes.join(', ') : 'novel locus') }),
+        var gl = l.genes && l.genes.length ? l.genes.slice(0, 2).join(', ') + (l.genes.length > 2 ? ' +' + (l.genes.length - 2) : '') : 'novel locus';
+        return el('tr', null, el('td', { class: 'strong', text: gl, title: (l.genes || []).join(', ') }),
           el('td', { class: 'left' }, el('span', { class: 'mono', text: coord + ' ' + l.strand }), btn),
           el('td', { text: l.structures + ' (' + l.shared_by_all + ')' }),
           counts.map(function (c) { return el('td', { class: c === mx && mx > 0 ? 'strong' : null, text: fmtInt(c) }); }));
@@ -867,6 +917,8 @@
     var withQ = list.filter(function (b) { return get(b, 'sections.quant'); });
     root.appendChild(sectionHead('Expression', 'FLAIR quantify results. Runs are compared on the isoforms they share (same structure), with CPM summed per structure.'));
     if (!withQ.length && !quant) { root.appendChild(emptyCard('No quantification for these runs.')); return; }
+    var qn = quantNote(list);
+    if (qn) root.appendChild(noteBox(qn));
     var cards = [];
     if (withQ.length) {
       cards.push(card('Reads assigned', 'Reads that FLAIR quantify assigned to each run’s isoforms.', chartBox(function (box) {
@@ -874,10 +926,10 @@
           name: 'Reads assigned', series: [{ label: 'Reads', color: 'var(--series-other)' }], labelValues: true, labelW: 200, labelFrac: 0.4,
           groups: withQ.map(function (b) { return { label: b.label, b: b, values: [b.sections.quant.reads_assigned] }; }),
           colorOf: function (gi) { return runColor(withQ[gi].run_id); }, dotOf: function (gi) { return runColor(withQ[gi].run_id); },
-          fmt: function (v, g) { return fmtInt(v) + ' reads · ' + fmtInt(g.b.sections.quant.isoforms_quantified) + ' isoforms with reads'; },
+          fmt: function (v, g) { return fmtInt(v) + ' reads · ' + fmtInt(g.b.sections.quant.isoforms_quantified) + ' isoforms with reads' + (quantInput(g.b) ? ' · counted ' + QUANT_INPUT[quantInput(g.b)] : ''); },
           short: function (v) { return compact(v); }
         });
-      }), { table: { head: ['Run', 'Reads assigned', 'Isoforms with reads'], rows: withQ.map(function (b) { return [b.label, fmtInt(b.sections.quant.reads_assigned), fmtInt(b.sections.quant.isoforms_quantified)]; }) } }));
+      }), { table: { head: ['Run', 'Reads assigned', 'Isoforms with reads', 'Counted'], rows: withQ.map(function (b) { return [b.label, fmtInt(b.sections.quant.reads_assigned), fmtInt(b.sections.quant.isoforms_quantified), quantInput(b) ? QUANT_INPUT[quantInput(b)] : 'not recorded']; }) } }));
     }
     var qids = quant ? list.map(function (b) { return b.run_id; }).filter(function (id) { return quant.runs.indexOf(id) >= 0; }) : [];
     if (quant && qids.length >= 2) {
@@ -935,25 +987,39 @@
     if (!list.length) { root.appendChild(emptyCard('No compute records for these runs.')); return; }
     var cards = ['cpu', 'wall', 'rss'].map(M).filter(function (m) { return present(m, list); }).map(function (m) {
       var lw = list.filter(function (b) { return mval(m, b) !== null; });
-      return card(m.label + (m.sub ? ' (' + m.sub + ')' : ''), null, chartBox(function (box) {
+      var raw = lw.map(function (b) { return mval(m, b); });
+      // one display unit per chart
+      var u = m.kind === 'cpu' ? (cpuUnit(raw) === 'min' ? { f: 60, name: 'CPU-minutes' } : { f: 1, name: 'CPU-hours' })
+        : m.kind === 'wall' ? (Math.max.apply(null, raw) >= 120 ? { f: 1 / 60, name: 'hours' } : { f: 1, name: 'minutes' })
+          : (Math.max.apply(null, raw) < 1 ? { f: 1024, name: 'MB' } : { f: 1, name: 'GB' });
+      var show = function (v) { var x = v * u.f; return x >= 100 ? fmtInt(x) : x >= 10 ? x.toFixed(1) : x.toFixed(2); };
+      return card(m.label + ' (' + u.name + ')', null, chartBox(function (box) {
         hbars(box, {
           name: m.label, series: [{ label: m.label, color: 'var(--series-other)' }], labelValues: true, labelW: 190, labelFrac: 0.46,
-          groups: lw.map(function (b) { return { label: b.label, values: [mval(m, b)] }; }),
+          groups: lw.map(function (b) { return { label: b.label, values: [mval(m, b) * u.f] }; }),
           colorOf: function (gi) { return runColor(lw[gi].run_id); }, dotOf: function (gi) { return runColor(lw[gi].run_id); },
-          fmt: function (v) { return fmtSmart(v); }, tickFmt: function (t) { return String(+t.toFixed(3)); }
+          fmt: function (v) { return show(v / u.f) + ' ' + u.name; }, short: function (v) { return show(v / u.f); }, tickFmt: function (t) { return String(+t.toFixed(3)); }
         });
-      }), { table: { head: ['Run', m.label], rows: lw.map(function (b) { return [b.label, fmtSmart(mval(m, b))]; }) } });
+      }), { table: { head: ['Run', m.label + ' (' + u.name + ')'], rows: lw.map(function (b) { return [b.label, show(mval(m, b))]; }) } });
     });
     root.appendChild(grid(cards, 'three'));
   }
 
   // ------------------------------------------------------------------ Run detail
+  // Tags worth showing: those that do not just repeat the FLAIR version or source.
+  function extraTags(b) {
+    return Object.keys(b.tags || {}).filter(function (k) {
+      var v = b.tags[k];
+      return !((k === 'version' && v === get(b, 'flair.version')) || (k === 'source' && v === get(b, 'flair.source')));
+    });
+  }
   function tile(label, value, detail) {
     return el('div', { class: 'tile' }, el('div', { class: 'label', text: label }), el('div', { class: 'value', text: value }), detail ? el('div', { class: 'detail', text: detail }) : null);
   }
   function provenance(b) {
     var f = b.flair || {};
     var items = [['Sample', b.sample], ['Run id', b.run_id], ['FLAIR', (f.version || '?') + ' (' + f.source + ')'], ['Requested', f.requested || '—'],
+      ['Quantify input', get(b, 'sections.quant.input') ? QUANT_INPUT[b.sections.quant.input] + (get(b, 'sections.quant.input_inferred') ? ' (from the adapter log)' : '') : '—'],
       ['Commit', f.commit || '—'], ['Settings', get(b, 'inputs.transcriptome_args') || '—'], ['Reference', get(b, 'inputs.gtf') || '—'],
       ['Regions', get(b, 'inputs.regions') || 'whole genome'], ['Built', get(b, 'pipeline.created') || '—'],
       ['flair-eval', (get(b, 'pipeline.version') || '') + (get(b, 'pipeline.commit') ? ' @ ' + String(b.pipeline.commit).slice(0, 10) : '')]];
@@ -968,7 +1034,7 @@
     var picker = state.printing ? null : selectField('Run', b.key, list.map(function (x) { return [x.key, x.label]; }), function (v) { state.runKey = v; render(); });
     root.appendChild(el('div', { class: 'section-head' },
       el('div', null, el('h2', null, swatch(runColor(b.run_id)), ' ', b.label),
-        el('p', { class: 'dek', text: 'FLAIR ' + (get(b, 'flair.version') || '?') + ' · ' + b.run_id + ' on ' + b.sample + (Object.keys(b.tags || {}).length ? ' · ' + Object.keys(b.tags).map(function (k) { return k + ': ' + b.tags[k]; }).join(' · ') : '') })),
+        el('p', { class: 'dek', text: 'FLAIR ' + versionText(b, true) + ' · ' + b.run_id + ' on ' + b.sample + (extraTags(b).length ? ' · ' + extraTags(b).map(function (k) { return k + ': ' + b.tags[k]; }).join(' · ') : '') })),
       picker));
     var tiles = [tile('Isoforms', fmtInt(S.isoforms), fmtInt(S.mono_exon) + ' mono-exon'), tile('Genes', fmtInt(S.genes), fmtInt(S.loci) + ' loci'),
       tile('Ref. transcripts, FSM', fmtInt(S.ref_transcripts_fsm), 'of ' + fmtInt(S.ref_transcripts_total) + ' (' + fmtPct(pct(S.ref_transcripts_fsm, S.ref_transcripts_total)) + ')'),
@@ -976,8 +1042,8 @@
       tile('Ref. genes detected', fmtInt(S.ref_genes_detected), S.ref_genes_total ? 'of ' + fmtInt(S.ref_genes_total) : null)];
     var j = jaccardVsBase(b);
     if (isNum(j)) tiles.push(tile('Shared with baseline', j.toFixed(2), 'Jaccard of structures'));
-    if (get(b, 'sections.quant')) tiles.push(tile('Reads assigned', fmtInt(b.sections.quant.reads_assigned), fmtInt(b.sections.quant.isoforms_quantified) + ' isoforms with reads'));
-    if (isNum(get(b, 'compute.cpu_hours'))) tiles.push(tile('CPU hours', fmtSmart(b.compute.cpu_hours), isNum(get(b, 'compute.peak_rss_gb')) ? fmtSmart(b.compute.peak_rss_gb) + ' GB peak memory' : null));
+    if (get(b, 'sections.quant')) tiles.push(tile('Reads assigned', fmtInt(b.sections.quant.reads_assigned), fmtInt(b.sections.quant.isoforms_quantified) + ' isoforms with reads' + (quantInput(b) ? ', counted ' + QUANT_INPUT[quantInput(b)] : '')));
+    if (isNum(get(b, 'compute.cpu_hours'))) tiles.push(tile('CPU time', fmtCpu(b.compute.cpu_hours, cpuUnit([b.compute.cpu_hours])), [isNum(get(b, 'compute.wall_minutes')) ? fmtWall(b.compute.wall_minutes) + ' wall' : null, isNum(get(b, 'compute.peak_rss_gb')) ? fmtMem(b.compute.peak_rss_gb) + ' peak memory' : null].filter(Boolean).join(' · ') || null));
     root.appendChild(el('div', { class: 'tiles' }, tiles));
     root.appendChild(el('div', { style: 'height:20px' }));
 

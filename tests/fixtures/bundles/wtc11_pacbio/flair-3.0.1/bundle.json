@@ -2,6 +2,7 @@
  "schema": "flair-eval/bundle/1",
  "sample": "wtc11_pacbio",
  "run_id": "flair-3.0.1",
+ "run_index": 1,
  "label": "FLAIR 3.0.1",
  "tags": {
   "branch": "release",
@@ -220,7 +221,8 @@
      10,
      4
     ]
-   }
+   },
+   "input": "reads"
   },
   "productivity": {
    "class_counts": {

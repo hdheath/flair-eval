@@ -25,6 +25,15 @@ GRID_BINS = 20
 _DETECTING = {"FSM", "ISM", "NIC", "NNC", "fusion"}
 
 
+def gene_label(gene_id: str, names: Dict[str, str]) -> str:
+    """Gene name when known, else the id without its version suffix (ENSG00000141510.20 -> ENSG00000141510)."""
+    name = names.get(gene_id)
+    if name:
+        return name
+    head, dot, tail = gene_id.rpartition(".")
+    return head if dot and tail.isdigit() and head.startswith("ENS") else gene_id
+
+
 # ---------------------------------------------------------------- reading
 def read_header_tsv(path: str, required: Sequence[str]) -> List[Dict[str, str]]:
     """Rows of a TSV with one header line (CONTRACTS A10). Raises ValueError if columns miss."""
@@ -190,7 +199,7 @@ def concordance(runs: Sequence[RunModels], baseline: Optional[str],
                           "jaccard": round(inter / uni, 4) if uni else None})
 
     def label(g):
-        return gene_names.get(g) or g
+        return gene_label(g, gene_names)
 
     genes = None
     if baseline in sets:
@@ -253,7 +262,7 @@ def top_loci(runs: Sequence[RunModels], sid: Dict, gene_names: Dict[str, str],
         out.append({
             "chrom": locus[0].chrom, "start": min(u.start for u in locus),
             "end": max(u.end for u in locus), "strand": locus[0].strand,
-            "genes": [gene_names.get(g) or g for g in top_genes],
+            "genes": [gene_label(g, gene_names) for g in top_genes],
             "structures": len(allset), "shared_by_all": len(common),
             "counts": [counts[k] for k in ids],
             "_rank": (-divergent, -spread, -len(locus), locus[0].chrom, min(u.start for u in locus)),

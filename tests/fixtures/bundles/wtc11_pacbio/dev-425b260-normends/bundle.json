@@ -2,6 +2,7 @@
  "schema": "flair-eval/bundle/1",
  "sample": "wtc11_pacbio",
  "run_id": "dev-425b260-normends",
+ "run_index": 4,
  "label": "dev 425b260 --normalize_ends",
  "tags": {
   "branch": "dev",
@@ -220,7 +221,8 @@
      10,
      5
     ]
-   }
+   },
+   "input": "bam"
   },
   "productivity": {
    "class_counts": {
