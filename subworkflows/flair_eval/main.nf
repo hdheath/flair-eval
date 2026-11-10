@@ -74,8 +74,8 @@ workflow FLAIR_EVAL {
     // ---- jobs = samples x runs --------------------------------------------------------------
     def jobs = []
     samples.each { s ->
-        runs.each { r ->
-            jobs << [id: "${s.sample}/${r.id}".toString(), sample: s.sample, run_id: r.id, run: r, platform: s.platform, library: s.library]
+        runs.eachWithIndex { r, ri ->
+            jobs << [id: "${s.sample}/${r.id}".toString(), sample: s.sample, run_id: r.id, run_index: ri, run: r, platform: s.platform, library: s.library]
         }
     }
     def J = jobs.collectEntries { j -> [(j.id): j] }
@@ -215,6 +215,7 @@ def bundleInfo(Map j, Map s, List parts) {
     return [
         sample  : j.sample,
         run_id  : j.run_id,
+        run_index: j.run_index,
         label   : j.run.label,
         tags    : j.run.tags,
         inputs  : [
