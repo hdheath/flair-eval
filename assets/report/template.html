@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="flair-eval build_report.py">
+<title>__TITLE__</title>
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+<div id="app" class="viz-root">
+  <header class="top">
+    <div class="top-text">
+      <h1 id="title">__TITLE__</h1>
+      <p class="sub" id="subtitle"></p>
+    </div>
+    <button id="theme" class="btn ghost" type="button" title="Switch colour theme">Theme: auto</button>
+  </header>
+  <nav class="tabs" role="tablist" aria-label="Report views">
+    <button role="tab" type="button" data-view="overview">Overview</button>
+    <button role="tab" type="button" data-view="run">Single run</button>
+    <button role="tab" type="button" data-view="compare">Compare</button>
+    <button role="tab" type="button" data-view="help">How to read this</button>
+  </nav>
+  <section class="filters" id="filters" aria-label="Filters"></section>
+  <main id="view" tabindex="-1"></main>
+  <footer id="footer"></footer>
+</div>
+<div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+<noscript><p style="padding:16px">This report needs JavaScript to draw its tables and charts.</p></noscript>
+<script type="application/json" id="report-data">__DATA__</script>
+<script>
+/*__JS__*/
+</script>
+</body>
+</html>
