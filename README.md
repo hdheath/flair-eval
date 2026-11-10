@@ -90,9 +90,10 @@ nextflow run hdheath/flair-eval --report_only \
   --bundles 'old_results/bundles,other/bundles/*/flair-dev' --outdir combined
 ```
 
-`--baseline <run_id>` picks the run that differences are shown against (default: the first run
-in runs.yaml or `--flair` order); `--report_title` sets
-the heading. Output layout: [docs/output.md](docs/output.md).
+`--baseline <run_id>` picks the run that differences are shown against. By default it is the
+first run in runs.yaml or `--flair` order; with `--bundles` it is the first run of the earliest
+launch, so adding a run later keeps the old baseline. The report lets you switch it.
+`--report_title` sets the heading. Output layout: [docs/output.md](docs/output.md).
 
 ### Profiles
 

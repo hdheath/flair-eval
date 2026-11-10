@@ -119,7 +119,7 @@
                 },
                 "baseline": {
                     "type": "string",
-                    "description": "Run id that report differences are computed against (default: the first run).",
+                    "description": "Run id that report differences are computed against (default: the first run; with --bundles, the first run of the earliest launch).",
                     "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
                 },
                 "report_only": {

@@ -142,6 +142,26 @@ nextflow_pipeline {
             def html = path("$outputDir/report/report.html").text
             assert html.contains('prior/p1/prior_bundles')
             assert html.count('bundle.json') == 2
+            // A22: --bundles and no --baseline -> core passes no --baseline
+            assert !html.contains('--baseline')
+        }
+    }
+
+    test("A22: --bundles with an explicit --baseline still passes it") {
+        when {
+            params {
+                reads    = "${projectDir}/tests/nf-test/inputs/sampleA.fastq"
+                genome   = "${projectDir}/tests/nf-test/inputs/genome.fa"
+                gtf      = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                flair    = "3.0.1"
+                bundles  = "${projectDir}/tests/nf-test/inputs/prior_bundles"
+                baseline = "flair-old"
+                outdir   = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            assert path("$outputDir/report/report.html").text.contains('--baseline flair-old')
         }
     }
 

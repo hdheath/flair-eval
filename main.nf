@@ -53,8 +53,10 @@ workflow {
             if (params.baseline && !(params.baseline in runIds) && !prior) {
                 log.warn("--baseline '${params.baseline}' is not one of this launch's runs (${runIds.join(', ')}) and no --bundles were given; the report will fall back to its default baseline.")
             }
-            // A5: the default baseline is the first run, and core always passes it.
-            baseline = baseline ?: runIds[0]
+            // A5: without --bundles the default baseline is this launch's first run.
+            // A22: with --bundles and no --baseline, pass none; build_report.py picks the first
+            // run of the earliest launch.
+            baseline = baseline ?: (prior ? '' : runIds[0])
             // build_report.py orders runs as first seen, so hand it bundles in run order.
             def runIndex = runIds.withIndex().collectEntries { rid, i -> [(rid): i] }
             FLAIR_EVAL(inputs.samples, inputs.runs)
