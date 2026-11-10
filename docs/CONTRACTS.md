@@ -14,6 +14,10 @@ Design rationale is in [DESIGN.md](DESIGN.md).
 | **frontend** | `frontend/builder/` (static config-builder page), `cli/` (pip package `flair-eval`), `docs/usage_cli.md` |
 | **shared, edit here only** | `docs/CONTRACTS.md`, `assets/schema/*.json` |
 
+Placeholder stubs with the contract CLIs exist for `bin/flair_env.py`, `bin/flair_adapter.py`,
+`bin/structure_metrics.py`, `bin/build_report.py` and `modules/flair_env/main.nf`. The owning stream
+replaces them. Core may rely on their stub blocks / `--help` only.
+
 `legacy/` holds the old multi-assembler pipeline. Read it, port from it, and never edit it.
 Reusable pieces: `legacy/bin/evaluation/flair_structural.py` (SQANTI-style classifier) and
 `legacy/bin/evaluation/ted_end_precision.py` (later end-accuracy section).
@@ -79,6 +83,7 @@ and the quick sample flags are mutually exclusive, and so are `--runs` and `--fl
 | `align_flair` | `"3.0.1"` | FLAIR release used for the shared align step |
 | `regions` | null | optional BED to restrict assembly/eval (test profile uses it) |
 | `report_title` | `"FLAIR comparison"` | report heading |
+| `env_cache` | `"${launchDir}/flair-env-cache"` | where FLAIR envs are built/cached (PRISM: set on groups storage) |
 
 ## 2. FLAIR environment + adapter CLIs (adapter stream implements; core calls)
 **`modules/flair_env/main.nf`** (adapter owns it) exports process `FLAIR_ENV`.
@@ -93,7 +98,7 @@ and the quick sample flags are mutually exclusive, and so are `--runs` and `--fl
  "python":"3.x.y","pip_freeze_sha256":"…","created":"ISO-8601"}
 ```
 Core runs FLAIR tasks inside that env: `conda_prefix` via the `conda` directive, or `container`.
-envs are cached under `params.env_cache` (default `${workDir}/../flair-env-cache`) and keyed by
+envs are cached under `params.env_cache` and keyed by
 `release` / `resolved_commit` / path. If the same key is requested twice, it is built once.
 
 **`bin/flair_adapter.py`** runs *inside* the FLAIR env and is the only thing that calls `flair`:
