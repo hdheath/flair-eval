@@ -44,3 +44,9 @@ analysis/
 
 # Claude Code personal/local settings (machine-specific paths, not for the team)
 .claude/settings.local.json
+# Test datasets are tracked (overrides data/ above)
+!tests/data/
+!tests/data/**
+.nf-test/
+.claude/
+.nf-test-*.nf

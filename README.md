@@ -31,7 +31,7 @@ nextflow run hdheath/flair-eval -profile local,conda \
 | `env:/abs/path` | an existing conda env | `env-<basename>` |
 | `container:<uri>` | a Docker/Singularity image | `ctr-<name>` |
 
-Add `--flair_args "--stringent"` to pass extra arguments to every run's transcriptome step.
+Add `--flair_args='--stringent'` (with `=`; the space form is mis-parsed by Nextflow) to pass extra arguments to every run's transcriptome step.
 Use `--bam sorted.bam` (with its `.bai`) instead of `--reads` to skip alignment, and
 `--sample`, `--platform pacbio|ont`, `--library cDNA|dRNA` to describe the sample.
 

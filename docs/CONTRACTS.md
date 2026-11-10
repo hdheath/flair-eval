@@ -7,16 +7,16 @@ Design rationale is in [DESIGN.md](DESIGN.md).
 ## 0. Ownership (who writes which files)
 | Stream | Owns |
 |---|---|
-| **core** | `main.nf`, `nextflow.config`, `conf/`, `nextflow_schema.json`, `modules/**` except `modules/flair_env/`, `subworkflows/**`, `tests/nf-test/` |
+| **core** | `main.nf`, `nextflow.config`, `conf/`, `nextflow_schema.json`, `modules/**` except `modules/flair_env/`, `subworkflows/**`, `tests/nf-test/`, `docs/output.md`, `README.md` "Usage" section, `.github/workflows/ci.yml` |
 | **report** | `bin/structure_metrics.py`, `bin/build_report.py`, `bin/flair_eval_lib/` (shared Python), `assets/report/`, `tests/python/test_structure_metrics.py`, `tests/python/test_report*.py`, `tests/fixtures/bundles/` |
 | **adapter** | `bin/flair_adapter.py`, `bin/flair_env.py`, `modules/flair_env/`, `tests/python/test_flair_adapter*.py`, `tests/python/test_flair_env*.py`, `docs/flair_versions.md` |
 | **testdata** | `tests/data/**`, `bin/fetch_test_data.sh`, `docs/test_data.md` |
-| **frontend** | `frontend/builder/` (static config-builder page), `cli/` (pip package `flair-eval`), `docs/usage_cli.md` |
-| **shared, edit here only** | `docs/CONTRACTS.md`, `assets/schema/*.json` |
+| **frontend** | `frontend/builder/` (static config-builder page), `cli/` (pip package `flair-eval`), `docs/usage_cli.md`, `.github/workflows/pages.yml` |
+| **integration (parent session, on `v2`)** | `docs/CONTRACTS.md`, `assets/schema/*.json`, `.gitignore`, `docs/DESIGN.md`, `CLAUDE.md`, merges |
 
-Placeholder stubs with the contract CLIs exist for `bin/flair_env.py`, `bin/flair_adapter.py`,
-`bin/structure_metrics.py`, `bin/build_report.py` and `modules/flair_env/main.nf`. The owning stream
-replaces them. Core may rely on their stub blocks / `--help` only.
+The placeholders are gone: the core, adapter, report and frontend branches were merged into `v2` on
+2026-11-09. Before starting new work, merge `v2` into your stream branch. **§7 (Amendments) overrides
+any earlier section it touches.**
 
 `legacy/` holds the old multi-assembler pipeline. Read it, port from it, and never edit it.
 Reusable pieces: `legacy/bin/evaluation/flair_structural.py` (SQANTI-style classifier) and
@@ -194,3 +194,53 @@ writes `bundle.json` + `tables/*`. RUN.json is the run map as JSON. The core str
   because it runs inside arbitrary FLAIR envs.
 - Every bin script has `--help`, exits non-zero on bad input, and is covered by pytest.
 - Commit to your own stream branch (`v2-<stream>`). Never push or merge unless the user says to.
+
+## 7. Amendments — round 1 (2026-11-09, after the first merge)
+These settle the gaps the streams reported. Each item is tagged with the stream(s) that act on it.
+
+**Inputs and run ids**
+- A1 [core, frontend] **`--flair` token rules.** `cli/src/flair_eval/tokens.py` is the reference, and core's Groovy parser must match it exactly:
+  - A bare token is a release only if it starts with a digit. `dev` and `main` mean git refs. Any other bare word is an error that suggests `git:<ref>`.
+  - In `git:<url>@<ref>`, the URL is everything before the *last* `@`.
+  - In ids, any character outside `[A-Za-z0-9._-]` becomes `-` (`git:feature/x` gives `flair-feature-x`).
+  - Container ids drop the `:tag` and `@digest`. A local `.sif` gives `ctr-<basename>` (e.g. `ctr-flair.sif`).
+- A2 [core, frontend] **Duplicate run ids** (from tokens or from runs.yaml) are an error. The message names both sources and tells the user to switch to runs.yaml with explicit ids.
+- A3 [core, testdata, frontend] **Relative paths in samples.csv** are resolved against the CSV's directory first, then the launch directory.
+- A4 [core, frontend, all docs] **Quote `--flair_args` with `=`:** `--flair_args='--stringent'`. Nextflow mis-parses the space form `--flair_args "--stringent"` (it sets `flair_args=true` plus a stray param). Docs and examples must use the `=` form. Core should also fail when `flair_args` is the Boolean `true`, explaining how to quote it.
+- A5 [core] **Default baseline:** the first run in runs.yaml / `--flair` order. Core always passes `--baseline`. `build_report.py` falls back to name order only when no baseline is given (report-only mode over old bundles).
+
+**Adapter CLI (§2)**
+- A6 [core, adapter] **`assemble --reads` is optional.** A BAM-only sample skips QUANTIFY unless the version can quantify from the BAM (see A7).
+- A7 [core, adapter] **`quantify` gains optional `--bam B --genome G --isoforms-bed I`.** Core always passes the ones it has. The adapter picks what the version needs and writes `skipped.json` if a required one is missing.
+- A8 [core, adapter] **`assemble` may also write `isoforms.flair.bed`** (FLAIR's native BED, all columns). Core declares it as an optional output and stages it into QUANTIFY / PRODUCTIVITY. The adapter takes it via an optional `--flair-bed` flag rather than finding it through symlinks.
+- A9 [core, adapter] **All adapter commands accept optional `--platform` and `--library`.** The adapter records them in `adapter_log.json` and may map them to version flags, documenting each mapping in `docs/flair_versions.md`.
+- A10 [adapter, report] **`counts.tsv`, `productivity.tsv` and `read_map.tsv` have one header line,** with the column names in §2.
+- A11 [core, adapter] **`FLAIR_ENV`** gets `{id, flair}` from the first run that uses each source; `run_id` in `flair_env.json` is that env key's id. It has label `flair_env`, runs on the host or base env (never inside a FLAIR env), and needs network, git and mamba/conda. Its stub must write `source` as one of `release|git|env|container`, taken from the run's `flair` key; `stub` is not allowed.
+
+**Bundle (§3)**
+- A12 [core, report] **Who writes what in `bundle.json`.** `structure_metrics.py` writes the structural fields. Core's BUNDLE step fills `pipeline`, `inputs` and `compute`. `compute` counts only this job's FLAIR tasks (assemble, quantify, productivity), not the shared align or the evaluation step.
+- A13 [core, report] **`structure_metrics.py` gains optional `--genome G --reads R --bam B`.** Core always passes the genome. Without the genome, `junctions.motif_checked = false` and novel junctions are reported only as `junctions.novel`.
+- A14 [report] **New optional keys in the bundle schema:** `summary.ref_genes_total`, `junctions.novel`, `junctions.motif_checked`.
+- A15 [core] **Provenance:**
+  - An adapter `skipped.json` is stored as `provenance/adapter_<step>_skipped.json`.
+  - `provenance/trace.tsv` holds the Nextflow trace rows for this job's tasks, with columns `task_id name status exit realtime %cpu peak_rss rss duration`.
+
+**Report sections (round 2, see §8)**
+- A16 [report] Sections listed in `sections` follow §8. The report must keep working with bundles that don't have them.
+
+**Repo housekeeping (done on `v2` by integration)**
+- `.gitignore` has a `!tests/data/` exception, and the stale tracked legacy `.nf-test/` folder has been removed.
+- `-entry REPORT` from DESIGN.md is replaced by `--report_only`.
+- `nf-test` config stays at `tests/nf-test/nf-test.config`.
+
+## 8. Round-2 report sections (`sections.<name>` in bundle.json)
+Each section is optional and has its own panel. It is computed only when its inputs exist.
+- `sections.concordance`: computed by the report from run pairs over a sample's bundles, not stored per bundle.
+  `build_report.py` reads `isoforms.bed` beside each `bundle.json` for this. It covers:
+  - shared / unique isoforms, matched by intron chain (mono-exon matched by overlap ≥50% on the same strand);
+  - Jaccard;
+  - genes gained or lost relative to the baseline;
+  - the top 20 loci where runs differ most (gene, coordinates, counts per run), shown as a table with copyable coordinates.
+- `sections.quant`: added by core from `counts.tsv`. It holds `{"isoforms_quantified", "reads_assigned", "cpm_hist": {edges, counts}}`. The report shows CPM correlation between runs that share a sample by reading `counts.tsv` beside the bundle.
+- `sections.productivity`: added by core from `productivity.tsv`. It holds `{"class_counts": {class: n}}`.
+- `sections.compute`: the report shows the existing `compute` block as a runtime panel (CPU-h, peak RSS, wall time per run). It needs no new key.

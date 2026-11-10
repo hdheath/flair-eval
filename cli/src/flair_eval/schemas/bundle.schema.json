@@ -140,6 +140,10 @@
         "ref_genes_detected": {
           "type": "integer",
           "minimum": 0
+        },
+        "ref_genes_total": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -246,6 +250,13 @@
         "novel_noncanonical": {
           "type": "integer",
           "minimum": 0
+        },
+        "novel": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "motif_checked": {
+          "type": "boolean"
         }
       }
     },
