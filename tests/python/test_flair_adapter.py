@@ -61,7 +61,7 @@ HELP = {
  ("v2", "collapse"): "usage: flair collapse -g genome.fa -q <query.bed> -r <reads.fq> [options]\n\n"
      "  -f GTF, --gtf GTF\n  --generate_map\n  --temp_dir TEMP_DIR\n  -t T, --threads T\n  --stringent\n\n"
      "required named arguments:\n  -q QUERY, --query QUERY\n  -g GENOME, --genome GENOME\n  -r READS, --reads READS\n",
- ("v2", "correct"): "usage: flair correct -q query.bed12 -g genome.fa [options]\n\n  -f GTF, --gtf GTF\n"
+ ("v2", "correct"): "usage: flair correct -q query.bed12 -g genome.fa [options]\n\n  -f GTF, --gtf GTF\n  --nvrna\n"
      "  -t T, --threads T\n\nrequired named arguments:\n  -q QUERY, --query QUERY\n  -g GENOME, --genome GENOME\n",
  ("v301", "transcriptome"): "usage: transcriptome [-h] [-b GENOMEALIGNEDBAM] [-g GENOME] [-o OUTPUT]\n"
      "                     [-t THREADS] [-f GTF] [--stringent] [--parallelmode PARALLELMODE]\n\n"
@@ -73,7 +73,7 @@ HELP = {
      "  --sample_name SAMPLE_NAME\n",
  ("dev", "transcriptome"): "usage: flair transcriptome [-h] -b GENOME_ALIGNED_BAM -g GENOME --sample_name\n"
      "                           SAMPLE_NAME [-o OUTPUT] [-f ANNOT_GTF] [--parallel_mode PARALLEL_MODE]\n"
-     "                           [--temp_dir TEMP_DIR] [--generate_map] [--no_stringent]\n\n"
+     "                           [--temp_dir TEMP_DIR] [--generate_map] [--no_stringent] [--directRNA]\n\n"
      "required named arguments:\n  -b GENOME_ALIGNED_BAM, --genome_aligned_bam GENOME_ALIGNED_BAM\n"
      "  -g GENOME, --genome GENOME\n  --sample_name SAMPLE_NAME\n",
  ("dev", "quantify"): "usage: flair quantify [-h] --manifest MANIFEST -g GENOME --isoform_bed\n"
@@ -89,6 +89,8 @@ if "--help" in argv:
             text = ("usage: flair quantify -r reads_manifest.tsv -i isoforms.fa [options]\n\n"
                     "  --temp_dir TEMP_DIR\n  --isoform_bed ISOFORMS\n\nrequired named arguments:\n"
                     "  -r R, --reads_manifest R\n  -i I, --isoforms I\n")
+        elif sub == "align":
+            text = "usage: flair_align -g genome.fa -r reads [options]\n\n  --nvrna\n  -t T, --threads T\n"
         else:
             text = "usage: flair %s [options]\n" % sub
     print(text); sys.exit(0)
@@ -207,6 +209,9 @@ import shutil, sys
 a = sys.argv[1:]
 if a[0] == "index":
     open(a[1] + ".bai", "w").close()
+elif a[0] == "fastq":
+    for name in open(a[-1]).read().split():
+        print("@%s\nACGT\n+\nIIII" % name)
 elif a[0] == "view" and "-b" in a:
     shutil.copyfile(a[-1], a[a.index("-o") + 1])
 elif a[0] == "view":
@@ -416,12 +421,29 @@ def test_assemble_v2_uses_correct_collapse(fake):
     assert labels[:3] == ["bam2Bed12", "flair_correct", "flair_collapse"]
 
 
-def test_assemble_v2_needs_reads(fake):
+def test_assemble_v2_without_reads_extracts_them_from_bam(fake):
+    """A6: --reads is optional; 2.x collapse then gets the BAM's primary reads."""
     run = fake("v2")
     i = run.inputs
-    p = run("assemble", "--bam", i / "shared.bam", "--genome", i / "genome.fa", "--gtf", i / "annot.gtf",
-            "--out", run.tmp / "asm")
-    assert p.returncode == 2 and "--reads" in p.stderr
+    out = run.tmp / "asm"
+    run("assemble", "--bam", i / "shared.bam", "--genome", i / "genome.fa", "--gtf", i / "annot.gtf",
+        "--out", out, check=0)
+    check_assembly(out)
+    col = [c for c in run.calls() if c[0] == "collapse"][0]
+    assert col[col.index("-r") + 1].endswith("reads_from_bam.fq")
+    log = json.load(open(out / "adapter_log.json"))
+    fq = [c for c in log["commands"] if c["label"] == "samtools_fastq"][0]
+    assert fq["argv"][1:4] == ["fastq", "-F", "0x904"]
+    assert any("extracted from the BAM" in n for n in log["notes"])
+
+
+def test_assemble_v301_without_reads(fake):
+    run = fake("v301")
+    i = run.inputs
+    out = run.tmp / "asm"
+    run("assemble", "--bam", i / "shared.bam", "--genome", i / "genome.fa", "--gtf", i / "annot.gtf",
+        "--out", out, check=0)
+    check_assembly(out)
 
 
 def test_assemble_v2_regions_subsets_reads(fake):
@@ -523,18 +545,117 @@ def test_quantify_dev_needs_bam(fake):
     assert not (out2 / "skipped.json").exists()
 
 
-def test_quantify_finds_native_bed_behind_symlink(fake):
-    """Nextflow stages inputs as symlinks; the native BED is found next to the link target."""
+def test_quantify_flair_bed_flag(fake):
+    """A8: FLAIR's own BED comes through --flair-bed; staging symlinks are not followed."""
     run = fake("ted")
     asm = run.tmp / "asm"
     assemble(run, asm, check=0)
     stage = run.tmp / "stage"
     stage.mkdir()
     os.symlink(str(asm / "isoforms.fa"), str(stage / "isoforms.fa"))
+    os.symlink(str(asm / "isoforms.flair.bed"), str(stage / "native.bed"))
     out = run.tmp / "q"
     run("quantify", "--isoforms-fa", stage / "isoforms.fa", "--reads", run.inputs / "reads.fa",
         "--sample", "s", "--out", out, check=0)
-    assert (out / "counts.tsv").exists()
+    assert "--flair-bed" in json.load(open(out / "skipped.json"))["reason"]
+    out2 = run.tmp / "q2"
+    run("quantify", "--isoforms-fa", stage / "isoforms.fa", "--reads", run.inputs / "reads.fa",
+        "--sample", "s", "--flair-bed", stage / "native.bed", "--out", out2, check=0)
+    assert (out2 / "counts.tsv").exists()
+    q = [c for c in run.calls() if c[0] == "quantify"][-1]
+    assert q[q.index("--isoform_bed") + 1].endswith("native.bed")
+    p = run("quantify", "--isoforms-fa", stage / "isoforms.fa", "--reads", run.inputs / "reads.fa",
+            "--sample", "s", "--flair-bed", run.tmp / "nope.bed", "--out", run.tmp / "q3")
+    assert p.returncode == 2 and "--flair-bed" in p.stderr and "not found" in p.stderr
+
+
+def test_quantify_bam_only_sample_skips_reads_versions(fake):
+    """A6/A7: without reads, a version that quantifies from reads writes skipped.json."""
+    run = fake("v301")
+    asm = run.tmp / "asm"
+    assemble(run, asm, check=0)
+    out = run.tmp / "q"
+    run("quantify", "--isoforms-fa", asm / "isoforms.fa", "--sample", "s", "--bam", run.inputs / "shared.bam",
+        "--genome", run.inputs / "genome.fa", "--isoforms-bed", asm / "isoforms.bed", "--out", out, check=0)
+    assert "BAM-only" in json.load(open(out / "skipped.json"))["reason"]
+
+
+def test_quantify_dev_from_bam_without_reads(fake):
+    """A7: dev counts from the BAM, so a BAM-only sample still gets counts."""
+    run = fake("dev")
+    asm = run.tmp / "asm"
+    assemble(run, asm, check=0)
+    out = run.tmp / "q"
+    run("quantify", "--isoforms-fa", asm / "isoforms.fa", "--sample", "s", "--bam", run.inputs / "shared.bam",
+        "--genome", run.inputs / "genome.fa", "--isoforms-bed", asm / "isoforms.bed",
+        "--flair-bed", asm / "isoforms.flair.bed", "--out", out, "--keep-work", check=0)
+    assert len(read_tsv(out / "counts.tsv")) == 4
+    q = [c for c in run.calls() if c[0] == "quantify"][-1]
+    man = open(q[q.index("--manifest") + 1]).read().split("\t")
+    assert man[3].strip().endswith("shared.bam")
+
+
+@pytest.mark.parametrize("gen,command,flag", [("v301", "align", "--nvrna"), ("v2", "correct", "--nvrna"),
+                                              ("dev", "transcriptome", "--directRNA")])
+def test_library_drna_flags(fake, gen, command, flag):
+    run = fake(gen)
+    out = run.tmp / "o"
+    i = run.inputs
+    if command == "align":
+        run("align", "--reads", i / "reads.fa", "--genome", i / "genome.fa", "--library", "drna",
+            "--platform", "ONT", "--out", out, check=0)
+    else:
+        assemble(run, out, "--library", "dRNA", "--platform", "ont", check=0)
+    call = [c for c in run.calls() if c[0] == command][0]
+    assert flag in call
+    log = json.load(open(out / "adapter_log.json"))
+    assert log["inputs"]["library"] == "dRNA" and log["inputs"]["platform"] == "ont"
+    assert log["library_flags"] == [{"command": command, "flag": flag, "library": "dRNA"}]
+
+
+def test_library_cdna_and_unmapped_versions_add_nothing(fake):
+    run = fake("v301")
+    out = run.tmp / "o"
+    assemble(run, out, "--library", "dRNA", check=0)      # 3.0.1 transcriptome has no dRNA flag
+    tx = [c for c in run.calls() if c[0] == "transcriptome"][0]
+    assert "--directRNA" not in tx and "--nvrna" not in tx
+    log = json.load(open(out / "adapter_log.json"))
+    assert "library_flags" not in log and any("--directRNA" in n for n in log["notes"])
+    run2 = fake("dev")
+    assemble(run2, run.tmp / "o2", "--library", "cDNA", check=0)
+    assert "--directRNA" not in [c for c in run2.calls() if c[0] == "transcriptome"][0]
+
+
+def test_bad_library_value(fake):
+    run = fake("v301")
+    p = assemble(run, run.tmp / "o", "--library", "polyA")
+    assert p.returncode == 2 and "cDNA|dRNA" in p.stderr
+
+
+def test_failure_message_names_command_and_log(fake):
+    run = fake("v301", fail="transcriptome")
+    out = run.tmp / "asm"
+    p = assemble(run, out)
+    assert p.returncode == 3
+    err = p.stderr
+    assert "the assemble step failed (FLAIR 3.0.1)" in err
+    assert "What failed: `flair transcriptome` exited with code 3" in err
+    assert "Command:" in err and " transcriptome -b " in err
+    assert "Log:         %s" % (out / "logs" / "01_flair_transcriptome.log") in err
+    assert "| Traceback: fake failure in transcriptome" in err
+    log = json.load(open(out / "adapter_log.json"))
+    assert log["failed_command"]["exit_code"] == 3
+
+
+def test_missing_output_message(fake, tmp_path):
+    run = fake("v301")
+    b = tmp_path / "env_v301" / "bin"
+    write_exe(str(b / "flair"), FAKE_FLAIR.replace('if sub in ("transcriptome", "collapse"):',
+                                                   'if sub == "transcriptome": sys.exit(0)\nif sub == "collapse":', 1))
+    p = assemble(run, tmp_path / "asm")
+    assert p.returncode == 1
+    assert "`flair transcriptome` finished without error but FLAIR wrote no isoform BED" in p.stderr
+    assert "Log:" in p.stderr
 
 
 @pytest.mark.parametrize("gen,method", [("v2", "predictProductivity"), ("v301", "predictProductivity"),
@@ -555,6 +676,23 @@ def test_productivity(fake, gen, method):
     if method == "predictProductivity":
         pp = [c for c in log["commands"] if c["label"] == "predictProductivity"][0]
         assert "--append_column" in pp["argv"] and "--longestORF" in pp["argv"]
+
+
+def test_productivity_dev_flair_bed_flag(fake):
+    run = fake("dev")
+    asm = run.tmp / "asm"
+    assemble(run, asm, check=0)
+    other = run.tmp / "elsewhere"
+    other.mkdir()
+    (other / "isoforms.bed").write_text(open(asm / "isoforms.bed").read())
+    out = run.tmp / "p"
+    run("productivity", "--isoforms-bed", other / "isoforms.bed", "--genome", run.inputs / "genome.fa",
+        "--gtf", run.inputs / "annot.gtf", "--out", out, check=0)
+    assert (out / "skipped.json").exists()        # dev has no predictProductivity and no native BED given
+    out2 = run.tmp / "p2"
+    run("productivity", "--isoforms-bed", other / "isoforms.bed", "--genome", run.inputs / "genome.fa",
+        "--gtf", run.inputs / "annot.gtf", "--flair-bed", asm / "isoforms.flair.bed", "--out", out2, check=0)
+    assert json.load(open(out2 / "adapter_log.json"))["outputs"]["method"] == "inline"
 
 
 def test_productivity_skipped_without_any_source(fake):

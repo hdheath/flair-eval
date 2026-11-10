@@ -71,8 +71,15 @@ unless a run sets `transcriptome_args`, so these differences are part of what a 
   else `novel_gene_<n>`. `adapter_log.json` counts each source (`outputs.gene_id_sources`).
 - `isoforms.fa`: FLAIR's FASTA, headers cut at the first space, one record per BED isoform, in BED order.
 - `read_map.tsv`: long format with header `read_id	isoform_id`, from whichever read map the version wrote.
-- `isoforms.flair.bed`: FLAIR's own BED, verbatim (all columns). dev quantify and the inline
-  productivity read it. `native/` keeps FLAIR's GTF and counts file for provenance.
+- `isoforms.flair.bed` (CONTRACTS A8): FLAIR's own BED, verbatim (all columns). Core passes it to
+  `quantify` and `productivity` as `--flair-bed`; dev/TED quantify and the inline productivity read
+  it. `native/` keeps FLAIR's GTF and counts file for provenance.
+- Every TSV the adapter writes (`counts.tsv`, `productivity.tsv`, `read_map.tsv`) has exactly one
+  header line with the CONTRACTS §2 column names (A10).
+- **BAM-only samples** (A6, no `--reads`): 3.0.1, TED and dev assemble from the BAM alone. 2.x
+  `collapse` needs reads, so the adapter extracts the BAM's primary alignments with
+  `samtools fastq -F 0x904` and notes it in `adapter_log.json`. Those reads have passed the shared
+  align step's filters, unlike a raw reads file.
 - `--regions BED`: the BAM is cut with `samtools view -L` (reads overlapping the regions) before
   FLAIR sees it; for 2.2.0 the raw reads given to `collapse` are cut to the reads in that BAM.
 
@@ -93,12 +100,18 @@ The adapter writes a fixed manifest `s1 c1 b1 <reads|bam>` (the real sample name
 `cpm = count / Σcount × 10^6` itself. `counts.tsv` has the header `isoform_id count cpm`, one row
 per `isoforms.fa` record in FASTA order. FLAIR's own table is kept as `flair.counts.tsv`.
 
-**dev needs more than the contract passes.** The contract `quantify` call gives the isoform FASTA
-and reads; dev quantify counts from the genome BAM. The adapter accepts optional
-`--bam B --genome G --isoforms-bed I`; it finds FLAIR's own BED as `isoforms.flair.bed` next to
-`--isoforms-bed` or `--isoforms-fa` (also behind Nextflow's staging symlinks). Without `--bam` and
-`--genome`, dev quantify writes `skipped.json`. TED quantify needs FLAIR's BED too and finds it the
-same way.
+**What each version needs (A7).** Core passes everything it has: `--isoforms-fa`, `--reads`
+(unless the sample is BAM-only), `--bam`, `--genome`, `--isoforms-bed`, `--flair-bed`. The adapter
+uses what the version needs and writes `skipped.json` naming what is missing:
+
+| | 2.2.0 / 3.0.1 | TED | dev |
+|---|---|---|---|
+| needs | `--reads` | `--reads` + `--flair-bed` | `--bam` + `--genome` + `--flair-bed` |
+| BAM-only sample | skipped | skipped | **counted** |
+
+FLAIR's own BED is taken from `--flair-bed`; when that flag is absent, from `--isoforms-bed` if it
+has FLAIR's extra columns, or from `isoforms.flair.bed` in the same directory as `--isoforms-bed` /
+`--isoforms-fa` (e.g. when a whole `assemble/` directory is staged). Staging symlinks are not followed.
 
 ## 4. `productivity`
 
@@ -107,7 +120,7 @@ same way.
 | source used | `predictProductivity` | `predictProductivity` | inline (BED col 18) | inline (BED col 18) |
 | standalone CLI | `-i -g -f -o [--append_column] (--firstTIS \| --longestORF)` | same | `-i -g -f -o [--is_flair_bed]` (no `--append_column`) | none |
 
-The adapter prefers the version's inline call (column 18 of `isoforms.flair.bed`, PRO/PTC/NST/NGO,
+The adapter prefers the version's inline call (column 18 of `--flair-bed`, PRO/PTC/NST/NGO,
 CDS in thickStart/thickEnd). That is what `flair transcriptome` itself reported. Otherwise it runs
 `predictProductivity --append_column --longestORF`, the same ORF mode FLAIR's own pipeline uses
 (`transcriptome --predictCDS`, 2.x `collapse`). The input BED is copied to a plain name first,
@@ -115,7 +128,23 @@ because TED's script splits paths on the first `.bed`. Output `productivity.tsv`
 `isoform_id cds_start cds_end class`, 0-based genomic thick coordinates, `NA` when FLAIR gave no
 call. `adapter_log.json` records `outputs.method` (`inline` or `predictProductivity`).
 
-## 5. `align`
+## 5. `--platform` and `--library` (A9)
+Every adapter command accepts `--platform pacbio|ont` and `--library cDNA|dRNA` (case-insensitive)
+and records them under `inputs` in `adapter_log.json`. A flag is added only where a version's own
+`--help` ties it to the library type, and only if `--args` does not already set it. Each flag
+added is listed under `library_flags` in `adapter_log.json`.
+
+| `--library dRNA` adds | 2.2.0 | 3.0.1 | TED | dev |
+|---|---|---|---|---|
+| `align` | `--nvrna` ("native-RNA specific alignment parameters for minimap2") | `--nvrna` | `--nvrna` | — (no align) |
+| assemble | `correct --nvrna` ("make the strand of a read consistent with the annotation") | nothing (transcriptome has no dRNA setting) | nothing (only TED's opt-in `--ted_chemistry`) | `transcriptome --directRNA` ("input is directRNA - sets trust_strand, no large UTR deletions") |
+| quantify, productivity | nothing | nothing | nothing | nothing |
+
+`--library cDNA` and every `--platform` value add nothing: no FLAIR version documents a setting
+for PacBio vs ONT. `--trust_ends` ("reads from a long read method with minimal fragmentation") is
+about the library prep rather than the platform, so it is left to `transcriptome_args`.
+
+## 6. `align`
 
 | | 2.2.0 | 3.0.1 | TED | dev |
 |---|---|---|---|---|
@@ -126,7 +155,7 @@ call. `adapter_log.json` records `outputs.method` (`inline` or `predictProductiv
 The adapter runs FLAIR's defaults (`flair align -g G -r R -t N`); `--gtf` is accepted for
 interface symmetry and not passed on.
 
-## 6. Known FLAIR bugs and traps (documented, not patched)
+## 7. Known FLAIR bugs and traps (documented, not patched)
 - **dev runtime tools outside pip**: dev `transcriptome` calls `bedToBigBed` (conda
   `ucsc-bedtobigbed`) and fails without it; dev's `misc/flair_conda_env.yaml` also lists
   `intron-prospector` and a `pysam` range. pip cannot install these, so `flair_env.py` adds the
@@ -150,7 +179,7 @@ interface symmetry and not passed on.
 - Every adapter call exports `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=XGBOOST_NTHREAD=1`
   (TED byregion deadlocks without them).
 
-## 7. Installing a version (`flair_env.py`)
+## 8. Installing a version (`flair_env.py`)
 - **release** → a conda env (`conda-forge`, `bioconda`) with Python chosen from the release's
   `requires-python` (3.12 when allowed), the uniform tool pins `minimap2=2.30 samtools=1.22.1
   bedtools=2.31.1`, and the runtime conda extras of the tag's `misc/flair_conda_env.yaml` (none
@@ -176,7 +205,27 @@ interface symmetry and not passed on.
   `FLAIR_EVAL_CONTAINER_RUNTIME` (or the matching `--conda`, `--tool-pins`, `--route`,
   `--container-runtime` flags).
 
-## 8. Tests
+## 9. Error messages
+When a step fails, both scripts print what failed in plain words, the exact command, the log path
+and the last lines of that log, e.g.
+
+```
+flair_adapter.py: the assemble step failed (FLAIR 3.0.1).
+  What failed: `flair transcriptome` exited with code 1.
+  Command:     /envs/flair-3.0.1/bin/flair transcriptome -b ... -o .../assemble/.work/flair --parallelmode byregion
+  Log:         .../assemble/logs/01_flair_transcriptome.log
+  Last lines of the log:
+    | ...
+  Every command the adapter ran: .../assemble/adapter_log.json
+  FLAIR's working files are kept in .../assemble/.work
+```
+
+`flair_env.py` adds a "What to try" line: network for PyPI/GitHub, the spelling of a git `ref`, an
+`env:` path that must contain `bin/flair`, or conda/apptainer missing on PATH. Bad input (a missing
+file, an unknown `--library`) exits 2; a failing FLAIR command exits with its own code;
+`skipped.json` exits 0. `adapter_log.json` stores the failing command under `failed_command`.
+
+## 10. Tests
 - `tests/python/test_flair_adapter.py` and `test_flair_env.py`: fake `flair`, `predictProductivity`,
   `samtools`, conda, pip, git and apptainer for each CLI generation; no FLAIR needed.
 - `tests/python/test_flair_adapter_integration.py`: opt-in (`FLAIR_EVAL_IT_ENVS`, see its
@@ -186,14 +235,17 @@ Integration results, 2026-11-09, on FLAIR's own test inputs (`test/input/basic.r
 reads; `basic.annotation.gtf`; hg38 chr12+chr17+chr20), shared BAM from 3.0.1 `align`, 4 threads
 on a SLURM short node:
 
-| env | `align` | isoforms (all / `--regions`) | genes | quantify (contract call) | quantify (`--bam`) assigned reads | productivity |
-|---|---|---|---|---|---|---|
-| 2.2.0 (existing env) | ok | 14 / 13 | 3 | ok | 763 | predictProductivity: 9 PRO, 5 PTC |
-| 3.0.1 (existing env, Python 3.13) | ok | 15 / 11 | 3 | ok | 974 | predictProductivity: 7 PRO, 5 PTC, 3 NGO |
-| 3.0.1 (`release: 3.0.1`, built from scratch, Python 3.12) | ok | 15 / 11 | 3 | ok | 974 | predictProductivity |
-| TED 20c0f47+ (existing env) | ok | 7 / 4 | 3 | ok | 774 | inline: 5 PRO, 2 NGO |
-| dev d033600 (existing env) | skipped | 7 / 4 | 3 | skipped (needs `--bam`) | 751 | inline: 5 PRO, 2 NGO |
-| dev 389748e (`git: …flair, ref: dev`, built from scratch) | skipped | 7 / 4 | 3 | skipped (needs `--bam`) | 751 | inline |
+| env | `align` | isoforms (all / BAM-only / `--regions`) | quantify with reads: assigned reads | quantify, BAM-only sample | productivity |
+|---|---|---|---|---|---|
+| 2.2.0 (existing env) | ok | 14 / 14 / 13 | 763 | skipped (needs reads) | predictProductivity: 9 PRO, 5 PTC |
+| 3.0.1 (existing env, Python 3.13) | ok | 15 / 15 / 11 | 974 | skipped (needs reads) | predictProductivity: 7 PRO, 5 PTC, 3 NGO |
+| 3.0.1 (`release: 3.0.1`, built from scratch, Python 3.12) | ok | 15 / 15 / 11 | 974 | skipped (needs reads) | predictProductivity |
+| TED 20c0f47+ (existing env) | ok | 7 / 7 / 4 | 774 | skipped (needs reads) | inline: 5 PRO, 2 NGO |
+| dev d033600 (existing env) | skipped | 7 / 7 / 4 | 751 (from the BAM) | **751** | inline: 5 PRO, 2 NGO |
+| dev 389748e (`git: …flair, ref: dev`, built from scratch) | skipped | 7 / 7 / 4 | 751 (from the BAM) | **751** | inline |
+
+Without `--bam`, dev quantify writes `skipped.json` (the contract's minimal call). Run again
+2026-11-09 after the round-1 amendments (A6–A11); all six pass.
 
 The freshly built `release: 3.0.1` env gives byte-identical `isoforms.bed/.gtf`, `counts.tsv` and
 `productivity.tsv` to the existing 3.0.1 env, and dev 389748e matches dev d033600 on this data.
