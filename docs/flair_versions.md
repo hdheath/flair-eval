@@ -190,6 +190,15 @@ interface symmetry and not passed on.
   got an unexpected keyword argument 'output_bam'`. 57040d2 still has the parameter and works. The
   adapter reports the failure (exit 1, the command and its log); runs of 425b260 should set
   `quantify: false` so one crashing task does not abort the whole run.
+- **dev quantify races on a missing genome `.fai`** (seen on 389748e, in core's real run): when
+  `<genome>.fai` is absent, quantify's worker processes each build it at the same moment, and
+  some read it half-written and fail with `KeyError: "sequence 'chr17' not present"` although
+  the genome has chr17. Re-running once the `.fai` exists succeeds. Core stages the `.fai` next to
+  the genome (CONTRACTS A23), and as a second guard `assemble` and BAM-based `quantify` run
+  `samtools faidx` once before FLAIR when the `.fai` is missing. If the genome's folder is not
+  writable, they index a link to it in the step's work dir instead. `adapter_log.json` records
+  `genome_index: {genome, fai, action}`, where `action` is one of `existing`, `built`,
+  `built_in_work_dir`, or `missing` (no samtools: a warning, and FLAIR is left to build it).
 - **dev output names move**: between d033600 and 389748e, quantify's `<o>.counts.tsv` became
   `<o>.isoforms.counts.tsv` (+ `<o>.isoforms.sample_info.tsv`). The adapter looks for the known
   names, then for any `<o>.*counts*` table, and logs a warning when it had to guess.

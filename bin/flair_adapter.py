@@ -110,6 +110,7 @@ class RunLog:
             "profile": None,
             "commands": [],
             "quantify_input": None,
+            "genome_index": None,
             "warnings": [],
             "outputs": {},
             "notes": [],
@@ -629,6 +630,43 @@ def step_align(a, log, prof, flair, work):
     log.data["outputs"] = {"aligned.bam": os.path.getsize(os.path.join(a.out, "aligned.bam"))}
 
 
+def ensure_fai(genome, work, log, flair):
+    """Make sure <genome>.fai exists before FLAIR runs (CONTRACTS A23). FLAIR dev quantify
+    (seen on 389748e) lets its worker processes build a missing .fai at the same time, and some
+    read it half-written (KeyError: "sequence 'chr17' not present"). Indexing once here avoids
+    that. Returns the genome path to pass to FLAIR: the original, or a link to it in the work
+    dir when the genome's own directory is not writable. Recorded as `genome_index`."""
+    fai = genome + ".fai"
+    rec = {"genome": genome, "fai": fai, "action": "existing"}
+    log.data["genome_index"] = rec
+    if os.path.exists(fai):
+        if os.path.getmtime(fai) < os.path.getmtime(genome):
+            log.warn("%s is older than the genome; if the genome changed, delete the .fai" % fai)
+        if genome.endswith(".gz") and not os.path.exists(genome + ".gzi"):
+            log.warn("%s is gzipped but has no .gzi; FLAIR needs a bgzip genome with .fai and .gzi" % genome)
+        return genome
+    samtools = env_tool(flair, "samtools")
+    if not samtools:
+        rec["action"] = "missing"
+        log.warn("%s has no .fai and there is no samtools in the FLAIR env to build it; FLAIR will "
+                 "build it itself, which races in dev quantify (see docs/flair_versions.md)" % genome)
+        return genome
+    target = genome
+    if not os.access(os.path.dirname(os.path.abspath(genome)) or ".", os.W_OK):
+        target = os.path.join(work, os.path.basename(genome))
+        if not os.path.exists(target):
+            os.symlink(os.path.abspath(genome), target)
+        rec["action"] = "built_in_work_dir"
+    else:
+        rec["action"] = "built"
+    log.run([samtools, "faidx", target], cwd=work, label="samtools_faidx",
+            what="samtools faidx (index the genome before FLAIR)",
+            )
+    rec.update({"genome": target, "fai": target + ".fai"})
+    log.note("built %s.fai with samtools faidx before calling FLAIR (CONTRACTS A23)" % target)
+    return target
+
+
 def subset_bam(bam, regions, work, log, flair):
     samtools = env_tool(flair, "samtools")
     if not samtools:
@@ -772,6 +810,7 @@ def step_assemble(a, log, prof, flair, work):
     genome = require_file(a.genome, "--genome")
     gtf = require_file(a.gtf, "--gtf")
     reads = require_file(a.reads, "--reads") if a.reads else None
+    genome = ensure_fai(genome, work, log, flair)
     if not os.path.exists(bam + ".bai") and not os.path.exists(re.sub(r"\.bam$", ".bai", bam)):
         log.warn("no .bai next to %s; FLAIR needs an indexed BAM" % bam)
     if a.regions:
@@ -915,7 +954,7 @@ def step_quantify(a, log, prof, flair, work):
             raise Skip("this FLAIR (%s) counts reads from the genome BAM, and the call is missing %s"
                        % (prof["flair_version"], ", ".join(missing)))
         bam = require_file(a.bam, "--bam")
-        genome = require_file(a.genome, "--genome")
+        genome = ensure_fai(require_file(a.genome, "--genome"), work, log, flair)
         with open(man, "w") as fh:
             fh.write("%s\t%s\t%s\t%s\n" % (QUANT_SID, QUANT_COND, QUANT_BATCH, bam))
         qf = qp["flags"]
