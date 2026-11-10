@@ -109,6 +109,7 @@ class RunLog:
             "flair_bin": None,
             "profile": None,
             "commands": [],
+            "quantify_input": None,
             "warnings": [],
             "outputs": {},
             "notes": [],
@@ -321,7 +322,6 @@ def detect_profile(flair):
         prof["transcriptome"] = {
             "flags": flags,
             "required": req,
-            "bam_flag": "-b",
             "needs_sample_name": "--sample_name" in req,
             "parallel_flag": "--parallel_mode" if "--parallel_mode" in flags else (
                 "--parallelmode" if "--parallelmode" in flags else None),
@@ -546,6 +546,16 @@ def split_user_args(arg_str, known_flags, log, what):
     return toks
 
 
+def pick(flags, short, *longs):
+    """The option name to use: the first long name this FLAIR's --help lists, else the short
+    one. Long names are preferred because some builds drop the short forms (CONTRACTS A20:
+    dev 57040d2 and 425b260 quantify take only --genome, not -g)."""
+    for name in longs:
+        if name in (flags or ()):
+            return name
+    return short
+
+
 def has_flag(toks, *names):
     for t in toks:
         if t.split("=", 1)[0] in names:
@@ -598,7 +608,9 @@ def step_align(a, log, prof, flair, work):
     if a.gtf:
         log.note("--gtf is accepted for interface symmetry; FLAIR align defaults do not use it")
     prefix = os.path.join(work, "aligned")
-    log.run([flair, "align", "-g", genome, "-r", reads, "-t", str(a.threads), "-o", prefix]
+    af = prof.get("align_flags", [])
+    log.run([flair, "align", pick(af, "-g", "--genome"), genome, pick(af, "-r", "--reads"), reads,
+             pick(af, "-t", "--threads"), str(a.threads), pick(af, "-o", "--output"), prefix]
             + library_flags(a, log, "align", prof.get("align_flags", [])),
             cwd=work, label="flair_align", what="flair align")
     bam = prefix + ".bam"
@@ -696,11 +708,17 @@ def find_native_outputs(prefix):
 def run_transcriptome(a, log, prof, flair, work, bam, genome, gtf, user_toks):
     tp = prof["transcriptome"]
     prefix = os.path.join(work, "flair")
-    cmd = [flair, "transcriptome", "-b", bam, "-g", genome, "-f", gtf, "-t", str(a.threads), "-o", prefix]
+    tf = tp["flags"]
+    cmd = [flair, "transcriptome", pick(tf, "-b", "--genome_aligned_bam", "--genomealignedbam"), bam,
+           pick(tf, "-g", "--genome"), genome, pick(tf, "-f", "--gtf"), gtf,
+           pick(tf, "-t", "--threads"), str(a.threads), pick(tf, "-o", "--output"), prefix]
     if tp["needs_sample_name"] and not has_flag(user_toks, "--sample_name"):
         cmd += ["--sample_name", safe_name(a.sample)]
     if tp["parallel_flag"] and not has_flag(user_toks, "--parallel_mode", "--parallelmode"):
-        cmd += [tp["parallel_flag"], "byregion"]      # CLAUDE.md: byregion, never bychrom
+        cmd += [tp["parallel_flag"], "byregion"]      # CLAUDE.md / A20: byregion, never bychrom
+    elif not tp["parallel_flag"]:
+        log.note("this FLAIR's transcriptome has no --parallel_mode/--parallelmode option "
+                 "(dev 389748e removed it), so no parallel mode is passed")
     if tp["generate_map"] and not has_flag(user_toks, "--generate_map"):
         cmd += ["--generate_map"]
     if tp["temp_dir"] and not has_flag(user_toks, "--temp_dir"):
@@ -721,7 +739,10 @@ def run_correct_collapse(a, log, prof, flair, work, bam, reads, genome, gtf, use
     log.run([py, "-m", "flair.bam2Bed12", "-i", bam], cwd=work, label="bam2Bed12", stdout_path=reads_bed,
             what="FLAIR's bam2Bed12 (BAM to reads BED12)")
     corr = os.path.join(work, "correct")
-    cmd = [flair, "correct", "-q", reads_bed, "-f", gtf, "-g", genome, "-t", str(a.threads), "-o", corr]
+    cf = prof["correct"]["flags"]
+    cmd = [flair, "correct", pick(cf, "-q", "--query"), reads_bed, pick(cf, "-f", "--gtf"), gtf,
+           pick(cf, "-g", "--genome"), genome, pick(cf, "-t", "--threads"), str(a.threads),
+           pick(cf, "-o", "--output"), corr]
     cmd += library_flags(a, log, "correct", prof["correct"]["flags"])
     log.run(cmd, cwd=work, label="flair_correct", what="flair correct")
     corrected = first_existing([corr + "_all_corrected.bed"])
@@ -729,8 +750,10 @@ def run_correct_collapse(a, log, prof, flair, work, bam, reads, genome, gtf, use
         raise log.missing_output("it wrote no corrected reads (expected %s_all_corrected.bed)" % corr)
     cp = prof["collapse"]
     prefix = os.path.join(work, "flair")
-    cmd = [flair, "collapse", "-g", genome, "-r", reads, "-q", corrected, "-f", gtf,
-           "-t", str(a.threads), "-o", prefix]
+    of = cp["flags"]
+    cmd = [flair, "collapse", pick(of, "-g", "--genome"), genome, pick(of, "-r", "--reads"), reads,
+           pick(of, "-q", "--query"), corrected, pick(of, "-f", "--gtf"), gtf,
+           pick(of, "-t", "--threads"), str(a.threads), pick(of, "-o", "--output"), prefix]
     if cp["generate_map"] and not has_flag(user_toks, "--generate_map"):
         cmd += ["--generate_map"]
     if cp["temp_dir"] and not has_flag(user_toks, "--temp_dir"):
@@ -877,6 +900,8 @@ def step_quantify(a, log, prof, flair, work):
     log.note("sample %r is quantified as FLAIR sample id %s (names are not carried into counts.tsv)"
              % (a.sample, QUANT_SID))
     qp = prof["quantify"]
+    # A21: what "reads assigned" means for this version; recorded even when the step is skipped
+    log.data["quantify_input"] = "bam" if mode == "bam_manifest" else "reads"
     prefix = os.path.join(work, "quant")
     man = os.path.join(work, "manifest.tsv")
     tmp = os.path.join(work, "tmp")
@@ -893,8 +918,9 @@ def step_quantify(a, log, prof, flair, work):
         genome = require_file(a.genome, "--genome")
         with open(man, "w") as fh:
             fh.write("%s\t%s\t%s\t%s\n" % (QUANT_SID, QUANT_COND, QUANT_BATCH, bam))
-        cmd = [flair, "quantify", "--manifest", man, "-g", genome, "--isoform_bed", nbed,
-               "-t", str(a.threads), "-o", prefix]
+        qf = qp["flags"]
+        cmd = [flair, "quantify", "--manifest", man, pick(qf, "-g", "--genome"), genome, "--isoform_bed", nbed,
+               pick(qf, "-t", "--threads"), str(a.threads), pick(qf, "-o", "--output"), prefix]
     else:
         if not a.reads:
             raise Skip("this FLAIR (%s) quantifies from the reads file, and this sample has none "
@@ -902,7 +928,9 @@ def step_quantify(a, log, prof, flair, work):
         reads = require_file(a.reads, "--reads")
         with open(man, "w") as fh:
             fh.write("%s\t%s\t%s\t%s\n" % (QUANT_SID, QUANT_COND, QUANT_BATCH, reads))
-        cmd = [flair, "quantify", "-r", man, "-i", fa, "-t", str(a.threads), "-o", prefix]
+        qf = qp["flags"]
+        cmd = [flair, "quantify", pick(qf, "-r", "--reads_manifest"), man, pick(qf, "-i", "--isoforms"), fa,
+               pick(qf, "-t", "--threads"), str(a.threads), pick(qf, "-o", "--output"), prefix]
         if qp["needs_isoform_bed"]:
             if not nbed:
                 raise Skip("this FLAIR (%s) quantify needs FLAIR's own isoform BED; pass --flair-bed "
@@ -1004,7 +1032,9 @@ def step_productivity(a, log, prof, flair, work):
     pdir = os.path.join(work, "productivity")
     os.makedirs(pdir, exist_ok=True)
     shutil.copyfile(bed, os.path.join(pdir, "isoforms.bed"))
-    cmd = [pp["bin"], "-i", "isoforms.bed", "-g", gtf, "-f", genome, "-o", "pred", "--append_column"]
+    pf = pp["flags"]
+    cmd = [pp["bin"], pick(pf, "-i", "--input_isoforms"), "isoforms.bed", pick(pf, "-g", "--gtf"), gtf,
+           pick(pf, "-f", "--genome_fasta"), genome, pick(pf, "-o", "--output"), "pred", "--append_column"]
     # FLAIR's own pipeline (transcriptome --predictCDS, 2.x collapse) calls it with --longestORF,
     # and 2.x/3.0.1 require one of --firstTIS/--longestORF.
     if "--longestORF" in pp["flags"]:
