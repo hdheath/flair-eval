@@ -1,0 +1,3 @@
+sample,reads,genome,gtf,platform,library
+human_region_pacbio,human_region/human_region.pacbio.fa.gz,human_region/human_region.genome.fa,human_region/human_region.gtf,pacbio,cDNA
+human_region_ont,human_region/human_region.ont.fa.gz,human_region/human_region.genome.fa,human_region/human_region.gtf,ont,cDNA

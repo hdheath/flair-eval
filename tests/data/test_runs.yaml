@@ -1,0 +1,15 @@
+# Runs for -profile test (tests/data/test_samples.csv). Provenance: docs/test_data.md.
+# The first run is the report baseline (CONTRACTS A5).
+runs:
+  - id: flair-3.0.1
+    flair: { release: "3.0.1" }
+    label: "FLAIR 3.0.1"
+    tags: { version: "3.0.1" }
+  - id: flair-2.2.0
+    flair: { release: "2.2.0" }
+    label: "FLAIR 2.2.0"
+    tags: { version: "2.2.0" }
+  - id: flair-dev
+    flair: { git: "https://github.com/BrooksLabUCSC/flair", ref: "dev" }
+    label: "FLAIR dev"
+    tags: { version: "dev" }
