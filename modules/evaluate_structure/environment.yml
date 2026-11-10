@@ -1,0 +1,9 @@
+# Env for the non-FLAIR steps (EVALUATE_STRUCTURE, BUNDLE, REPORT). CONTRACTS section 6:
+# stdlib + pandas/numpy only. Used by -profile conda.
+name: flair-eval-tools
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pandas=2.2
+  - numpy=1.26

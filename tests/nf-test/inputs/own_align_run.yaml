@@ -1,0 +1,4 @@
+runs:
+  - id: own
+    flair: { release: "3.0.1" }
+    own_align: true

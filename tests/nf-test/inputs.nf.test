@@ -1,0 +1,182 @@
+// Input checking: bad configs must stop the run with plain-English messages.
+nextflow_pipeline {
+
+    name "flair-eval v2 input errors"
+    script "main.nf"
+    options "-stub"
+
+    test("bad samples.csv and runs.yaml: every problem is listed") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/bad/samples.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/bad/runs.yaml"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            def out = (workflow.stdout + workflow.stderr).join('\n')
+            [
+                "sample name 'bad name' may only use letters",
+                "platform 'PacBio' is not allowed. Use 'pacbio' or 'ont'",
+                "give 'reads' (FASTQ/FASTA) or 'bam'",
+                "'gtf' is required",
+                "reads file 'missing.fq' does not exist",
+                "has no index. Run 'samtools index",
+                "sample name 'dup' is already used on line 5",
+                "Put it in quotes, e.g. release: \"3.1\" (YAML read 3.1 as a number)",
+                "flair gives release and env. Use exactly one of",
+                "flair git needs 'ref'",
+                "unknown key(s) colour",
+                "flair env 'relative/env' must be an absolute path",
+                "'quantify' must be true or false",
+                "tag value(s) for version must be text",
+                "runs file entry 5: 'id' is required",
+            ].each { msg -> assert out.contains(msg) : "expected message: ${msg}" }
+            assert workflow.trace.tasks().size() == 0
+        }
+    }
+
+    test("unknown samples.csv column") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/bad/unknown_column.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/runs.yaml"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("unknown column(s) 'colour'")
+        }
+    }
+
+    test("runs.yaml without a runs: list") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/samples.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/bad/not_a_list.yaml"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("must start with 'runs:'")
+        }
+    }
+
+    test("own_align run with a BAM-only sample") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/bad/bam_only.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/own_align_run.yaml"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("set own_align: true, but sample(s) bamonly only have a BAM")
+        }
+    }
+
+    test("mutually exclusive inputs") {
+        when {
+            params {
+                input      = "${projectDir}/tests/nf-test/inputs/samples.csv"
+                runs       = "${projectDir}/tests/nf-test/inputs/runs.yaml"
+                reads      = "${projectDir}/tests/nf-test/inputs/sampleA.fastq"
+                flair      = "3.0.1"
+                flair_args = "--stringent"
+                outdir     = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            def out = (workflow.stdout + workflow.stderr).join('\n')
+            assert out.contains("--input cannot be combined with the one-command sample flags (--reads)")
+            assert out.contains("--runs and --flair cannot be used together")
+            assert out.contains("--flair_args only applies to runs built from --flair")
+        }
+    }
+
+    test("nothing given") {
+        when {
+            params {
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            def out = (workflow.stdout + workflow.stderr).join('\n')
+            assert out.contains("No samples given")
+            assert out.contains("No FLAIR runs given")
+        }
+    }
+
+    test("bad --flair tokens") {
+        when {
+            params {
+                reads  = "${projectDir}/tests/nf-test/inputs/sampleA.fastq"
+                genome = "${projectDir}/tests/nf-test/inputs/genome.fa"
+                gtf    = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                flair  = "3.0.1,release:3.0.1,ted-port,git:https://example.org/flair,bogus:x"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            def out = (workflow.stdout + workflow.stderr).join('\n')
+            assert out.contains("both make run id 'flair-3.0.1'")
+            assert out.contains("--flair token 'ted-port' is not recognised. For a FLAIR branch, write git:ted-port")
+            assert out.contains("gives a git URL but no ref")
+            assert out.contains("starts with unknown source 'bogus:'")
+        }
+    }
+
+    test("one-command sample: missing genome, unindexed BAM") {
+        when {
+            params {
+                bam    = "${projectDir}/tests/nf-test/inputs/noindex.bam"
+                gtf    = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                flair  = "3.0.1"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            def out = (workflow.stdout + workflow.stderr).join('\n')
+            assert out.contains("one-command sample: 'genome' is required")
+            assert out.contains("BAM '${projectDir}/tests/nf-test/inputs/noindex.bam' has no index")
+        }
+    }
+
+    test("schema-level param errors (nf-schema)") {
+        when {
+            params {
+                reads    = "${projectDir}/tests/nf-test/inputs/sampleA.fastq"
+                genome   = "${projectDir}/tests/nf-test/inputs/genome.fa"
+                gtf      = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                platform = "illumina"
+                flair    = "3.0.1"
+                outdir   = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("--platform (illumina): Expected any of [[pacbio, ont]]")
+        }
+    }
+
+    test("--report_only without --bundles") {
+        when {
+            params {
+                report_only = true
+                outdir      = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("--report_only needs --bundles")
+        }
+    }
+}

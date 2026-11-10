@@ -1,0 +1,13 @@
+runs:
+  - id: numeric-release
+    flair: { release: 3.1 }
+  - id: two-sources
+    flair: { release: "3.0.1", env: "/x" }
+  - id: git-no-ref
+    flair: { git: "https://github.com/BrooksLabUCSC/flair" }
+  - id: bad-types
+    flair: { env: "relative/env" }
+    quantify: "yes please"
+    tags: { version: 3 }
+    colour: red
+  - flair: { release: "3.0.1" }

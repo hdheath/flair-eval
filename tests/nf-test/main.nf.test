@@ -1,0 +1,137 @@
+// Pipeline-level stub tests: run with  nf-test test -c tests/nf-test/nf-test.config
+nextflow_pipeline {
+
+    name "flair-eval v2 (stub)"
+    script "main.nf"
+    options "-stub"
+
+    test("file mode: samples.csv x runs.yaml gives one bundle per job and a report") {
+        when {
+            params {
+                input   = "${projectDir}/tests/nf-test/inputs/samples.csv"
+                runs    = "${projectDir}/tests/nf-test/inputs/runs.yaml"
+                regions = "${projectDir}/tests/nf-test/inputs/regions.bed"
+                outdir  = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            def jobs = ['sampleA', 'sampleC'].collectMany { s -> ['flair-3.0.1', 'flair-dev', 'dev-own-align'].collect { r -> "${s}/${r}" } }
+            jobs.each { j ->
+                def b = "$outputDir/bundles/${j}"
+                ['bundle.json', 'isoforms.bed', 'isoforms.gtf', 'tables/isoforms.tsv', 'tables/categories.tsv',
+                 'provenance/flair_env.json', 'provenance/adapter_assemble.json', 'provenance/trace.tsv'].each { f ->
+                    assert path("${b}/${f}").exists() : "missing ${b}/${f}"
+                }
+                def bj = path("${b}/bundle.json").json
+                assert bj.schema == 'flair-eval/bundle/1'
+                assert "${bj.sample}/${bj.run_id}" == j
+                assert bj.compute.keySet() == ['cpu_hours', 'peak_rss_gb', 'wall_minutes'] as Set
+                assert bj.pipeline.version && bj.pipeline.created
+                assert bj.inputs.regions.endsWith('regions.bed')
+            }
+            // quantify: false for flair-dev; productivity: false for dev-own-align
+            assert !path("$outputDir/bundles/sampleA/flair-dev/counts.tsv").exists()
+            assert path("$outputDir/bundles/sampleA/flair-dev/productivity.tsv").exists()
+            assert path("$outputDir/bundles/sampleA/dev-own-align/counts.tsv").exists()
+            assert !path("$outputDir/bundles/sampleA/dev-own-align/productivity.tsv").exists()
+            assert path("$outputDir/bundles/sampleA/dev-own-align/provenance/adapter_align.json").exists()
+            assert path("$outputDir/bundles/sampleA/flair-dev/bundle.json").json.label == 'FLAIR dev'
+            assert path("$outputDir/bundles/sampleA/flair-dev/bundle.json").json.tags == [branch: 'dev']
+            // one FLAIR_ENV per distinct source (3.0.1 doubles as align_flair; dev shared by 2 runs)
+            def names = workflow.trace.tasks().collect { t -> t.name }
+            assert names.count { n -> n.contains('FLAIR_EVAL:FLAIR_ENV') } == 2
+            // shared align only for sampleA (sampleC has a BAM); own align for both samples
+            assert names.count { n -> n.contains('FLAIR_EVAL:ALIGN_SHARED') } == 1
+            assert names.count { n -> n.contains('FLAIR_EVAL:ALIGN_OWN') } == 2
+            assert names.count { n -> n.contains('FLAIR_EVAL:BUNDLE') } == 6
+            def html = path("$outputDir/report/report.html").text
+            assert html.count('bundle.json') == 6
+            assert path("$outputDir/pipeline_info/params.json").json.input.endsWith('samples.csv')
+        }
+    }
+
+    test("one-command mode: --reads/--genome/--gtf with --flair tokens") {
+        when {
+            params {
+                reads      = "${projectDir}/tests/nf-test/inputs/sampleB.fq.gz"
+                genome     = "${projectDir}/tests/nf-test/inputs/genome.fa"
+                gtf        = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                flair      = "3.0.1,dev,git:https://github.com/someone/flair.git@feature/x,container:docker://quay.io/biocontainers/flair:2.0.0--pyhdfd78af_0"
+                flair_args = "--stringent"
+                baseline   = "flair-3.0.1"
+                outdir     = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            ['flair-3.0.1', 'flair-dev', 'flair-feature-x', 'ctr-flair'].each { r ->
+                assert path("$outputDir/bundles/sampleB/${r}/bundle.json").exists()
+                assert path("$outputDir/bundles/sampleB/${r}/provenance/adapter_assemble.json").json.args == '--stringent'
+            }
+            def html = path("$outputDir/report/report.html").text
+            assert html.contains('--baseline flair-3.0.1')
+            assert html.count('bundle.json') == 4
+        }
+    }
+
+    test("one-command mode with --bam and --sample skips the shared align") {
+        when {
+            params {
+                bam    = "${projectDir}/tests/nf-test/inputs/sampleC.bam"
+                genome = "${projectDir}/tests/nf-test/inputs/genome.fa"
+                gtf    = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                sample = "mysample"
+                flair  = "3.0.1"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            assert path("$outputDir/bundles/mysample/flair-3.0.1/bundle.json").exists()
+            // no reads -> no QUANTIFY
+            assert !path("$outputDir/bundles/mysample/flair-3.0.1/counts.tsv").exists()
+            def names = workflow.trace.tasks().collect { t -> t.name }
+            assert !names.any { n -> n.contains('ALIGN_SHARED') }
+            assert !names.any { n -> n.contains('QUANTIFY') }
+        }
+    }
+
+    test("--bundles adds earlier bundles to the report") {
+        when {
+            params {
+                reads   = "${projectDir}/tests/nf-test/inputs/sampleA.fastq"
+                genome  = "${projectDir}/tests/nf-test/inputs/genome.fa"
+                gtf     = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                flair   = "3.0.1"
+                bundles = "${projectDir}/tests/nf-test/inputs/prior_bundles"
+                outdir  = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            def html = path("$outputDir/report/report.html").text
+            assert html.contains('prior/p1/prior_bundles')
+            assert html.count('bundle.json') == 2
+        }
+    }
+
+    test("--report_only builds the report from --bundles and runs no FLAIR job") {
+        when {
+            params {
+                report_only  = true
+                bundles      = "${projectDir}/tests/nf-test/inputs/prior_bundles/*"
+                report_title = "Old runs"
+                outdir       = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            assert workflow.trace.tasks().size() == 1
+            def html = path("$outputDir/report/report.html").text
+            assert html.contains('<h1>Old runs</h1>')
+            assert html.contains('prior/p1/sampleP/flair-old/bundle.json')
+            assert !path("$outputDir/bundles").exists()
+        }
+    }
+}

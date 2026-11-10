@@ -1,0 +1,175 @@
+{
+  "schema": "flair-eval/bundle/1",
+  "sample": "sampleP",
+  "run_id": "flair-old",
+  "label": "FLAIR old",
+  "tags": {},
+  "flair": {
+    "source": "release",
+    "requested": "2.2.0",
+    "version": "2.2.0",
+    "commit": null
+  },
+  "pipeline": {
+    "version": "2.0.0dev",
+    "commit": null,
+    "created": "2026-01-01T00:00:00Z"
+  },
+  "inputs": {
+    "genome": "g.fa",
+    "gtf": "a.gtf",
+    "reads": "r.fq",
+    "bam": null,
+    "regions": null
+  },
+  "summary": {
+    "isoforms": 0,
+    "genes": 0,
+    "loci": 0,
+    "mono_exon": 0,
+    "multi_exon": 0,
+    "ref_transcripts_total": 0,
+    "ref_transcripts_fsm": 0,
+    "ref_transcripts_cim": 0,
+    "ref_genes_detected": 0
+  },
+  "categories": {
+    "FSM": 0,
+    "ISM": 0,
+    "NIC": 0,
+    "NNC": 0,
+    "genic": 0,
+    "genic_intron": 0,
+    "antisense": 0,
+    "intergenic": 0,
+    "fusion": 0
+  },
+  "fsm_subcategories": {
+    "CIM": 0,
+    "FSM5": 0,
+    "FSM3": 0,
+    "FSMTE": 0
+  },
+  "junctions": {
+    "total": 0,
+    "known": 0,
+    "novel_canonical": 0,
+    "novel_noncanonical": 0
+  },
+  "histograms": {
+    "isoforms_per_gene": {
+      "edges": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        8,
+        11,
+        16,
+        21
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "transcript_length": {
+      "edges": [
+        0,
+        250,
+        500,
+        750,
+        1000,
+        1500,
+        2000,
+        3000,
+        4000,
+        6000,
+        10000
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "exon_length": {
+      "edges": [
+        0,
+        50,
+        100,
+        150,
+        200,
+        300,
+        500,
+        1000,
+        2000,
+        5000
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "exons_per_isoform": {
+      "edges": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        8,
+        11,
+        16,
+        21,
+        31
+      ],
+      "counts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "compute": {
+    "cpu_hours": null,
+    "peak_rss_gb": null,
+    "wall_minutes": null
+  },
+  "sections": {}
+}

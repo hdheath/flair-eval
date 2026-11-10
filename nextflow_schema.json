@@ -1,0 +1,194 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://raw.githubusercontent.com/hdheath/flair-eval/v2/nextflow_schema.json",
+    "title": "hdheath/flair-eval pipeline parameters",
+    "description": "Compare FLAIR runs (versions, branches or settings) on the same long-read data and write one self-contained HTML report.",
+    "type": "object",
+    "$defs": {
+        "file_mode": {
+            "title": "Inputs: config files",
+            "type": "object",
+            "fa_icon": "fas fa-file-csv",
+            "description": "Describe samples and FLAIR runs in files. See docs/CONTRACTS.md section 1.",
+            "properties": {
+                "input": {
+                    "type": "string",
+                    "description": "samples.csv: one row per sample (sample, reads or bam, genome, gtf, [platform, library]).",
+                    "help_text": "Columns follow assets/schema/samples.schema.json. Relative paths resolve next to the CSV, then in the launch directory. Cannot be combined with --reads/--bam/--genome/--gtf/--sample/--platform/--library.",
+                    "format": "file-path",
+                    "pattern": "^\\S+\\.csv$",
+                    "fa_icon": "fas fa-file-csv"
+                },
+                "runs": {
+                    "type": "string",
+                    "description": "runs.yaml: one entry per FLAIR run (id, flair source, transcriptome_args, ...).",
+                    "help_text": "Each run gives exactly one FLAIR source: release, git (+ ref), env or container. Follows assets/schema/runs.schema.json. Cannot be combined with --flair.",
+                    "format": "file-path",
+                    "pattern": "^\\S+\\.ya?ml$",
+                    "fa_icon": "fas fa-list"
+                }
+            }
+        },
+        "one_command": {
+            "title": "Inputs: one command, no files",
+            "type": "object",
+            "fa_icon": "fas fa-terminal",
+            "description": "One sample and a list of FLAIR versions straight from the command line.",
+            "properties": {
+                "reads": {
+                    "type": "string",
+                    "description": "Long reads (FASTQ/FASTA, may be gzipped) for a single sample.",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-file"
+                },
+                "bam": {
+                    "type": "string",
+                    "description": "Sorted, indexed BAM for a single sample (skips the shared align step).",
+                    "help_text": "The .bai must sit next to the BAM.",
+                    "format": "file-path",
+                    "pattern": "^\\S+\\.bam$",
+                    "fa_icon": "fas fa-file"
+                },
+                "genome": {
+                    "type": "string",
+                    "description": "Genome FASTA for the one-command sample.",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-dna"
+                },
+                "gtf": {
+                    "type": "string",
+                    "description": "Reference annotation GTF for the one-command sample.",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-book"
+                },
+                "sample": {
+                    "type": "string",
+                    "description": "Sample name for the one-command sample (default: reads/BAM file name without extensions).",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "platform": {
+                    "type": "string",
+                    "description": "Sequencing platform of the one-command sample.",
+                    "enum": [
+                        "pacbio",
+                        "ont"
+                    ]
+                },
+                "library": {
+                    "type": "string",
+                    "description": "Library type of the one-command sample.",
+                    "enum": [
+                        "cDNA",
+                        "dRNA"
+                    ]
+                },
+                "flair": {
+                    "type": "string",
+                    "description": "Comma-separated FLAIR runs, e.g. 3.0.1,dev.",
+                    "help_text": "Tokens: 3.0.1 or release:3.0.1 -> run flair-3.0.1; dev, main or git:<ref> -> BrooksLabUCSC/flair at that ref, run flair-<ref>; git:<url>@<ref> -> run flair-<ref>; env:/path -> run env-<basename>; container:<uri> -> run ctr-<name>. Cannot be combined with --runs.",
+                    "fa_icon": "fas fa-code-branch"
+                },
+                "flair_args": {
+                    "type": "string",
+                    "description": "Extra arguments appended to flair transcriptome/collapse for every --flair run.",
+                    "default": ""
+                }
+            }
+        },
+        "output": {
+            "title": "Outputs and report",
+            "type": "object",
+            "fa_icon": "fas fa-folder-open",
+            "required": [
+                "outdir"
+            ],
+            "properties": {
+                "outdir": {
+                    "type": "string",
+                    "description": "Output directory: bundles/, report/report.html and pipeline_info/.",
+                    "help_text": "On PRISM put this on groups or warm-archive storage, not in home.",
+                    "format": "directory-path",
+                    "default": "./flair-eval-results",
+                    "fa_icon": "fas fa-folder-open"
+                },
+                "bundles": {
+                    "type": "string",
+                    "description": "Comma-separated directories or globs of earlier bundles to add to the report.",
+                    "help_text": "Any folder that contains bundle.json files below it, e.g. an earlier <outdir>/bundles. When the same (sample, run_id) appears twice, the newest one wins.",
+                    "fa_icon": "fas fa-boxes"
+                },
+                "baseline": {
+                    "type": "string",
+                    "description": "Run id that report differences are computed against (default: the first run).",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                },
+                "report_only": {
+                    "type": "boolean",
+                    "description": "Skip all compute and build the report from --bundles only.",
+                    "default": false,
+                    "fa_icon": "fas fa-file-alt"
+                },
+                "report_title": {
+                    "type": "string",
+                    "description": "Report heading.",
+                    "default": "FLAIR comparison"
+                }
+            }
+        },
+        "compute": {
+            "title": "Compute",
+            "type": "object",
+            "fa_icon": "fas fa-cogs",
+            "properties": {
+                "align_flair": {
+                    "type": "string",
+                    "description": "FLAIR release used for the shared align step (once per sample).",
+                    "default": "3.0.1"
+                },
+                "regions": {
+                    "type": "string",
+                    "description": "Optional BED: restrict assembly and evaluation to these regions.",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-map"
+                },
+                "env_cache": {
+                    "type": "string",
+                    "description": "Where FLAIR environments are built and cached.",
+                    "help_text": "Defaults to <launchDir>/flair-env-cache. On PRISM set it on groups storage.",
+                    "format": "directory-path",
+                    "fa_icon": "fas fa-archive"
+                }
+            }
+        },
+        "generic": {
+            "title": "Generic options",
+            "type": "object",
+            "fa_icon": "fas fa-question",
+            "properties": {
+                "help": {
+                    "type": "boolean",
+                    "description": "Show this help message and exit.",
+                    "default": false,
+                    "hidden": true
+                }
+            }
+        }
+    },
+    "allOf": [
+        {
+            "$ref": "#/$defs/file_mode"
+        },
+        {
+            "$ref": "#/$defs/one_command"
+        },
+        {
+            "$ref": "#/$defs/output"
+        },
+        {
+            "$ref": "#/$defs/compute"
+        },
+        {
+            "$ref": "#/$defs/generic"
+        }
+    ]
+}
