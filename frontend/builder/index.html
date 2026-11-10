@@ -94,6 +94,8 @@ section.block { display: grid; gap: 14px; }
 .card-head .spacer { flex: 1 1 auto; }
 .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.grid.pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (max-width: 560px) { .grid.pair { grid-template-columns: minmax(0, 1fr); } }
 .field { display: grid; gap: 4px; min-width: 0; align-content: start; }
 .field.wide { grid-column: 1 / -1; }
 label, .label { font-size: 0.82rem; font-weight: 600; color: var(--ink-2); letter-spacing: 0.01em; }
@@ -112,7 +114,7 @@ input::placeholder { color: var(--ink-2); opacity: 0.7; }
 .check input { width: 16px; height: 16px; accent-color: var(--accent); }
 
 button { font: inherit; cursor: pointer; }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-weight: 500; font-size: 0.9rem; }
+.btn { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-weight: 500; font-size: 0.9rem; }
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-2); padding-inline: 8px; }
@@ -121,7 +123,7 @@ button { font: inherit; cursor: pointer; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .adders { display: flex; flex-wrap: wrap; gap: 8px; }
 
-.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface-2); }
+.seg { display: inline-flex; justify-self: start; max-width: 100%; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface-2); }
 .seg button { border: 0; background: transparent; color: var(--ink-2); padding: 6px 12px; font-size: 0.86rem; font-weight: 500; }
 .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
 
@@ -168,8 +170,14 @@ aside.panel { position: sticky; top: max(16px, env(safe-area-inset-top, 0px)); d
 .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
 .files pre { margin: 0; padding: 12px 14px; max-height: 280px; overflow: auto; font: 0.8rem/1.55 var(--font-mono); white-space: pre; color: var(--ink); }
 .file-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: center; }
-.file-actions .hint { flex: 1 1 160px; }
+.file-actions .hint { flex: 1 1 100%; }
 .toast { font-size: 0.8rem; color: var(--ok); }
+details.first { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 16px; min-width: 0; }
+details.first > summary { cursor: pointer; font-weight: 600; }
+details.first ol { margin: 10px 0 0; padding-left: 20px; display: grid; gap: 10px; font-size: 0.88rem; }
+.snip { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-width: 0; }
+.snip code { flex: 1 1 auto; min-width: 0; overflow-x: auto; white-space: nowrap; background: var(--surface-2); padding: 6px 8px; border-radius: 6px; font-size: 0.8rem; }
+.snip .btn { flex: none; font-size: 0.78rem; padding: 4px 9px; }
 
 footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: grid; gap: 4px; }
 @media (prefers-reduced-motion: no-preference) { .btn, .seg button, input { transition: border-color 120ms, background-color 120ms; } }
@@ -192,6 +200,8 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
         <code>runs.yaml</code>. Nothing leaves your browser.</p>
     </div>
     <div class="top-actions">
+      <a class="btn" id="home-link" href="../" hidden>flair-eval home</a>
+      <a class="btn" id="demo-link" href="../demo/report.html" hidden>Demo report</a>
       <button class="btn" type="button" id="btn-example">Load example</button>
       <button class="btn" type="button" id="btn-reset">Start blank</button>
     </div>
@@ -209,7 +219,8 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
           <h2 id="h-samples">Samples</h2>
           <span class="count" id="sample-count"></span>
         </div>
-        <p class="hint">One dataset each: long reads (or an aligned BAM) plus the genome and annotation to compare against.</p>
+        <p class="hint">One dataset each: long reads (or an aligned BAM) plus the genome and annotation to compare against.
+          Full paths are safest. A relative path is read next to <code>samples.csv</code> first, then from the folder you launch in.</p>
         <div class="col" id="samples" style="gap:12px"></div>
         <div class="adders"><button class="btn add" type="button" id="add-sample">+ Add sample</button></div>
       </section>
@@ -239,10 +250,22 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
               <span class="hint">Results and the report go here. Use storage with room to spare.</span>
             </div>
             <div class="field">
-              <label for="o-profile">Nextflow profile</label>
-              <input type="text" class="mono" id="o-profile" data-opt="profile" list="profiles" placeholder="none">
-              <datalist id="profiles"><option value="slurm"><option value="local"><option value="test"><option value="singularity"><option value="docker"><option value="conda"></datalist>
-              <span class="hint">How jobs run: <code>slurm</code> on a cluster, <code>local</code> on one machine.</span>
+              <label for="o-executor">Where jobs run</label>
+              <select id="o-executor" data-opt="executor">
+                <option value="local">This computer</option>
+                <option value="slurm">SLURM cluster</option>
+              </select>
+              <span class="hint">On a cluster login node, pick SLURM so each step is its own job.</span>
+            </div>
+            <div class="field">
+              <label for="o-software">How FLAIR is installed</label>
+              <select id="o-software" data-opt="software">
+                <option value="conda">conda</option>
+                <option value="singularity">Singularity / Apptainer</option>
+                <option value="docker">Docker</option>
+                <option value="">None</option>
+              </select>
+              <span class="hint">conda builds each FLAIR version for you. <code>flair-eval doctor</code> shows what this machine has.</span>
             </div>
             <div class="field">
               <label for="o-baseline">Baseline run</label>
@@ -261,6 +284,11 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
           <details class="more">
             <summary>More options</summary>
             <div class="grid two">
+              <div class="field">
+                <label for="o-profile">Custom profile</label>
+                <input type="text" class="mono" id="o-profile" data-opt="profile" placeholder="e.g. slurm,singularity">
+                <span class="hint">Replaces the two choices above when filled in.</span>
+              </div>
               <div class="field">
                 <label for="o-ref">Pipeline version</label>
                 <input type="text" class="mono" id="o-ref" data-opt="ref" placeholder="v2">
@@ -313,6 +341,19 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
         <ul class="why-list" id="why" hidden></ul>
       </div>
 
+      <details class="first" id="first-time">
+        <summary>Before your first launch</summary>
+        <ol>
+          <li>Install Java 17+ and Nextflow (once):
+            <div class="snip"><code id="snip-1">conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17 &amp;&amp; conda activate nextflow</code><button class="btn" type="button" data-copy="snip-1">Copy</button></div></li>
+          <li>Install the flair-eval helper and check this machine:
+            <div class="snip"><code id="snip-2">pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"</code><button class="btn" type="button" data-copy="snip-2">Copy</button></div>
+            <div class="snip"><code id="snip-3">flair-eval doctor</code><button class="btn" type="button" data-copy="snip-3">Copy</button></div></li>
+          <li>Try the bundled test data, then run the command above on your own:
+            <div class="snip"><code id="snip-4">flair-eval run --test</code><button class="btn" type="button" data-copy="snip-4">Copy</button></div></li>
+        </ol>
+      </details>
+
       <div class="files">
         <div class="tabs" role="tablist">
           <button type="button" role="tab" id="tab-samples" aria-selected="true" data-tab="samples">samples.csv</button>
@@ -323,6 +364,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
           <span class="hint" id="file-hint"></span>
           <button class="btn" type="button" id="copy-file">Copy</button>
           <button class="btn primary" type="button" id="dl-file">Download</button>
+          <button class="btn" type="button" id="dl-both">Download both</button>
           <span class="toast" id="toast" role="status"></span>
         </div>
       </div>

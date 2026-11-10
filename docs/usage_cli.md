@@ -11,8 +11,17 @@ same `nextflow run` command and the same config files, and all follow the rules 
 | [Config-builder page](#config-builder-page) | Filling in a form, then copying the command or downloading the files |
 | [`flair-eval` CLI](#the-flair-eval-cli) | A guided setup in the terminal, checking configs, launching |
 
-You need Java 17+ and [Nextflow](https://www.nextflow.io/docs/latest/install.html) to launch.
-The CLI checks for both and tells you how to install them.
+## First time? Start here
+```bash
+conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
+conda activate nextflow
+pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"
+flair-eval doctor          # checks Java, Nextflow, conda, containers, disk; suggests a profile
+flair-eval run --test      # a small run on the bundled test data
+flair-eval init            # then set up your own data
+```
+Nextflow needs Java 17+; flair-eval needs Nextflow 25.04+. `flair-eval doctor` says what is
+missing and how to fix it. To install the CLI from a clone instead: `pip install -e cli/`.
 
 ## One command, no files
 ```bash
@@ -43,8 +52,8 @@ Details:
 - The container name drops the registry path, the `:tag` and any `@sha256:` digest:
   `container:docker://quay.io/biocontainers/flair:3.0.1--pyhdfd78af_0` gets the id `ctr-flair`.
   A local image keeps its file name: `container:/images/flair.sif` gets `ctr-flair.sif`.
-- Two tokens that give the same run id are an error. Write those runs in `runs.yaml` instead,
-  with ids you choose.
+- Two tokens that give the same run id are an error, and so are two runs in `runs.yaml` with the
+  same id. The message names both; write those runs in `runs.yaml` with ids you choose.
 
 ### Passing FLAIR arguments
 `--flair_args` goes to `flair transcriptome` for every `--flair` run. **Write it with `=`**:
@@ -67,7 +76,8 @@ WTC11,,/data/WTC11.bam,/ref/GRCh38.fa,/ref/gencode.gtf,ont,dRNA
 ```
 Each row needs `sample`, `genome`, `gtf`, and `reads` or `bam` (a sorted BAM with its `.bai`
 next to it). Optional columns `cage`, `pas`, `junctions` and `spikein_gtf` are read now and used
-by later report sections. Relative paths are resolved from the folder you launch in.
+by later report sections. A relative path is looked up next to `samples.csv` first, then in the
+folder you launch from. Full paths avoid any doubt.
 
 `runs.yaml` has one entry per FLAIR configuration:
 ```yaml
@@ -99,21 +109,44 @@ nextflow run hdheath/flair-eval -r v2 --input samples.csv --runs runs.yaml --out
 ## Config-builder page
 `frontend/builder/index.html` is a single static page (no build step, nothing sent anywhere).
 Open it from a clone, or from GitHub Pages once that is enabled
-(repository Settings → Pages → Source: GitHub Actions; the `Builder page` workflow then
-publishes it at `https://hdheath.github.io/flair-eval/`).
+(repository Settings → Pages → Source: GitHub Actions). The `Builder page` workflow then
+publishes `https://hdheath.github.io/flair-eval/`: a start page with a three-step quick start,
+the builder at `/builder/`, and a demo report built from `tests/fixtures/bundles` at
+`/demo/report.html`.
 
 - Add samples, then one card per run. Each card has a FLAIR source picker (release, git branch,
   conda env, container), common setting presets, a label and tags.
 - The panel on the right checks everything against the pipeline's schemas as you type and shows
   the exact command. It uses the one-command form whenever that says exactly the same thing,
   and otherwise tells you why it needs `samples.csv` and `runs.yaml`.
+- Pick where jobs run (this computer or a SLURM cluster) and how FLAIR gets installed (conda,
+  Singularity/Apptainer, Docker); the page turns that into `-profile`.
 - Copy the command, and download or copy the two files.
 
 ## The `flair-eval` CLI
-Install from a clone of the repository (Python 3.10+):
+Python 3.10+. Install it straight from GitHub, or from a clone:
 ```bash
+pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"
 pip install -e cli/
 ```
+
+### `flair-eval doctor`
+Checks this machine and prints a fix for each problem:
+```text
+$ flair-eval doctor --outdir /big/storage/out
+  ok    Java: version 17
+  FAIL  Nextflow: not found
+        Nextflow is not on PATH. Install one of:
+            conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
+  ok    conda: found: FLAIR releases and git branches can be built
+  WARN  Containers: no singularity, apptainer or docker: container: runs will not work
+  ok    Cluster: SLURM found (sbatch): jobs can run on the cluster
+  ok    Disk: 2,310 GB free at /big/storage
+
+Suggested profile for this machine: -profile slurm,conda
+```
+It also checks the Nextflow version (25.04+), git (for git runs), and warns when `--outdir` is in
+your home folder.
 
 ### `flair-eval init`
 Asks a few questions and writes `samples.csv` and `runs.yaml`:
@@ -131,6 +164,9 @@ Runs: which FLAIR builds do you want to compare?
     2) Stringent  (--stringent)
     ...
 ```
+The first question offers the bundled test data instead (answer `y` and nothing is written).
+Platform and library default to a guess from the file name (`…_ONT_cDNA.fq.gz` gives ont and
+cDNA); type `-` to leave one unset.
 Without questions: `flair-eval init --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 3.0.1,dev`.
 `--dir DIR` writes elsewhere; `--force` overwrites existing files.
 
@@ -155,9 +191,13 @@ Checks the configs and Java/Nextflow, prints the command, and runs it:
 flair-eval run --outdir /big/storage/out --profile slurm             # uses ./samples.csv + ./runs.yaml
 flair-eval run --samples cfg/samples.csv --runs cfg/runs.yaml --outdir out
 flair-eval run --reads r.fq.gz --genome g.fa --gtf a.gtf --flair 3.0.1,dev --outdir out
+flair-eval run --test                                                 # bundled test data, -profile test
 flair-eval run ... --dry-run                                          # print the command only
 flair-eval run ... -- -with-tower                                     # after --: passed to nextflow
 ```
+Without `--profile`, `run` and `report` use the profile `flair-eval doctor` suggests for this
+machine (SLURM if `sbatch` exists, else local; plus conda, else Singularity/Apptainer, else
+Docker) and say so. `--test` adds `test` in front and writes to `./flair-eval-test`.
 Options: `-r/--ref` (pipeline revision, default `v2`), `--profile`, `--outdir`, `--work-dir`,
 `--resume`, and the pipeline params `--baseline`, `--report_title`, `--align_flair`,
 `--regions`, `--bundles`, `--env_cache`. Pipeline params equal to their default are left off.

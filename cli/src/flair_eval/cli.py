@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import DEFAULT_REF, PIPELINE, __version__, config, env_check
+from . import DEFAULT_REF, PIPELINE, __version__, config, doctor, env_check
 from .command import Command, Options, opt, build_command, files_command, quick_command, \
     report_command, split_extra
 from .tokens import TokenError, parse_tokens, runs_from_tokens
@@ -17,7 +17,13 @@ from .validate import Issue, check_files, check_paths, errors, validate_bundle, 
     validate_runs, validate_samples
 from .wizard import Abort, Wizard, write_configs
 
-EPILOG = f"Pipeline: {PIPELINE}. Docs: https://github.com/{PIPELINE}/blob/v2/docs/usage_cli.md"
+EPILOG = f"""New here? Three steps:
+  flair-eval doctor      check Java, Nextflow, conda and disk space
+  flair-eval init        answer a few questions; writes samples.csv and runs.yaml
+  flair-eval run --outdir /big/storage/flair-eval-results
+
+Try it on the bundled test data first: flair-eval run --test
+Guide: https://github.com/{PIPELINE}/blob/v2/docs/usage_cli.md"""
 
 
 # ---------------------------------------------------------------- argument parsing
@@ -41,8 +47,10 @@ def _launch_args(p: argparse.ArgumentParser) -> None:
     g = p.add_argument_group("launch")
     g.add_argument("-r", "--ref", default=DEFAULT_REF,
                    help=f"pipeline revision: branch, tag or SHA (default {DEFAULT_REF})")
-    g.add_argument("--profile", "-profile", help="Nextflow profile(s), e.g. slurm or test")
-    g.add_argument("--outdir", default="./flair-eval-results",
+    g.add_argument("--profile", "-profile",
+                   help="Nextflow profile(s), e.g. slurm,conda (default: picked for this machine, "
+                        "see `flair-eval doctor`)")
+    g.add_argument("--outdir", default=None,
                    help="output folder (default ./flair-eval-results); use big storage")
     g.add_argument("--work-dir", "-w", dest="work_dir", help="Nextflow work directory")
     g.add_argument("--resume", "-resume", action="store_true", help="resume a previous launch")
@@ -68,9 +76,14 @@ def make_parser() -> argparse.ArgumentParser:
         prog="flair-eval",
         description="Compare FLAIR runs (versions, branches, settings) with the flair-eval "
                     "Nextflow pipeline.",
-        epilog=EPILOG)
+        epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--version", action="version", version=f"flair-eval {__version__}")
-    sub = ap.add_subparsers(dest="cmd", metavar="{init,check,run,report}")
+    sub = ap.add_subparsers(dest="cmd", metavar="{doctor,init,check,run,report}")
+
+    p = sub.add_parser("doctor", help="check this machine (java, nextflow, conda, disk) with fixes",
+                       description="Check that this machine can run flair-eval, and suggest a "
+                                   "Nextflow profile.")
+    p.add_argument("--outdir", help="where results will go (checked for free space)")
 
     p = sub.add_parser("init", help="interactive wizard that writes samples.csv and runs.yaml",
                        description="Answer a few questions; writes samples.csv and runs.yaml. "
@@ -95,6 +108,8 @@ def make_parser() -> argparse.ArgumentParser:
                                    "`--` goes to nextflow unchanged.")
     p.add_argument("--samples", "--input", dest="samples", help="samples.csv")
     p.add_argument("--runs", help="runs.yaml")
+    p.add_argument("--test", action="store_true",
+                   help="run the bundled test data (-profile test); no config files needed")
     _quick_sample_args(p)
     _pipeline_params(p)
     _launch_args(p)
@@ -107,6 +122,10 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--baseline", help="run id that differences are computed against")
     _launch_args(p)
     return ap
+
+
+DEFAULT_OUTDIR = "./flair-eval-results"
+TEST_OUTDIR = "./flair-eval-test"
 
 
 # ---------------------------------------------------------------- helpers
@@ -138,10 +157,23 @@ def _sample_flag_args(s: dict) -> list:
 def _options(a, extra: list) -> Options:
     params = {k: getattr(a, k, None) for k in
               ("bundles", "baseline", "report_title", "align_flair", "regions", "env_cache")}
-    return Options(ref=a.ref, profile=a.profile, outdir=a.outdir, params=params,
+    return Options(ref=a.ref, profile=a.profile, outdir=a.outdir or DEFAULT_OUTDIR,
+                   params=params,
                    resume=a.resume, work_dir=a.work_dir, extra=extra,
                    samples_path=getattr(a, "samples", None) or "samples.csv",
                    runs_path=getattr(a, "runs", None) or "runs.yaml")
+
+
+def _auto_profile(a, extra: str = "") -> None:
+    """Fill a.profile from this machine when --profile was not given."""
+    if a.profile:
+        if extra and extra not in a.profile.split(","):
+            a.profile = f"{extra},{a.profile}"
+        return
+    found = doctor.suggest_profile()
+    a.profile = ",".join(p for p in (extra, found) if p) or None
+    if found:
+        print(f"Using -profile {a.profile} (picked for this machine; set --profile to change).")
 
 
 def _launch(cmd, a) -> int:
@@ -180,10 +212,17 @@ def cmd_init(a) -> int:
         samples = [s]
     else:
         try:
-            samples, runs = Wizard().run()
+            answers = Wizard().run()
         except (Abort, KeyboardInterrupt) as e:
             print(f"\nStopped ({e or 'interrupted'}); nothing written.", file=sys.stderr)
             return 1
+        if answers is None:
+            print("\nNo files needed for the test data. Check this machine, then launch:")
+            print("  flair-eval doctor")
+            print("  flair-eval run --test")
+            print("Results land in ./flair-eval-test (report: report/report.html).")
+            return 0
+        samples, runs = answers
     issues = errors(validate_samples(samples) + validate_runs({"runs": runs}))
     if issues:
         print("error: these answers do not make a valid config:", file=sys.stderr)
@@ -201,6 +240,7 @@ def cmd_init(a) -> int:
         print(f"  {w}")
     flags = [] if d == Path(".") else ["--samples", str(sp), "--runs", str(rp)]
     print("\nNext:")
+    print("  flair-eval doctor")
     print("  " + " ".join(["flair-eval check"] + flags))
     print("  " + " ".join(["flair-eval run"] + flags + ["--outdir", "<folder on big storage>"]))
     cmd = build_command(samples, runs, Options(samples_path=str(sp), runs_path=str(rp)))
@@ -245,7 +285,27 @@ def cmd_check(a) -> int:
     return 0
 
 
+def files_command_test(opts: Options) -> Command:
+    """`nextflow run ... -profile test,...`: the test profile sets --input and --runs."""
+    argv = files_command(opts).argv
+    i = argv.index("--input")
+    del argv[i:i + 4]
+    return Command(argv, "test", [])
+
+
+def cmd_doctor(a) -> int:
+    return doctor.report(doctor.run_checks(a.outdir), doctor.suggest_profile())
+
+
 def cmd_run(a, extra: list) -> int:
+    if a.test:
+        if a.samples or a.runs or a.flair or _quick_sample(a) is not None:
+            print("error: --test brings its own samples and runs; drop the other inputs",
+                  file=sys.stderr)
+            return 2
+        _auto_profile(a, "test")
+        a.outdir = a.outdir or TEST_OUTDIR
+        return _launch(files_command_test(_options(a, extra)), a)
     quick = _quick_sample(a)
     if quick is not None and a.samples:
         print("error: use either --samples or --reads/--bam/--genome/--gtf, not both",
@@ -294,6 +354,7 @@ def cmd_run(a, extra: list) -> int:
         print("Fix the errors above first (`flair-eval check` explains them).", file=sys.stderr)
         return 1
 
+    _auto_profile(a)
     opts = _options(a, extra)
     if quick is not None and a.flair:
         cmd = quick_command(_sample_flag_args(quick), a.flair, a.flair_args, opts)
@@ -318,7 +379,9 @@ def cmd_report(a, extra: list) -> int:
     for b in missing:
         print(f"warning: {b} does not exist here (fine if it is a path on the cluster)",
               file=sys.stderr)
-    opts = Options(ref=a.ref, profile=a.profile, outdir=a.outdir, resume=a.resume,
+    _auto_profile(a)
+    opts = Options(ref=a.ref, profile=a.profile, outdir=a.outdir or DEFAULT_OUTDIR,
+                   resume=a.resume,
                    work_dir=a.work_dir, extra=extra,
                    params={"baseline": a.baseline, "report_title": a.report_title})
     return _launch(report_command(a.bundles, opts), a)
@@ -351,6 +414,8 @@ def main(argv: list | None = None) -> int:
         return 0
     if extra and a.cmd not in ("run", "report"):
         ap.error("arguments after `--` are only for run and report")
+    if a.cmd == "doctor":
+        return cmd_doctor(a)
     if a.cmd == "init":
         return cmd_init(a)
     if a.cmd == "check":

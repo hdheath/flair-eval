@@ -162,8 +162,11 @@ def _duplicates(items: list[dict], key: str, prefix: str, what: str) -> list[Iss
         if not isinstance(v, str):
             continue
         if v in first:
+            one = prefix[:-1]
+            noun = what.split()[-1]
             out.append(Issue((prefix, i, key), "duplicate",
-                             f"{what} {v!r} is already used by {prefix[:-1]} {first[v] + 1}"))
+                             f"{what} {v!r} is used by both {one} {first[v] + 1} and {one} {i + 1}; "
+                             f"give each {one} its own {noun}"))
         else:
             first[v] = i
     return out
@@ -209,26 +212,33 @@ def validate_bundle(doc) -> list[Issue]:
     return _issues_from_schema(doc, schema("bundle"), ("bundle",), "key")
 
 
-def check_paths(rows: list[dict], base: Path | None = None) -> list[Issue]:
-    """Warnings for local input files that do not exist (remote URIs are skipped)."""
+def check_paths(rows: list[dict], csv_dir: Path | None = None) -> list[Issue]:
+    """Warnings for local input files that do not exist (remote URIs and globs are skipped).
+
+    A relative path is looked up next to samples.csv first, then in the current folder
+    (CONTRACTS section 7, A3)."""
     out: list[Issue] = []
-    base = base or Path.cwd()
+    bases = [b for b in (csv_dir, Path.cwd()) if b is not None]
     for i, r in enumerate(rows):
         for col in ("reads", "bam", "genome", "gtf") + tuple(config.TRACK_COLUMNS):
             p = r.get(col)
-            if not p or re.match(r"^[a-z][a-z0-9+.-]*://", p):
+            if not p or re.match(r"^[a-z][a-z0-9+.-]*://", p) or any(ch in p for ch in "*?["):
                 continue
             fp = Path(p).expanduser()
-            fp = fp if fp.is_absolute() else base / fp
-            if any(ch in p for ch in "*?["):
-                continue
-            if not fp.exists():
+            found = fp if fp.is_absolute() and fp.exists() else None
+            if not fp.is_absolute():
+                found = next((b / fp for b in bases if (b / fp).exists()), None)
+            if found is None:
+                where = "" if fp.is_absolute() else (
+                    " (looked next to samples.csv and in this folder)" if csv_dir else
+                    " (looked in this folder)")
                 out.append(Issue(("samples", i, col), "missing_file",
-                                 f"file not found: {p}", "warning"))
-            elif col == "bam" and not (Path(str(fp) + ".bai").exists()
-                                       or fp.with_suffix(".bai").exists()):
+                                 f"file not found: {p}{where}", "warning"))
+            elif col == "bam" and not (Path(str(found) + ".bai").exists()
+                                       or found.with_suffix(".bai").exists()):
                 out.append(Issue(("samples", i, col), "missing_index",
-                                 f"no index next to {p} (run: samtools index {p})", "warning"))
+                                 f"no index next to {p} (make one with: samtools index {p})",
+                                 "warning"))
     return out
 
 
@@ -244,7 +254,7 @@ def check_files(samples: str | Path | None = None, runs: str | Path | None = Non
             header, rows = config.read_samples(sp)
             out += validate_samples(rows, header)
             if files:
-                out += check_paths(rows)  # Nextflow resolves relative paths from launchDir
+                out += check_paths(rows, sp.resolve().parent)
     if runs is not None:
         rp = Path(runs)
         if not rp.exists():

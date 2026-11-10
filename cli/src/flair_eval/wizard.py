@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -14,6 +15,25 @@ from .validate import NAME_HINT
 
 PLATFORMS = ("pacbio", "ont")
 LIBRARIES = ("cDNA", "dRNA")
+
+
+def guess_platform(path: str) -> str:
+    """Default platform from a file name: 'pacbio', 'ont' or ''."""
+    n = path.lower().rsplit("/", 1)[-1]
+    if re.search(r"(^|[^a-z])(ont|nanopore|promethion|minion|gridion|r10|dorado|guppy)([^a-z]|$)", n):
+        return "ont"
+    if re.search(r"(pacbio|hifi|ccs|isoseq|iso-seq|kinnex|masseq|mas-seq|sequel|revio|flnc)", n):
+        return "pacbio"
+    return ""
+
+
+def guess_library(path: str) -> str:
+    n = path.lower().rsplit("/", 1)[-1]
+    if re.search(r"(drna|direct.?rna|rna00[24]|sqk-rna)", n):
+        return "dRNA"
+    if re.search(r"(cdna|isoseq|iso-seq|kinnex|masseq|flnc|pcs1|sqk-pcs|sqk-lsk)", n):
+        return "cDNA"
+    return ""
 
 
 class Abort(Exception):
@@ -51,13 +71,14 @@ class Wizard:
         ans = self.ask(prompt + (" [Y/n]" if default else " [y/N]"), default="")
         return default if not ans else ans.lower().startswith("y")
 
-    def choose(self, prompt: str, options: tuple, allow_empty: bool = True) -> str:
+    def choose(self, prompt: str, options: tuple, default: str = "") -> str:
         opts = "/".join(options)
 
         def check(a):
-            return None if a in options else f"Use one of {opts}."
-        return self.ask(f"{prompt} ({opts}{', Enter to skip' if allow_empty else ''})",
-                        default="" if allow_empty else None, check=check)
+            return None if a in options or a == "-" else f"Use one of {opts}."
+        hint = ", - to skip" if default else ", Enter to skip"
+        ans = self.ask(f"{prompt} ({opts}{hint})", default=default, check=check)
+        return "" if ans == "-" else ans
 
     # ------------------------------------------------------------ steps
     def sample(self, n: int, taken: set, prev: dict | None) -> dict:
@@ -80,10 +101,10 @@ class Wizard:
                                required=True)
         s["gtf"] = self.ask("  Reference annotation GTF", default=(prev or {}).get("gtf"),
                             required=True)
-        plat = self.choose("  Platform", PLATFORMS)
+        plat = self.choose("  Platform", PLATFORMS, guess_platform(path))
         if plat:
             s["platform"] = plat
-        lib = self.choose("  Library", LIBRARIES)
+        lib = self.choose("  Library", LIBRARIES, guess_library(path))
         if lib:
             s["library"] = lib
         return {k: s[k] for k in config.ALL_SAMPLE_COLUMNS if k in s}
@@ -146,8 +167,11 @@ class Wizard:
             runs.append(run)
         return runs
 
-    def run(self) -> tuple[list[dict], list[dict]]:
+    def run(self) -> tuple[list[dict], list[dict]] | None:
+        """Return (samples, runs), or None when the user picks the test data instead."""
         self.say("flair-eval init: set up a FLAIR comparison. Press Enter to accept [defaults].")
+        if self.yes("First time? Try flair-eval on its bundled test data instead (no files needed)?"):
+            return None
         samples: list[dict] = []
         while True:
             samples.append(self.sample(len(samples) + 1, {s["sample"] for s in samples},

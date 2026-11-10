@@ -1,4 +1,5 @@
-# Tests the front ends and publishes frontend/builder/ to GitHub Pages.
+# Tests the front ends and publishes the landing page, the config builder and a demo
+# report to GitHub Pages.
 # One-time setup: repository Settings -> Pages -> Source: "GitHub Actions".
 name: Builder page
 
@@ -8,12 +9,20 @@ on:
     paths:
       - "frontend/builder/**"
       - "assets/schema/**"
+      - "assets/report/**"
+      - "bin/build_report.py"
+      - "bin/flair_eval_lib/**"
+      - "tests/fixtures/bundles/**"
       - "cli/**"
       - ".github/workflows/pages.yml"
   pull_request:
     paths:
       - "frontend/builder/**"
       - "assets/schema/**"
+      - "assets/report/**"
+      - "bin/build_report.py"
+      - "bin/flair_eval_lib/**"
+      - "tests/fixtures/bundles/**"
       - "cli/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -56,11 +65,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Site layout: /          landing page (frontend/builder/welcome.html)
+      #              /builder/  config builder
+      #              /demo/     a real report built from the report fixtures
       - name: Assemble the site
         run: |
-          mkdir -p _site
+          mkdir -p _site/builder _site/demo
+          cp frontend/builder/welcome.html _site/index.html
           cp frontend/builder/index.html frontend/builder/app.js frontend/builder/logic.js \
-             frontend/builder/schemas.js _site/
+             frontend/builder/schemas.js _site/builder/
+          python bin/build_report.py --bundles tests/fixtures/bundles \
+            --out _site/demo/report.html --baseline flair-3.0.1 \
+            --title "Demo: WTC11, TP53 locus (chr17)"
           touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -14,7 +14,8 @@ JAVA_HINT = f"""Java {MIN_JAVA} or newer is needed to run Nextflow. Install one 
 or load it on your cluster, e.g. `module load java/17`."""
 
 NEXTFLOW_HINT = """Nextflow is not on PATH. Install one of:
-    conda install -c bioconda nextflow
+    conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
+    conda activate nextflow
     curl -s https://get.nextflow.io | bash && mv nextflow ~/bin/   (any directory on PATH)
 Docs: https://www.nextflow.io/docs/latest/install.html"""
 

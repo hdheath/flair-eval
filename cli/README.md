@@ -4,7 +4,9 @@ Set up, check and launch [flair-eval](https://github.com/hdheath/flair-eval), th
 pipeline that compares FLAIR runs (versions, branches, settings) on the same data.
 
 ```bash
-pip install -e cli/          # from a clone of the repository
+pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"
+flair-eval doctor            # check Java, Nextflow, conda, disk; suggests a profile
+flair-eval run --test        # try the bundled test data
 flair-eval init              # questions -> samples.csv + runs.yaml
 flair-eval check             # validate them against the pipeline's schemas
 flair-eval run --outdir /big/storage/out
