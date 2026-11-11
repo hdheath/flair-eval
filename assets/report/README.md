@@ -17,7 +17,7 @@ One sample at a time: the Sample picker drives every tab, and nothing is pooled 
 
 | Tab | Shows | Reads |
 |---|---|---|
-| What differs | per run: tiles against the baseline and its five biggest differences; "Every metric, one row each" | the metric registry |
+| What differs | "Where the runs differ" (headline metrics as dot rows, each on its own min–max scale); per run: tiles against the baseline and its five biggest differences; "Every metric, one row each" | the metric registry (`top: true` rows feed the dot rows) |
 | Structure | categories, isoform counts, transcript length and exons histograms, end precision by category | bundle summary, `histograms`, `sections.ends.by_category` |
 | Recovery | TUSCO tiles, sensitivity/precision and TP/PTP/FP/FN; genes detected; genes gained and lost; FSM and CIM; lost genes by baseline expression decile | `sections.tusco`, `by_sample.concordance`, `by_sample.lost_deciles` |
 | Diversity | isoforms per gene; coding and NMD classes; how genes vary | `histograms.isoforms_per_gene`, `sections.productivity`, `sections.variation` |
@@ -52,6 +52,8 @@ vsBase}`:
 - `k` is the format (`n`, `p` percent, `f2`, `f3`, `wall`, `cpu`, `mem`);
 - `lowerIsWorse` is `true` (higher is better), `false` (lower is better) or `null` (no
   direction); it labels a difference "better" or "worse";
+- `top: true` also puts the row in "Where the runs differ" (never for `vsBase` rows, which the
+  baseline lacks);
 - `needs` is the one-line reason shown when no run has the row's data;
 - `vsBase` rows compare a run with the baseline and are empty for the baseline itself.
 

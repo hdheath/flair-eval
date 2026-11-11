@@ -513,19 +513,19 @@
   var FAMS = [];
   function family(fam, tab, rows) { FAMS.push({ fam: fam, tab: tab }); rows.forEach(function (m) { m.fam = fam; m.tab = tab; METRICS.push(m); }); }
   family('Structure', 'structure', [
-    { name: 'Isoforms', k: 'n', lowerIsWorse: null, get: function (r) { return B(r).summary.isoforms; } },
+    { name: 'Isoforms', top: true, k: 'n', lowerIsWorse: null, get: function (r) { return B(r).summary.isoforms; } },
     { name: 'Genes (FLAIR gene ids)', k: 'n', lowerIsWorse: null, get: function (r) { return B(r).summary.genes; } },
     { name: 'Mono-exon share', k: 'p', lowerIsWorse: null, get: function (r) { var x = B(r).summary; return pc(x.mono_exon, x.isoforms); } },
-    { name: 'FSM share', k: 'p', lowerIsWorse: null, get: function (r) { var x = B(r); return pc(x.categories.FSM, x.summary.isoforms); } },
-    { name: 'NIC + NNC share', k: 'p', lowerIsWorse: null, get: function (r) { var x = B(r); return pc((x.categories.NIC || 0) + (x.categories.NNC || 0), x.summary.isoforms); } },
-    { name: 'Known junctions', k: 'p', lowerIsWorse: true, get: function (r) { var j = B(r).junctions; return j ? pc(j.known, j.total) : null; } }
+    { name: 'FSM share', top: true, k: 'p', lowerIsWorse: null, get: function (r) { var x = B(r); return pc(x.categories.FSM, x.summary.isoforms); } },
+    { name: 'NIC + NNC share', top: true, k: 'p', lowerIsWorse: null, get: function (r) { var x = B(r); return pc((x.categories.NIC || 0) + (x.categories.NNC || 0), x.summary.isoforms); } },
+    { name: 'Known junctions', top: true, k: 'p', lowerIsWorse: true, get: function (r) { var j = B(r).junctions; return j ? pc(j.known, j.total) : null; } }
   ]);
   family('Recovery', 'recovery', [
-    { name: 'Reference genes detected', k: 'n', lowerIsWorse: true, get: function (r) { return B(r).summary.ref_genes_detected; } },
+    { name: 'Reference genes detected', top: true, k: 'n', lowerIsWorse: true, get: function (r) { return B(r).summary.ref_genes_detected; } },
     { name: 'Reference transcripts with an FSM', k: 'n', lowerIsWorse: true, get: function (r) { return B(r).summary.ref_transcripts_fsm; } },
-    { name: 'Reference transcripts with a CIM', k: 'n', lowerIsWorse: true, get: function (r) { return B(r).summary.ref_transcripts_cim; } },
-    { name: 'TUSCO sensitivity', k: 'p', lowerIsWorse: true, needs: 'tusco', get: function (r) { var t = tusco(r); return t ? asPct(t.sensitivity) : null; } },
-    { name: 'TUSCO precision', k: 'p', lowerIsWorse: true, needs: 'tusco', get: function (r) { var t = tusco(r); return t ? asPct(t.precision) : null; } },
+    { name: 'Reference transcripts with a CIM', top: true, k: 'n', lowerIsWorse: true, get: function (r) { return B(r).summary.ref_transcripts_cim; } },
+    { name: 'TUSCO sensitivity', top: true, k: 'p', lowerIsWorse: true, needs: 'tusco', get: function (r) { var t = tusco(r); return t ? asPct(t.sensitivity) : null; } },
+    { name: 'TUSCO precision', top: true, k: 'p', lowerIsWorse: true, needs: 'tusco', get: function (r) { var t = tusco(r); return t ? asPct(t.precision) : null; } },
     { name: 'TUSCO false negatives', k: 'n', lowerIsWorse: false, needs: 'tusco', get: function (r) { var t = tusco(r); return t ? t.FN : null; } },
     { name: 'Genes lost vs baseline', k: 'n', lowerIsWorse: false, vsBase: true, needs: 'conc', get: function (r) { var g = genesVs(r); return g ? g.lost.length : null; } },
     { name: 'Genes gained vs baseline', k: 'n', lowerIsWorse: null, vsBase: true, needs: 'conc', get: function (r) { var g = genesVs(r); return g ? g.gained.length : null; } }
@@ -546,19 +546,19 @@
     { name: 'TUSCO genes found only here', k: 'n', lowerIsWorse: null, vsBase: true, needs: 'tuscoInc', get: function (r) { var p = tuscoPair(r); return p ? p.gained : null; } }
   ]);
   family('Ends', 'ends', [
-    { name: '5′ end within 50 bp of refTSS', k: 'p', lowerIsWorse: true, needs: 'tss', get: function (r) { return within(r, 'tss', 50); } },
-    { name: '3′ end within 50 bp of PolyA_DB', k: 'p', lowerIsWorse: true, needs: 'tes', get: function (r) { return within(r, 'tes', 50); } },
+    { name: '5′ end within 50 bp of refTSS', top: true, k: 'p', lowerIsWorse: true, needs: 'tss', get: function (r) { return within(r, 'tss', 50); } },
+    { name: '3′ end within 50 bp of PolyA_DB', top: true, k: 'p', lowerIsWorse: true, needs: 'tes', get: function (r) { return within(r, 'tes', 50); } },
     { name: 'PolyA motif before the 3′ end', k: 'p', lowerIsWorse: true, needs: 'motif', get: function (r) { var m = get(B(r), 'sections.ends.polya_motif'); return m ? pc(m.n_with_motif, m.n) : null; } },
     { name: 'FSM with both ends ≤ 50 bp (CIM)', k: 'p', lowerIsWorse: true, get: function (r) { var x = B(r); return pc(x.fsm_subcategories.CIM, x.categories.FSM); } }
   ]);
   family('Reads', 'reads', [
-    { name: 'Reads assigned', k: 'n', lowerIsWorse: null, needs: 'quant', get: function (r) { var q = quant(r); return q ? q.reads_assigned : null; } },
+    { name: 'Reads assigned', top: true, k: 'n', lowerIsWorse: null, needs: 'quant', get: function (r) { var q = quant(r); return q ? q.reads_assigned : null; } },
     { name: 'Isoforms with reads', k: 'n', lowerIsWorse: null, needs: 'quant', get: function (r) { var q = quant(r); return q ? q.isoforms_quantified : null; } },
-    { name: 'Internal-priming risk (≥ 60% A after the 3′ end)', k: 'p', lowerIsWorse: false, needs: 'priming', get: function (r) { var p = priming(r); return p ? pc(p.risk, p.n) : null; } }
+    { name: 'Internal-priming risk (≥ 60% A after the 3′ end)', top: true, k: 'p', lowerIsWorse: false, needs: 'priming', get: function (r) { var p = priming(r); return p ? pc(p.risk, p.n) : null; } }
   ]);
   family('Compute', 'compute', [
     { name: 'Wall time', k: 'wall', lowerIsWorse: false, needs: 'compute', get: function (r) { return compute(r, 'wall_minutes'); } },
-    { name: 'CPU time', k: 'cpu', lowerIsWorse: false, needs: 'compute', get: function (r) { return compute(r, 'cpu_hours'); } },
+    { name: 'CPU time', top: true, k: 'cpu', lowerIsWorse: false, needs: 'compute', get: function (r) { return compute(r, 'cpu_hours'); } },
     { name: 'Peak memory', k: 'mem', lowerIsWorse: false, needs: 'compute', get: function (r) { return compute(r, 'peak_rss_gb'); } }
   ]);
   function mval(m, r) { try { var v = m.get(r); return isNum(v) ? v : null; } catch (e) { return null; } }
@@ -619,6 +619,7 @@
       'Runs are scored against the reference annotation they were built with' + (gtf ? ' (' + gtf + ')' : '') +
       ', so FSM and gene recovery are recall checks, not accuracy. TUSCO and the refTSS / PolyA_DB end databases are independent evidence when present; end databases give precision only.']));
     if (!others().length) note(root, sampleRuns().length > 1 ? 'Every other run is hidden: show one in the bar above to compare.' : 'Only one run on this sample, so there is nothing to compare. Its numbers are in the table below.', 'note');
+    if (others().length) whereDiffer(root);
     var g = grid(root);
     others().forEach(function (r) {
       var body = card(g, { title: lab(r) + ' vs ' + lab(b) });
@@ -649,6 +650,59 @@
       body.appendChild(ul);
     });
     metricTable(root);
+  }
+  // The headline metrics (top: true) as dot rows. Each row runs from its own lowest to highest
+  // value (min-max, padded 8%), so small gaps are visible; the range at the right gives the scale.
+  function whereDiffer(root) {
+    var runs = sel(), b = baseId();
+    var rows = METRICS.filter(function (m) { return m.top && !m.vsBase; }).map(function (m) {
+      return { m: m, vals: runs.map(function (r) { return { r: r, v: mval(m, r) }; }).filter(function (d) { return d.v !== null; }) };
+    }).filter(function (x) { return x.vals.length; });
+    if (!rows.length) return;
+    var body = card(root, { title: 'Where the runs differ', wide: true,
+      dek: 'One row per metric. Each row runs from its lowest to its highest value, so read the range at the right for how big a gap is. The ringed dot is the baseline.' });
+    var viz = el('div', { class: 'viz' });
+    body.appendChild(viz);
+    var W = width(viz), narrow = W < 560;
+    var lw = narrow ? 0 : Math.min(250, Math.floor(W * 0.36)), rw = narrow ? 0 : 128, pad = 10, lane = 13;
+    var tx0 = lw + pad, tx1 = W - rw - pad;
+    var layout = rows.map(function (x) {
+      var vs = x.vals.map(function (d) { return d.v; });
+      var lo = Math.min.apply(null, vs), hi = Math.max.apply(null, vs), span = hi - lo;
+      var dlo = lo - span * 0.08, dhi = hi + span * 0.08;
+      var X = function (v) { return span > 0 ? tx0 + (tx1 - tx0) * (v - dlo) / (dhi - dlo) : (tx0 + tx1) / 2; };
+      var sorted = x.vals.slice().sort(function (p, q) { return p.v - q.v; }), ends = [];
+      sorted.forEach(function (d) { var px = X(d.v), l = 0; while (ends[l] !== undefined && px - ends[l] < lane) l++; ends[l] = px; d.px = px; d.lane = l; });
+      var nl = Math.max(1, ends.length);
+      return { m: x.m, sorted: sorted, lo: lo, hi: hi, nl: nl, h: (narrow ? 18 : 0) + Math.max(30, 16 + nl * lane) };
+    });
+    var H = layout.reduce(function (t, x) { return t + x.h; }, 0);
+    var svg = svgBox(viz, W, H, 'Where the runs differ: one dot per run on each metric’s own scale');
+    var y = 0;
+    layout.forEach(function (x, i) {
+      var m = x.m, top = y + (narrow ? 18 : 0), mid = top + (x.h - (narrow ? 18 : 0)) / 2;
+      var range = x.lo === x.hi ? mfmt(m, x.lo) : mfmt(m, x.lo) + ' – ' + mfmt(m, x.hi);
+      var all = x.sorted.slice().reverse().map(function (d) { return lab(d.r) + (d.r === b ? ' (baseline)' : '') + ' ' + mfmt(m, d.v); }).join(' · ');
+      if (i) s('line', { x1: 0, x2: W, y1: y, y2: y, class: 'gl rowrule' }, svg);
+      s('rect', { x: 0, y: y, width: W, height: x.h, class: 'hit', 'data-tip': m.name + ': ' + all }, svg);
+      if (narrow) {
+        s('text', { x: 0, y: y + 12, class: 'lab', text: trunc(m.name, Math.floor(W / 7.5)) + ' (' + range + ')' }, svg);
+      } else {
+        s('text', { x: lw - 4, y: mid, 'text-anchor': 'end', 'dominant-baseline': 'central', class: 'lab', text: trunc(m.name, Math.floor(lw / 6.8)) }, svg);
+        s('text', { x: W, y: mid, 'text-anchor': 'end', 'dominant-baseline': 'central', class: 'val', text: range }, svg);
+      }
+      s('line', { x1: tx0, x2: tx1, y1: mid, y2: mid, class: 'gl' }, svg);
+      var cy0 = mid - (x.nl - 1) * lane / 2;
+      x.sorted.forEach(function (d) {
+        var isBase = d.r === b;
+        s('circle', { cx: d.px, cy: cy0 + d.lane * lane, r: isBase ? 6.5 : 5.5, class: isBase ? 'base-dot' : 'dot', style: fill(col(d.r)),
+          'data-tip': lab(d.r) + (isBase ? ' (baseline)' : '') + ' · ' + m.name + ': ' + mfmt(m, d.v) }, svg);
+      });
+      y += x.h;
+    });
+    addTable(body, ['Metric'].concat(runs.map(lab)), layout.map(function (x) {
+      return [x.m.name].concat(runs.map(function (r) { return mfmt(x.m, mval(x.m, r)); }));
+    }));
   }
   function metricTable(root) {
     var runs = sel(), b = baseId();
