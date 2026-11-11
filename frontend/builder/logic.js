@@ -13,7 +13,7 @@
   "use strict";
 
   var PIPELINE = "hdheath/flair-eval";
-  var DEFAULT_REF = "v2";
+  var DEFAULT_REF = "main";
   var DEFAULT_GIT_URL = "https://github.com/BrooksLabUCSC/flair";
   var GIT_SHORTCUTS = ["dev", "main"];
   var ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;

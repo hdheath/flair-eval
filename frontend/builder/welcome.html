@@ -112,7 +112,7 @@ footer { color: var(--ink-2); font-size: 0.86rem; display: flex; flex-wrap: wrap
         <p>Nextflow (with Java 17+) runs the pipeline. The flair-eval helper checks your machine and writes the config files.</p>
         <div class="snip"><pre id="c1">conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
 conda activate nextflow</pre><button type="button" data-copy="c1">Copy</button></div>
-        <div class="snip"><pre id="c2">pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"
+        <div class="snip"><pre id="c2">pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@main#subdirectory=cli"
 flair-eval doctor</pre><button type="button" data-copy="c2">Copy</button></div>
       </li>
       <li>
@@ -156,7 +156,7 @@ flair-eval run --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
     <div class="snip"><pre id="c5">flair-eval run --reads sample.fq.gz --genome hg38 \
   --flair 2.2.0,3.0.1,dev --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name</pre><button type="button" data-copy="c5">Copy</button></div>
     <p>The same with Nextflow directly (inside an <code>sbatch</code> job on phoenix; add <code>-profile local,conda</code> elsewhere):</p>
-    <div class="snip"><pre id="c6">nextflow run hdheath/flair-eval -r v2 \
+    <div class="snip"><pre id="c6">nextflow run hdheath/flair-eval -r main \
   --reads sample.fq.gz --genome hg38 \
   --flair 2.2.0,3.0.1,dev --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name</pre><button type="button" data-copy="c6">Copy</button></div>
     <div class="tablewrap">
@@ -178,7 +178,7 @@ flair-eval run --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
   <footer>
     <a href="builder/">Config builder</a>
     <a href="demo/report.html">Demo report</a>
-    <a href="https://github.com/hdheath/flair-eval/blob/v2/docs/usage_cli.md" rel="noopener">Setup guide</a>
+    <a href="https://github.com/hdheath/flair-eval/blob/main/docs/usage_cli.md" rel="noopener">Setup guide</a>
     <a href="https://github.com/hdheath/flair-eval" rel="noopener">Source</a>
   </footer>
 </div>

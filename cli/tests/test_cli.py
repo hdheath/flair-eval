@@ -120,7 +120,7 @@ def test_run_quick_dry_run(here, capsys):
                    "--dry-run", "--", "-with-tower"])
     assert rc == 0
     got = lines_of(capsys.readouterr().out)
-    assert "nextflow run hdheath/flair-eval -r v2" in got
+    assert "nextflow run hdheath/flair-eval -r main" in got
     assert "--flair_args='--stringent --check_splice'" in got
     assert "--sample r" in got and "-profile slurm" in got and "-with-tower" in got
 
@@ -171,7 +171,7 @@ def test_run_checks_tools_and_launches(here, monkeypatch, capsys):
     monkeypatch.setattr(env_check, "check_tools", lambda: ([], ["old java"]))
     monkeypatch.setattr(cli.subprocess, "call", lambda argv: calls.append(argv) or 0)
     assert cli.main(args) == 0
-    assert calls[0][:5] == ["nextflow", "run", "hdheath/flair-eval", "-r", "v2"]
+    assert calls[0][:5] == ["nextflow", "run", "hdheath/flair-eval", "-r", "main"]
     assert cli.main(args + ["--skip-checks"]) == 0 and len(calls) == 2
 
 

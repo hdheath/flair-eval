@@ -162,13 +162,14 @@ def test_version_end_to_end(prefix, shared_bam):
     results["quantify_input"] = log_of(dq)["quantify_input"]
     assert results["quantify_input"] == ("bam" if results["quantify_mode"] == "bam_manifest" else "reads")
 
-    # BAM-only sample: only versions that count from the BAM (dev) produce counts
+    # BAM-only sample: every version counts (dev from the BAM, the others from its extracted reads, A6b)
     dqb = os.path.join(base, "quantify_bam_only")
     p = adapter(prefix, "quantify", "--isoforms-fa", os.path.join(d, "isoforms.fa"), *full, "--out", dqb)
     assert p.returncode == 0, p.stderr
-    skipped = os.path.exists(os.path.join(dqb, "skipped.json"))
-    assert skipped == (results["quantify_mode"] == "reads_manifest")
-    results["quantify_bam_only"] = "skipped" if skipped else "ok"
+    assert not os.path.exists(os.path.join(dqb, "skipped.json")), open(os.path.join(dqb, "skipped.json")).read()
+    if results["quantify_mode"] == "reads_manifest":
+        assert log_of(dqb)["quantify_reads"] == "extracted_from_bam"
+    results["quantify_bam_only"] = sum(float(r[1]) for r in tsv(os.path.join(dqb, "counts.tsv"))[1:])
     finish(prefix, base, d, results, genome, gtf)
 
 

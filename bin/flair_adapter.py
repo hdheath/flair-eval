@@ -961,10 +961,18 @@ def step_quantify(a, log, prof, flair, work):
         cmd = [flair, "quantify", "--manifest", man, pick(qf, "-g", "--genome"), genome, "--isoform_bed", nbed,
                pick(qf, "-t", "--threads"), str(a.threads), pick(qf, "-o", "--output"), prefix]
     else:
-        if not a.reads:
-            raise Skip("this FLAIR (%s) quantifies from the reads file, and this sample has none "
-                       "(BAM-only sample)" % prof["flair_version"])
-        reads = require_file(a.reads, "--reads")
+        if a.reads:
+            reads = require_file(a.reads, "--reads")
+        elif a.bam:
+            # A6b: a BAM-only sample still gets counts: the reads are the BAM's primary alignments,
+            # the same extraction 2.x collapse uses. Unmapped reads are not in that FASTQ.
+            reads = reads_from_bam(require_file(a.bam, "--bam"), work, log, flair)
+            log.data["quantify_reads"] = "extracted_from_bam"
+            log.note("no --reads: FLAIR %s quantifies from a reads file, so the reads were extracted from "
+                     "the BAM's primary alignments (samtools fastq -F 0x904)" % prof["flair_version"])
+        else:
+            raise Skip("this FLAIR (%s) quantifies from the reads file, and the call has neither --reads "
+                       "nor --bam" % prof["flair_version"])
         with open(man, "w") as fh:
             fh.write("%s\t%s\t%s\t%s\n" % (QUANT_SID, QUANT_COND, QUANT_BATCH, reads))
         qf = qp["flags"]
@@ -1288,7 +1296,7 @@ def main(argv=None):
     if a.step == "detect":
         return run_detect(a)
     if a.step == "quantify" and not a.reads and not a.bam:
-        p.error("quantify needs --reads, or --bam for FLAIR versions that count from the genome BAM")
+        p.error("quantify needs --reads or --bam (without --reads, the reads are taken from the BAM)")
     return run_step(a)
 
 

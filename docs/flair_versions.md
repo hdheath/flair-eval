@@ -98,7 +98,8 @@ unless a run sets `transcriptome_args`, so these differences are part of what a 
 - **BAM-only samples** (A6, no `--reads`): 3.0.1, TED and dev assemble from the BAM alone. 2.x
   `collapse` needs reads, so the adapter extracts the BAM's primary alignments with
   `samtools fastq -F 0x904` and notes it in `adapter_log.json`. Those reads have passed the shared
-  align step's filters, unlike a raw reads file.
+  align step's filters, unlike a raw reads file. Quantify does the same for versions that count
+  from a reads file (A6b), so a BAM-only sample gets counts from every supported version.
 - `--regions BED`: the BAM is cut with `samtools view -L` (reads overlapping the regions) before
   FLAIR sees it; for 2.2.0 the raw reads given to `collapse` are cut to the reads in that BAM.
 
@@ -121,14 +122,16 @@ per `isoforms.fa` record in FASTA order. FLAIR's own table is kept as `flair.cou
 
 **What each version needs (A7).** Core passes everything it has: `--isoforms-fa`, `--reads`
 (unless the sample is BAM-only), `--bam`, `--genome`, `--isoforms-bed`, `--flair-bed`. The adapter
-uses what the version needs and writes `skipped.json` naming what is missing. `adapter_log.json`
+uses what the version needs and writes `skipped.json` naming what is missing. Without `--reads`,
+a version that needs reads gets the BAM's primary alignments as reads (A6b,
+`quantify_reads: "extracted_from_bam"` in `adapter_log.json`). `adapter_log.json`
 records `quantify_input: reads|bam` (A21; also on a skip), because "reads assigned" means reads
 from the reads file for 2.x/3.0.1/TED but alignments in the genome BAM for dev:
 
 | | 2.2.0 / 3.0.1 | TED | dev |
 |---|---|---|---|
 | needs | `--reads` | `--reads` + `--flair-bed` | `--bam` + `--genome` + `--flair-bed` |
-| BAM-only sample | skipped | skipped | **counted** |
+| BAM-only sample | counted (reads extracted from the BAM) | counted (reads extracted from the BAM) | **counted** |
 
 FLAIR's own BED is taken from `--flair-bed`; when that flag is absent, from `--isoforms-bed` if it
 has FLAIR's extra columns, or from `isoforms.flair.bed` in the same directory as `--isoforms-bed` /
@@ -273,7 +276,8 @@ file, an unknown `--library`) exits 2; a failing FLAIR command exits with its ow
 - `tests/python/test_flair_adapter_integration.py`: opt-in (`FLAIR_EVAL_IT_ENVS`, see its
   docstring) end-to-end run of every step with real envs, checking contract-shaped outputs.
 
-Integration results, 2026-11-09, on FLAIR's own test inputs (`test/input/basic.reads.fa`, 1,013
+Integration results, 2026-11-09 (before A6b: "skipped (needs reads)" below is now a count from
+the BAM's extracted reads), on FLAIR's own test inputs (`test/input/basic.reads.fa`, 1,013
 reads; `basic.annotation.gtf`; hg38 chr12+chr17+chr20), shared BAM from 3.0.1 `align`, 4 threads
 on a SLURM short node:
 
@@ -287,6 +291,11 @@ on a SLURM short node:
 | dev 425b260 (`git`, `ref: 425b260`, built from scratch) | ok | 7 / 7 / 4 | **crashes in FLAIR** (§7) | crashes | inline |
 | dev d033600 (existing env) | skipped | 7 / 7 / 4 | 751 (bam) | **751** | inline: 5 PRO, 2 NGO |
 | dev 389748e (`git: …flair, ref: dev`, built from scratch) | skipped | 7 / 7 / 4 | 751 (bam) | **751** | inline |
+
+BAM-only quantify (A6b), 2026-11-10, on `tests/data/human_region` (20k WTC11 PacBio reads,
+chr19:1–2 Mb), shared BAM from 3.0.1 `align`, reads assigned with the reads file vs from the BAM alone:
+2.2.0 17,272 vs 17,270; 3.0.1 18,987 vs 18,985; dev 389748e 12,073 vs 12,073 (counts from the BAM
+either way). The two-read gap is reads with no primary alignment.
 
 Without `--bam`, dev quantify writes `skipped.json` (the contract's minimal call). Last run
 2026-11-10 after the round-2 amendments (A20, A21): dev transcriptome got

@@ -33,7 +33,7 @@ directory goes inside it.
 ```bash
 conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
 conda activate nextflow
-pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"
+pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@main#subdirectory=cli"
 flair-eval doctor          # checks Java, Nextflow, conda, disk; says whether phoenix was found
 flair-eval run --test --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_test
 flair-eval init            # then set up your own data
@@ -47,13 +47,15 @@ flair-eval run --reads /data/HG002.fq.gz --genome hg38 \
   --flair 2.2.0,3.0.1,dev \
   --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_hg002
 ```
-This makes one sample (named after the reads file, or `--sample NAME`) and one run per
+To start from an aligned BAM, give `--bam /data/HG002.bam` in place of `--reads`
+([how alignment works](#reads-or-a-bam-how-alignment-works)).
+This makes one sample (named after the reads or BAM file, or `--sample NAME`) and one run per
 `--flair` token. Add `--platform pacbio|ont` and `--library cDNA|dRNA` if you know them.
 With your own reference, give `--genome /ref/genome.fa --gtf /ref/annotation.gtf` instead.
 
 The same with Nextflow directly (on phoenix, inside an `sbatch` job rather than on `mustard`):
 ```bash
-nextflow run hdheath/flair-eval -r v2 \
+nextflow run hdheath/flair-eval -r main \
   --reads /data/HG002.fq.gz --genome hg38 \
   --flair 2.2.0,3.0.1,dev \
   --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_hg002
@@ -92,6 +94,22 @@ write the `=` form for you. (`flair-eval run --flair_args "--stringent"` is fine
 
 Use `runs.yaml` when runs need different arguments, labels, tags, or other step settings, and
 `samples.csv` when you have more than one sample or extra tracks.
+
+## Reads or a BAM: how alignment works
+Each sample starts from reads, a BAM, or both:
+
+| sample gives | what happens |
+|---|---|
+| reads only | aligned **once per sample** with `flair align` from FLAIR `--align_flair` (default 3.0.1, FLAIR's own minimap2 settings; `--nvrna` when `library` is dRNA). Every run then assembles from that one BAM, so differences between runs come from FLAIR, not from the alignment. |
+| BAM only | no alignment. Every run assembles from your BAM. Quantify still runs: dev counts from the BAM, and 2.2.0 / 3.0.1 count the BAM's primary alignments, extracted with `samtools fastq -F 0x904` (so unmapped reads are not counted). |
+| both | your BAM is used for assembly; the reads file is used where a version wants reads (2.x collapse, quantify). |
+
+The BAM must be coordinate-sorted, have its `.bai` (or `.csi`) next to it, and be aligned to the
+same genome FASTA you give (`hg38` = GRCh38 primary assembly). Any spliced aligner is fine
+(minimap2 `-ax splice`, pbmm2, a previous `flair align`).
+
+A run with `own_align: true` (runs.yaml, or "Align its own BAM" on the builder page) aligns the
+reads with its own FLAIR instead; it needs a reads file.
 
 ## Config files
 `samples.csv` has one row per sample:
@@ -137,16 +155,16 @@ Launch with:
 ```bash
 flair-eval run --samples samples.csv --runs runs.yaml --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
 # or, inside a SLURM job:
-nextflow run hdheath/flair-eval -r v2 --input samples.csv --runs runs.yaml --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
+nextflow run hdheath/flair-eval -r main --input samples.csv --runs runs.yaml --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
 ```
 
 ## Config-builder page
 `frontend/builder/index.html` is a single static page (no build step, nothing sent anywhere).
-Open it from a clone, or from GitHub Pages once that is enabled
-(repository Settings → Pages → Source: GitHub Actions). The `Builder page` workflow then
-publishes `https://hdheath.github.io/flair-eval/`: a start page with a three-step quick start,
-the builder at `/builder/`, and a demo report built from `tests/fixtures/bundles` at
-`/demo/report.html`.
+Use it online at <https://hdheath.github.io/flair-eval/builder/>, or open the file from a clone.
+The `Builder page` workflow publishes `https://hdheath.github.io/flair-eval/` on every push to
+`main` that touches the page or the demo: a start page with a three-step quick start, the builder
+at `/builder/`, and a demo report at `/demo/report.html`, built from the real FLAIR 2.2.0, 3.0.1
+and dev bundles in `assets/demo/bundles` (WTC11 PacBio, TP53 region).
 
 - Add samples, then one card per run. Each card has a FLAIR source picker (release, git branch,
   conda env, container), common setting presets, a label and tags.
@@ -165,7 +183,7 @@ the builder at `/builder/`, and a demo report built from `tests/fixtures/bundles
 ## The `flair-eval` CLI
 Python 3.10+. Install it straight from GitHub, or from a clone:
 ```bash
-pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"
+pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@main#subdirectory=cli"
 pip install -e cli/
 ```
 
@@ -276,7 +294,7 @@ plus conda, else Singularity/Apptainer, else Docker), and say so. `--test` adds 
 `--pipeline` runs another copy of the pipeline: a GitHub fork (`--pipeline me/flair-eval -r my-branch`)
 or a local checkout (`--pipeline ~/flair-eval`; `-r` is not used then). Add `-- -stub` to run the
 whole graph with placeholder outputs, a quick way to test configs end to end.
-Options: `-r/--ref` (pipeline revision, default `v2`), `--profile`, `--outdir`, `--work-dir`,
+Options: `-r/--ref` (pipeline revision, default `main`; `-r v2` runs the development branch), `--profile`, `--outdir`, `--work-dir`,
 `--resume`, and the pipeline params `--baseline`, `--report_title`, `--align_flair`,
 `--regions`, `--bundles`, `--env_cache`. Pipeline params equal to their default are left off.
 

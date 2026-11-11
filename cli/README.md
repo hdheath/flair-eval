@@ -4,7 +4,7 @@ Set up, check and launch [flair-eval](https://github.com/hdheath/flair-eval), th
 pipeline that compares FLAIR runs (versions, branches, settings) on the same data.
 
 ```bash
-pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"
+pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@main#subdirectory=cli"
 OUT=/private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name   # --outdir is required
 flair-eval doctor            # check Java, Nextflow, conda, disk; detects phoenix
 flair-eval run --test --outdir $OUT-test   # try the bundled test data

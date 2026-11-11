@@ -295,7 +295,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
               </div>
               <div class="field">
                 <label for="o-ref">Pipeline version</label>
-                <input type="text" class="mono" id="o-ref" data-opt="ref" placeholder="v2">
+                <input type="text" class="mono" id="o-ref" data-opt="ref" placeholder="main">
                 <span class="hint">Branch, tag or commit of hdheath/flair-eval (<code>-r</code>).</span>
               </div>
               <div class="field">
@@ -353,7 +353,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
           <li>Install Java 17+ and Nextflow (once):
             <div class="snip"><code id="snip-1">conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17 &amp;&amp; conda activate nextflow</code><button class="btn" type="button" data-copy="snip-1">Copy</button></div></li>
           <li>Install the flair-eval helper and check this machine:
-            <div class="snip"><code id="snip-2">pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@v2#subdirectory=cli"</code><button class="btn" type="button" data-copy="snip-2">Copy</button></div>
+            <div class="snip"><code id="snip-2">pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@main#subdirectory=cli"</code><button class="btn" type="button" data-copy="snip-2">Copy</button></div>
             <div class="snip"><code id="snip-3">flair-eval doctor</code><button class="btn" type="button" data-copy="snip-3">Copy</button></div></li>
           <li>Try the bundled test data, then run the command above on your own:
             <div class="snip"><code id="snip-4">flair-eval run --test --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_test</code><button class="btn" type="button" data-copy="snip-4">Copy</button></div></li>
@@ -379,7 +379,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
 
   <footer>
     <p>Same rules as <code>flair-eval check</code> and the pipeline's schemas (<code>assets/schema/*.json</code>). Your entries are kept in this browser only.</p>
-    <p><a href="https://github.com/hdheath/flair-eval" rel="noopener">hdheath/flair-eval</a> · <a href="https://github.com/hdheath/flair-eval/blob/v2/docs/usage_cli.md" rel="noopener">pip CLI guide</a></p>
+    <p><a href="https://github.com/hdheath/flair-eval" rel="noopener">hdheath/flair-eval</a> · <a href="https://github.com/hdheath/flair-eval/blob/main/docs/usage_cli.md" rel="noopener">pip CLI guide</a></p>
   </footer>
 </div>
 <script src="schemas.js"></script>

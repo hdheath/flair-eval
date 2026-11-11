@@ -96,8 +96,8 @@ first, then from the launch directory. Columns and keys are listed in
    when a BAM is given. A run with `own_align: true` aligns with its own FLAIR instead.
 3. Per sample × run: assemble, then quantify and predictProductivity (switch off per run with
    `quantify: false` / `productivity: false`), then structure evaluation against the GTF.
-   Quantify also runs for BAM-only samples; a FLAIR version that needs reads records the step
-   as skipped instead of failing.
+   Quantify also runs for BAM-only samples: dev counts from the BAM, and 2.2.0 / 3.0.1 count
+   the BAM's primary reads (extracted with `samtools fastq`).
 4. One bundle per job, and one report over all bundles.
 
 `--regions regions.bed` restricts assembly and evaluation to a set of regions. FLAIR then gets a

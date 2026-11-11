@@ -594,15 +594,32 @@ def test_quantify_flair_bed_flag(fake):
     assert p.returncode == 2 and "--flair-bed" in p.stderr and "not found" in p.stderr
 
 
-def test_quantify_bam_only_sample_skips_reads_versions(fake):
-    """A6/A7: without reads, a version that quantifies from reads writes skipped.json."""
+def test_quantify_bam_only_sample_extracts_reads(fake):
+    """A6b: without reads, a version that quantifies from reads gets the BAM's primary reads."""
     run = fake("v301")
     asm = run.tmp / "asm"
     assemble(run, asm, check=0)
     out = run.tmp / "q"
     run("quantify", "--isoforms-fa", asm / "isoforms.fa", "--sample", "s", "--bam", run.inputs / "shared.bam",
-        "--genome", run.inputs / "genome.fa", "--isoforms-bed", asm / "isoforms.bed", "--out", out, check=0)
-    assert "BAM-only" in json.load(open(out / "skipped.json"))["reason"]
+        "--genome", run.inputs / "genome.fa", "--isoforms-bed", asm / "isoforms.bed",
+        "--flair-bed", asm / "isoforms.flair.bed", "--out", out, "--keep-work", check=0)
+    assert not (out / "skipped.json").exists()
+    assert len(read_tsv(out / "counts.tsv")) > 0
+    log = json.load(open(out / "adapter_log.json"))
+    assert log["quantify_input"] == "reads" and log["quantify_reads"] == "extracted_from_bam"
+    assert [c for c in log["commands"] if c["label"] == "samtools_fastq"]
+    q = [c for c in run.calls() if c[0] == "quantify"][-1]
+    man = open(argval(q, "-r", "--reads_manifest")).read().split("\t")
+    assert man[3].strip().endswith("reads_from_bam.fq")
+
+
+def test_quantify_without_reads_or_bam_is_a_usage_error(fake):
+    """quantify needs --reads or --bam."""
+    run = fake("v301")
+    asm = run.tmp / "asm"
+    assemble(run, asm, check=0)
+    p = run("quantify", "--isoforms-fa", asm / "isoforms.fa", "--sample", "s", "--out", run.tmp / "q")
+    assert p.returncode == 2 and "--reads or --bam" in p.stderr
 
 
 def test_quantify_dev_from_bam_without_reads(fake):

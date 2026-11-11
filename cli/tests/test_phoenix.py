@@ -38,7 +38,7 @@ def test_in_home_and_node_local(tmp_path, monkeypatch):
 
 def test_sbatch_script():
     import datetime
-    text = phoenix.sbatch_script("nextflow run hdheath/flair-eval -r v2 \\\n  --outdir /g/o",
+    text = phoenix.sbatch_script("nextflow run hdheath/flair-eval -r main \\\n  --outdir /g/o",
                                  "/g/my out", version="9.9",
                                  now=datetime.datetime(2026, 11, 10, 9, 30))
     lines = text.splitlines()

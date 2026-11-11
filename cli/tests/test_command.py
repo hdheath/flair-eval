@@ -10,7 +10,7 @@ from flair_eval.command import Options, build_command, format_command, opt, quot
 def test_quick_form(sample, two_runs):
     c = build_command([sample], two_runs)
     assert c.mode == "quick"
-    assert c.argv == ["nextflow", "run", "hdheath/flair-eval", "-r", "v2",
+    assert c.argv == ["nextflow", "run", "hdheath/flair-eval", "-r", "main",
                       "--reads", "/data/HG002.fq.gz", "--genome", "/ref/hg38.fa",
                       "--gtf", "/ref/gencode.gtf", "--sample", "HG002",
                       "--flair", "3.0.1,dev", "--outdir", "<outdir>"]
@@ -80,7 +80,7 @@ def test_prefer_files(sample, two_runs):
 
 def test_report_command():
     c = report_command(["out1", "out2/bundles"], Options(params={"report_title": "T"}))
-    assert c.argv == ["nextflow", "run", "hdheath/flair-eval", "-r", "v2", "--report_only",
+    assert c.argv == ["nextflow", "run", "hdheath/flair-eval", "-r", "main", "--report_only",
                       "true", "--bundles", "out1,out2/bundles", "--report_title", "T",
                       "--outdir", "<outdir>"]
 
@@ -104,7 +104,7 @@ def test_format_command(sample, two_runs):
     runs = [dict(r, transcriptome_args="--stringent") for r in two_runs]
     text = format_command(build_command([sample], runs, Options(resume=True)).argv)
     lines = text.split(" \\\n")
-    assert lines[0] == "nextflow run hdheath/flair-eval -r v2"
+    assert lines[0] == "nextflow run hdheath/flair-eval -r main"
     assert "  --flair_args=--stringent" in lines
     assert "  --outdir '<outdir>'" in lines  # no default: the pipeline requires --outdir
     assert lines[-1] == "  -resume"

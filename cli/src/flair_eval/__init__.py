@@ -10,6 +10,6 @@ __version__ = "0.1.0"
 
 #: The pipeline as Nextflow pulls it.
 PIPELINE = "hdheath/flair-eval"
-#: Pipeline revision (`-r`) used when none is given. v2 is the integration branch until
-#: the first v2 release tag exists.
-DEFAULT_REF = "v2"
+#: Pipeline revision (`-r`) used when none is given: main (stable). v2 is the development
+#: branch; `-r v2` runs it.
+DEFAULT_REF = "main"

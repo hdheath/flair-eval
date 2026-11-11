@@ -210,7 +210,8 @@ These settle the gaps the streams reported. Each item is tagged with the stream(
 - A5 [core] **Default baseline:** the first run in runs.yaml / `--flair` order. Core always passes `--baseline`. `build_report.py` falls back to name order only when no baseline is given (report-only mode over old bundles).
 
 **Adapter CLI (§2)**
-- A6 [core, adapter] **`assemble --reads` is optional.** A BAM-only sample skips QUANTIFY unless the version can quantify from the BAM (see A7).
+- A6 [core, adapter] **`assemble --reads` is optional.** A BAM-only sample still runs QUANTIFY (see A6b and A7).
+- A6b [adapter] (2026-11-10) **BAM-only quantify.** When a version quantifies from a reads file and there is no `--reads`, the adapter extracts the BAM's primary alignments (`samtools fastq -F 0x904`, as for 2.x collapse) and quantifies those. `adapter_log.json` records `quantify_reads: "extracted_from_bam"`; `quantify_input` stays `reads`.
 - A7 [core, adapter] **`quantify` gains optional `--bam B --genome G --isoforms-bed I`.** Core always passes the ones it has. The adapter picks what the version needs and writes `skipped.json` if a required one is missing.
 - A8 [core, adapter] **`assemble` may also write `isoforms.flair.bed`** (FLAIR's native BED, all columns). Core declares it as an optional output and stages it into QUANTIFY / PRODUCTIVITY. The adapter takes it via an optional `--flair-bed` flag rather than finding it through symlinks.
 - A9 [core, adapter] **All adapter commands accept optional `--platform` and `--library`.** The adapter records them in `adapter_log.json` and may map them to version flags, documenting each mapping in `docs/flair_versions.md`.
