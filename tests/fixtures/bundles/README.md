@@ -15,6 +15,8 @@ Each bundle folder holds what the report reads:
 | `compute` | `/usr/bin/time -v` of the quantify + productivity steps on the slice |
 | `run_index` | the run order above (A17) |
 | `sections.quant.input` | `reads` for 2.2.0 / 3.0.1, `bam` for the dev runs (A21) |
+| `tables/ends.tsv`, `sections.ends`, `.priming`, `.variation` | round 3, see below |
+| `sections.tusco` (`wtc11_pacbio` only) | round 3, **synthetic**, see below |
 
 ## Samples and runs
 
@@ -43,6 +45,23 @@ Caveats, so the numbers are not over-read:
   same command and `--genome` spelled out. FLAIR itself was not changed.
 - CPM is relative to the slice's reads, so values are much higher than genome-wide CPM.
 - `compute` covers quantify + productivity on the slice, not the genome-wide assembly.
+
+## Round-3 sections (CONTRACTS A28-A32)
+
+Added by hand for the report tests, before `structure_metrics.py` wrote them, so they follow the
+contract shapes but were not made by the pipeline. Regenerate them with
+`structure_metrics.py --ref-tss --ref-pas --tusco` once that lands.
+
+- `tables/ends.tsv`, `sections.ends`, `sections.priming` and `sections.variation` were computed
+  from each bundle's `isoforms.bed` and `tables/isoforms.tsv` by a one-off script that reads
+  A28-A32 independently of `bin/flair_eval_lib/ends.py`: refTSS v4.1 and PolyA_DB v4.1 (hg38),
+  GENCODE v49 basic for the FSM/ISM reference ends, and the GRCh38 genome for the polyA motif and
+  the downstream-A fraction. `refs` records the files' names, md5 and genome-wide site counts.
+  `priming.down_a_hist` has 11 bins (the last is exactly 1.0, as in section 3).
+- `sections.tusco` is **made up**: the fixture region holds no TUSCO gene. `sensitivity` = TP / genes as in `tusco.py`; `precision` is a made-up number. `wtc11_pacbio` runs
+  carry random calls over the 46 real TUSCO gene ids (seeded by run id, `genes_in_regions` = 46)
+  so the TUSCO panels have something to draw. `wtc11_ont` has no `tusco` section, which tests the
+  hidden-panel path.
 
 ## Cross-check of the classifier against SQANTI3
 

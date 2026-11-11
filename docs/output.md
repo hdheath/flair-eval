@@ -30,7 +30,8 @@ bundles/<sample>/<run_id>/
 ├── tables/
 │   ├── isoforms.tsv               one row per isoform with its structural category
 │   ├── categories.tsv             category, subcategory, n
-│   └── genes.tsv                  gene_id, gene_name of reference genes (when written)
+│   ├── genes.tsv                  gene_id, gene_name of reference genes (when written)
+│   └── ends.tsv                   per isoform: 5'/3' ends, distances to end references, poly(A) motif, downstream A
 └── provenance/
     ├── flair_env.json             which FLAIR ran: source, version, commit, env/container
     ├── adapter_<step>.json        exact FLAIR commands, version, exit codes, wall time
@@ -53,7 +54,7 @@ pipeline knows:
 | `pipeline.version` / `pipeline.commit` | the pipeline manifest version and git commit (null for a local checkout) |
 | `pipeline.launch` | Nextflow's session id: the same for every bundle of one launch, and kept by `-resume` (A24) |
 | `pipeline.created` | when the bundle was written (UTC). The newest bundle wins when the report sees the same (sample, run_id) twice |
-| `inputs` | absolute paths of the original `genome`, `gtf`, `reads`, `bam`, `regions`, plus `platform`, `library` and `reference_cut_to_regions` (below); other keys written by structure_metrics are kept |
+| `inputs` | absolute paths of the original `genome`, `gtf`, `reads`, `bam`, `regions`, `ref_tss`, `ref_pas`, `tusco` (null when not used), plus `platform`, `library` and `reference_cut_to_regions` (below); other keys written by structure_metrics are kept |
 | `label`, `tags` | from the run, when structure_metrics left them empty |
 | `compute` | from this job's Nextflow task traces (below) |
 
@@ -96,6 +97,23 @@ the one shared implementation, `python3 -m flair_eval_lib.sections <bundle_dir>`
 
 Both count only isoforms listed in `tables/isoforms.tsv`, so a `--regions` run counts the same
 isoforms in every panel. The CPM bin edges are defined in `bin/flair_eval_lib/sections.py`.
+
+### Round-3 sections from `structure_metrics.py` (CONTRACTS section 11)
+
+EVALUATE_STRUCTURE passes the sample's end references and TUSCO list (`--ref_tss`, `--ref_pas`,
+`--tusco`, or the genome preset's, A26). Only main chromosomes (chr1-22, X, Y) are evaluated.
+
+| key | needs | content |
+|---|---|---|
+| `sections.ends` | `ref_tss` and/or `ref_pas` | per reference (`refs`: file, md5, sites), the isoforms within each window of `windows` bp of a site, signed distance histograms, FSM distances to their reference transcript, the same numbers by category, and the poly(A) motif count (A29). The half without its file is null. |
+| `sections.tusco` | `tusco` | SQANTI3 TUSCO benchmark: TP/PTP/FP/FN genes, sensitivity, precision, `per_gene` labels, plus SQANTI3's transcript-level counts in `transcripts` (A30). Rules: `bin/flair_eval_lib/tusco.py`. |
+| `sections.priming` | the genome | isoforms whose 20 nt downstream of the 3' end are >= 60% A (internal-priming risk), and the A-fraction histogram (A31) |
+| `sections.variation` | nothing | genes with >= 2 isoforms that differ by ends only, splicing only, both, or neither (A32). Rules: `bin/flair_eval_lib/variation.py`. |
+
+`tables/ends.tsv` columns (A28): `isoform_id category subcategory strand tss tes d_reftss d_pas
+d_ref_tss d_ref_tes polya_motif down_a_frac`. `tss`/`tes` are 0-based end bases. Distances are
+genomic and signed in transcript orientation: negative means the isoform end is upstream (5′) of
+the site. A site farther than 10 kb leaves the cell empty; `d_ref_*` are for FSM and ISM only.
 
 ### Other `bundle.json` keys set by BUNDLE
 

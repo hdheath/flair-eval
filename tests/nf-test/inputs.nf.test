@@ -211,4 +211,22 @@ nextflow_pipeline {
             assert (workflow.stdout + workflow.stderr).join('\n').contains("--flair_args='--stringent'")
         }
     }
+
+    test("A26: an explicit --ref_tss that does not exist") {
+        when {
+            params {
+                reads   = "${projectDir}/tests/nf-test/inputs/sampleA.fastq"
+                genome  = "${projectDir}/tests/nf-test/inputs/genome.fa"
+                gtf     = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                flair   = "3.0.1"
+                ref_tss = "${projectDir}/tests/nf-test/inputs/refs/nope.bed"
+                outdir  = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("--ref_tss file '${projectDir}/tests/nf-test/inputs/refs/nope.bed' does not exist.")
+            assert workflow.trace.tasks().size() == 0
+        }
+    }
 }

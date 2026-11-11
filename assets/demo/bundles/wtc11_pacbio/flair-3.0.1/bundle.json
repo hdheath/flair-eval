@@ -1,239 +1,507 @@
 {
- "schema": "flair-eval/bundle/1",
- "sample": "wtc11_pacbio",
- "run_id": "flair-3.0.1",
- "label": "FLAIR 3.0.1",
- "tags": {
-  "version": "3.0.1",
-  "source": "release",
-  "line": "release"
- },
- "flair": {
-  "source": "release",
-  "requested": "3.0.1",
-  "version": "3.0.1",
-  "commit": null
- },
- "pipeline": {
-  "version": "2.0.0dev",
-  "commit": "dc8f54dc228fc7f5edcc6b6d3900314e2b77c1ca",
-  "created": "2026-11-10T07:07:59+00:00"
- },
- "inputs": {
-  "genome": "GRCh38.primary_assembly.genome.fa",
-  "gtf": "gencode.v49.basic.annotation.gtf",
-  "reads": "wtc11_pb.tp53.fa.gz",
-  "bam": "wtc11_pb.tp53.bam",
-  "regions": "regions.bed",
-  "regions_intervals": [
-   [
-    "chr17",
-    7400000,
-    9400000
-   ]
-  ],
-  "isoforms_in_file": 254,
-  "isoforms_dropped_contigs": 0,
-  "isoforms_outside_regions": 1,
-  "fsm_end_window": 50,
-  "transcriptome_args": "",
-  "platform": "pacbio",
-  "library": "cDNA",
-  "reference_cut_to_regions": true
- },
- "summary": {
-  "isoforms": 253,
-  "genes": 65,
-  "loci": 58,
-  "mono_exon": 17,
-  "multi_exon": 236,
-  "ref_transcripts_total": 558,
-  "ref_transcripts_fsm": 133,
-  "ref_transcripts_cim": 126,
-  "ref_genes_detected": 57,
-  "ref_genes_total": 145
- },
- "categories": {
-  "FSM": 138,
-  "ISM": 37,
-  "NIC": 70,
-  "NNC": 1,
-  "genic": 1,
-  "genic_intron": 1,
-  "antisense": 2,
-  "intergenic": 3,
-  "fusion": 0
- },
- "fsm_subcategories": {
-  "CIM": 126,
-  "FSM5": 2,
-  "FSM3": 7,
-  "FSMTE": 3
- },
- "junctions": {
-  "total": 536,
-  "known": 521,
-  "novel_canonical": 14,
-  "novel_noncanonical": 1,
-  "novel": 15,
-  "motif_checked": true
- },
- "histograms": {
-  "isoforms_per_gene": {
-   "edges": [
-    1,
-    2,
-    3,
-    4,
-    5,
-    6,
-    8,
-    11,
-    16,
-    21
-   ],
-   "counts": [
-    30,
-    9,
-    6,
-    2,
-    6,
-    4,
-    3,
-    2,
-    2,
-    1
-   ]
+  "schema": "flair-eval/bundle/1",
+  "sample": "wtc11_pacbio",
+  "run_id": "flair-3.0.1",
+  "label": "FLAIR 3.0.1",
+  "tags": {
+    "version": "3.0.1",
+    "source": "release",
+    "line": "release"
   },
-  "transcript_length": {
-   "edges": [
-    0,
-    250,
-    500,
-    750,
-    1000,
-    1500,
-    2000,
-    3000,
-    4000,
-    6000,
-    10000
-   ],
-   "counts": [
-    0,
-    6,
-    11,
-    20,
-    38,
-    33,
-    48,
-    40,
-    35,
-    22,
-    0
-   ]
+  "flair": {
+    "source": "release",
+    "requested": "3.0.1",
+    "version": "3.0.1",
+    "commit": null
   },
-  "exon_length": {
-   "edges": [
-    0,
-    50,
-    100,
-    150,
-    200,
-    300,
-    500,
-    1000,
-    2000,
-    5000
-   ],
-   "counts": [
-    173,
-    487,
-    917,
-    491,
-    346,
-    117,
-    124,
-    97,
-    43,
-    2
-   ]
+  "pipeline": {
+    "version": "2.0.0dev",
+    "commit": "dc8f54dc228fc7f5edcc6b6d3900314e2b77c1ca",
+    "created": "2026-11-10T07:07:59+00:00"
   },
-  "exons_per_isoform": {
-   "edges": [
-    1,
-    2,
-    3,
-    4,
-    5,
-    6,
-    8,
-    11,
-    16,
-    21,
-    31
-   ],
-   "counts": [
-    17,
-    18,
-    17,
-    23,
-    14,
-    25,
-    62,
-    23,
-    9,
-    30,
-    15
-   ]
-  }
- },
- "compute": {
-  "cpu_hours": 0.1164,
-  "peak_rss_gb": 1.227,
-  "wall_minutes": 1.02
- },
- "sections": {
-  "quant": {
-   "isoforms_quantified": 252,
-   "reads_assigned": 26419,
-   "cpm_hist": {
-    "edges": [
-     0,
-     1,
-     3,
-     10,
-     30,
-     100,
-     300,
-     1000,
-     3000,
-     10000,
-     30000
+  "inputs": {
+    "genome": "GRCh38.primary_assembly.genome.fa",
+    "gtf": "gencode.v49.basic.annotation.gtf",
+    "reads": "wtc11_pb.tp53.fa.gz",
+    "bam": "wtc11_pb.tp53.bam",
+    "regions": "regions.bed",
+    "regions_intervals": [
+      [
+        "chr17",
+        7400000,
+        9400000
+      ]
     ],
-    "counts": [
-     0,
-     0,
-     0,
-     0,
-     3,
-     65,
-     105,
-     33,
-     31,
-     10,
-     5
-    ]
-   },
-   "input": "reads"
+    "isoforms_in_file": 254,
+    "isoforms_dropped_contigs": 0,
+    "isoforms_outside_regions": 1,
+    "fsm_end_window": 50,
+    "transcriptome_args": "",
+    "platform": "pacbio",
+    "library": "cDNA",
+    "reference_cut_to_regions": true,
+    "ref_tss": "refTSS_v4.1.hg38.bed",
+    "ref_pas": "PolyA_DB_v4.1.main.hg38.bed",
+    "tusco": "tusco_human.tsv"
   },
-  "productivity": {
-   "class_counts": {
-    "NGO": 27,
-    "PRO": 168,
-    "PTC": 58
-   }
-  }
- },
- "run_index": 1
+  "summary": {
+    "isoforms": 253,
+    "genes": 65,
+    "loci": 58,
+    "mono_exon": 17,
+    "multi_exon": 236,
+    "ref_transcripts_total": 558,
+    "ref_transcripts_fsm": 133,
+    "ref_transcripts_cim": 126,
+    "ref_genes_detected": 57,
+    "ref_genes_total": 145
+  },
+  "categories": {
+    "FSM": 138,
+    "ISM": 37,
+    "NIC": 70,
+    "NNC": 1,
+    "genic": 1,
+    "genic_intron": 1,
+    "antisense": 2,
+    "intergenic": 3,
+    "fusion": 0
+  },
+  "fsm_subcategories": {
+    "CIM": 126,
+    "FSM5": 2,
+    "FSM3": 7,
+    "FSMTE": 3
+  },
+  "junctions": {
+    "total": 536,
+    "known": 521,
+    "novel_canonical": 14,
+    "novel_noncanonical": 1,
+    "novel": 15,
+    "motif_checked": true
+  },
+  "histograms": {
+    "isoforms_per_gene": {
+      "edges": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        8,
+        11,
+        16,
+        21
+      ],
+      "counts": [
+        30,
+        9,
+        6,
+        2,
+        6,
+        4,
+        3,
+        2,
+        2,
+        1
+      ]
+    },
+    "transcript_length": {
+      "edges": [
+        0,
+        250,
+        500,
+        750,
+        1000,
+        1500,
+        2000,
+        3000,
+        4000,
+        6000,
+        10000
+      ],
+      "counts": [
+        0,
+        6,
+        11,
+        20,
+        38,
+        33,
+        48,
+        40,
+        35,
+        22,
+        0
+      ]
+    },
+    "exon_length": {
+      "edges": [
+        0,
+        50,
+        100,
+        150,
+        200,
+        300,
+        500,
+        1000,
+        2000,
+        5000
+      ],
+      "counts": [
+        173,
+        487,
+        917,
+        491,
+        346,
+        117,
+        124,
+        97,
+        43,
+        2
+      ]
+    },
+    "exons_per_isoform": {
+      "edges": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        8,
+        11,
+        16,
+        21,
+        31
+      ],
+      "counts": [
+        17,
+        18,
+        17,
+        23,
+        14,
+        25,
+        62,
+        23,
+        9,
+        30,
+        15
+      ]
+    }
+  },
+  "compute": {
+    "cpu_hours": 0.1164,
+    "peak_rss_gb": 1.227,
+    "wall_minutes": 1.02
+  },
+  "sections": {
+    "quant": {
+      "isoforms_quantified": 252,
+      "reads_assigned": 26419,
+      "cpm_hist": {
+        "edges": [
+          0,
+          1,
+          3,
+          10,
+          30,
+          100,
+          300,
+          1000,
+          3000,
+          10000,
+          30000
+        ],
+        "counts": [
+          0,
+          0,
+          0,
+          0,
+          3,
+          65,
+          105,
+          33,
+          31,
+          10,
+          5
+        ]
+      },
+      "input": "reads"
+    },
+    "productivity": {
+      "class_counts": {
+        "NGO": 27,
+        "PRO": 168,
+        "PTC": 58
+      }
+    },
+    "ends": {
+      "refs": {
+        "tss": {
+          "file": "refTSS_v4.1.hg38.bed",
+          "md5": "7ba1554beceac950331a74fbde7c8842",
+          "sites": 239422
+        },
+        "pas": {
+          "file": "PolyA_DB_v4.1.main.hg38.bed",
+          "md5": "4cd8f1cfb31c281493ae13d9e04401e8",
+          "sites": 281091
+        }
+      },
+      "windows": [
+        0,
+        10,
+        25,
+        50,
+        100,
+        200,
+        300,
+        500
+      ],
+      "tss": {
+        "n": 253,
+        "within": [
+          202,
+          218,
+          222,
+          225,
+          226,
+          230,
+          233,
+          239
+        ],
+        "dist_hist": {
+          "edges": [
+            -1000,
+            -200,
+            -50,
+            -10,
+            0,
+            10,
+            50,
+            200,
+            1000
+          ],
+          "counts": [
+            5,
+            3,
+            4,
+            4,
+            6,
+            210,
+            5,
+            1,
+            7,
+            4
+          ]
+        },
+        "no_site": 4
+      },
+      "tes": {
+        "n": 253,
+        "within": [
+          20,
+          159,
+          175,
+          187,
+          200,
+          200,
+          203,
+          232
+        ],
+        "dist_hist": {
+          "edges": [
+            -1000,
+            -200,
+            -50,
+            -10,
+            0,
+            10,
+            50,
+            200,
+            1000
+          ],
+          "counts": [
+            0,
+            3,
+            0,
+            7,
+            28,
+            129,
+            23,
+            13,
+            33,
+            1
+          ]
+        },
+        "no_site": 16
+      },
+      "fsm_tss_hist": {
+        "edges": [
+          -1000,
+          -200,
+          -50,
+          -10,
+          0,
+          10,
+          50,
+          200,
+          1000
+        ],
+        "counts": [
+          2,
+          1,
+          0,
+          0,
+          5,
+          126,
+          2,
+          0,
+          2,
+          0
+        ]
+      },
+      "fsm_tes_hist": {
+        "edges": [
+          -1000,
+          -200,
+          -50,
+          -10,
+          0,
+          10,
+          50,
+          200,
+          1000
+        ],
+        "counts": [
+          1,
+          1,
+          0,
+          0,
+          2,
+          126,
+          0,
+          0,
+          5,
+          3
+        ]
+      },
+      "by_category": {
+        "FSM": {
+          "n": 138,
+          "tss_within_50": 130,
+          "tes_within_50": 100
+        },
+        "ISM": {
+          "n": 37,
+          "tss_within_50": 28,
+          "tes_within_50": 34
+        },
+        "NIC": {
+          "n": 70,
+          "tss_within_50": 66,
+          "tes_within_50": 51
+        },
+        "NNC": {
+          "n": 1,
+          "tss_within_50": 1,
+          "tes_within_50": 1
+        },
+        "genic": {
+          "n": 1,
+          "tss_within_50": 0,
+          "tes_within_50": 0
+        },
+        "genic_intron": {
+          "n": 1,
+          "tss_within_50": 0,
+          "tes_within_50": 0
+        },
+        "antisense": {
+          "n": 2,
+          "tss_within_50": 0,
+          "tes_within_50": 1
+        },
+        "intergenic": {
+          "n": 3,
+          "tss_within_50": 0,
+          "tes_within_50": 0
+        },
+        "fusion": {
+          "n": 0,
+          "tss_within_50": 0,
+          "tes_within_50": 0
+        }
+      },
+      "polya_motif": {
+        "n_with_motif": 227,
+        "n": 253
+      }
+    },
+    "tusco": {
+      "file": "tusco_human.tsv",
+      "md5": "70ca88066231c2dfaa1f302121acd220",
+      "id_type": "gene_name",
+      "genes_total": 46,
+      "genes_in_regions": 0,
+      "TP": 0,
+      "PTP": 0,
+      "FP": 0,
+      "FN": 0,
+      "sensitivity": null,
+      "precision": null,
+      "precision_redundant": null,
+      "positive_detection_rate": null,
+      "transcripts": {
+        "n": 0,
+        "TP": 0,
+        "PTP": 0,
+        "FP": 0
+      },
+      "per_gene": {},
+      "gene_names": {}
+    },
+    "priming": {
+      "n": 253,
+      "risk": 2,
+      "down_a_hist": {
+        "edges": [
+          0.0,
+          0.1,
+          0.2,
+          0.3,
+          0.4,
+          0.5,
+          0.6,
+          0.7,
+          0.8,
+          0.9,
+          1.0
+        ],
+        "counts": [
+          72,
+          71,
+          66,
+          36,
+          6,
+          0,
+          1,
+          0,
+          1,
+          0,
+          0
+        ]
+      }
+    },
+    "variation": {
+      "genes_multi": 35,
+      "ends_only": 1,
+      "splice_only": 30,
+      "both": 4,
+      "neither": 0
+    }
+  },
+  "run_index": 1
 }

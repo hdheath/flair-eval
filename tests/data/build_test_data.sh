@@ -82,6 +82,9 @@ awk -F'\t' -v c="$HUMAN_CHROM" -v e="$HUMAN_END" '
 ENDPOS_MAX=$HUMAN_END subsample "$ONT_HUMAN_BAM" "$H/human_region.ont.fa.gz" "$HUMAN_CHROM:1-$HUMAN_END"
 ENDPOS_MAX=$HUMAN_END subsample "$PB_BAM"        "$H/human_region.pacbio.fa.gz" "$HUMAN_CHROM:1-$HUMAN_END"
 
+# --- end references + TUSCO (CONTRACTS A26), cut to the same window ---------------------
+HUMAN_CHROM=$HUMAN_CHROM HUMAN_END=$HUMAN_END bash "$(dirname "$0")/build_test_refs.sh" "$OUT"
+
 # --- checksums -----------------------------------------------------------------------------
 log "md5sums"
 ( cd "$OUT" && find human_region -type f ! -name '*.md5' | LC_ALL=C sort | xargs md5sum > md5sums.txt )

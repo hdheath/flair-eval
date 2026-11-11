@@ -2,13 +2,16 @@
  * EVALUATE_STRUCTURE: isoform structure vs the reference GTF (bin/structure_metrics.py, owned by
  * the report stream). Writes bundle.json + tables/ into eval/ (CONTRACTS section 3).
  * Always gets the genome (junction motifs, A13); reads/BAM paths are only recorded in inputs.
+ * Round 3 (A26-A32): the end references (refTSS, PolyA_DB BED6) and the TUSCO list are optional;
+ * pass [] for a missing one and only its section is left out. Writes tables/ends.tsv and
+ * sections.ends / tusco / priming / variation.
  */
 process EVALUATE_STRUCTURE {
     tag "${meta.id}"
     label 'process_single'
 
     input:
-    tuple val(meta), path(assemble), path(gtf), path(genome), path(genome_fai), path(env_json), val(inputs)
+    tuple val(meta), path(assemble), path(gtf), path(genome), path(genome_fai), path(env_json), path(ref_tss, stageAs: 'refs/tss/*'), path(ref_pas, stageAs: 'refs/pas/*'), path(tusco, stageAs: 'refs/tusco/*'), val(inputs)
     path(regions)
 
     output:
@@ -30,6 +33,9 @@ JSON
         ${inputs.reads ? "--reads '${inputs.reads}'" : ''} \\
         ${inputs.bam ? "--bam '${inputs.bam}'" : ''} \\
         ${regions ? "--regions ${regions}" : ''} \\
+        ${ref_tss ? "--ref-tss ${ref_tss}" : ''} \\
+        ${ref_pas ? "--ref-pas ${ref_pas}" : ''} \\
+        ${tusco ? "--tusco ${tusco}" : ''} \\
         --out eval
     """
 
@@ -51,7 +57,7 @@ JSON
             exon_length      : stubHist([0, 50, 100, 150, 200, 300, 500, 1000, 2000, 5000]),
             exons_per_isoform: stubHist([1, 2, 3, 4, 5, 6, 8, 11, 16, 21, 31]),
         ],
-        sections         : [:],
+        sections         : stubSections(ref_tss, ref_pas, tusco),
     ]
     """
     structure_metrics.py --help > /dev/null
@@ -63,6 +69,9 @@ JSON
     printf 'iso1_stub\\tnovel_gene_1\\tchr1\\t100\\t900\\t+\\t2\\t500\\tintergenic\\t\\t\\t\\n' >> eval/tables/isoforms.tsv
     printf 'iso2_stub\\tg1\\tchr1\\t1\\t20\\t+\\t1\\t20\\tFSM\\tCIM\\tt1\\tg1\\n' >> eval/tables/isoforms.tsv
     printf 'gene_id\\tgene_name\\ng1\\tGENE1\\n' > eval/tables/genes.tsv
+    printf 'isoform_id\\tcategory\\tsubcategory\\tstrand\\ttss\\ttes\\td_reftss\\td_pas\\td_ref_tss\\td_ref_tes\\tpolya_motif\\tdown_a_frac\\n' > eval/tables/ends.tsv
+    printf 'iso1_stub\\tintergenic\\t\\t+\\t100\\t899\\t\\t\\t\\t\\t\\t\\n' >> eval/tables/ends.tsv
+    printf 'iso2_stub\\tFSM\\tCIM\\t+\\t1\\t19\\t\\t\\t0\\t0\\t\\t\\n' >> eval/tables/ends.tsv
     printf 'category\\tsubcategory\\tn\\nintergenic\\t\\t1\\n' > eval/tables/categories.tsv
     """
 }
@@ -73,4 +82,35 @@ def stubZeros(List keys) {
 
 def stubHist(List edges) {
     return [edges: edges, counts: edges.collect { _e -> 0 }]
+}
+
+// Round-3 sections with zeros and nulls (A29-A32), so stub bundles have the real shape. ends and
+// tusco appear only when their files were staged, as in the real script.
+def stubSections(Object refTss, Object refPas, Object tusco) {
+    def distEdges = [-1000, -200, -50, -10, 0, 10, 50, 200, 1000]
+    def distHist = { -> [edges: distEdges, counts: (0..distEdges.size()).collect { _i -> 0 }] }
+    def half = { -> [n: 0, within: [0, 0, 0, 0, 0, 0, 0, 0], dist_hist: distHist(), no_site: 0] }
+    def refMeta = { f -> [file: f.toString().tokenize('/')[-1], md5: null, sites: 0] }
+    def cats = ['FSM', 'ISM', 'NIC', 'NNC', 'genic', 'genic_intron', 'antisense', 'intergenic', 'fusion']
+    def sec = [:]
+    if (refTss || refPas) {
+        sec.ends = [
+            refs        : [tss: refTss ? refMeta(refTss) : null, pas: refPas ? refMeta(refPas) : null],
+            windows     : [0, 10, 25, 50, 100, 200, 300, 500],
+            tss         : refTss ? half() : null,
+            tes         : refPas ? half() : null,
+            fsm_tss_hist: distHist(),
+            fsm_tes_hist: distHist(),
+            by_category : cats.collectEntries { c -> [(c): [n: 0, tss_within_50: refTss ? 0 : null, tes_within_50: refPas ? 0 : null]] },
+            polya_motif : [n_with_motif: 0, n: 0],
+        ]
+    }
+    if (tusco) {
+        sec.tusco = [file: tusco.toString().tokenize('/')[-1], md5: null, id_type: 'ensembl', genes_total: 0, genes_in_regions: 0,
+                     TP: 0, PTP: 0, FP: 0, FN: 0, sensitivity: null, precision: null, precision_redundant: null,
+                     positive_detection_rate: null, transcripts: [n: 0, TP: 0, PTP: 0, FP: 0], per_gene: [:], gene_names: [:]]
+    }
+    sec.priming = [n: 0, risk: 0, down_a_hist: [edges: (0..10).collect { i -> i / 10 }, counts: (0..10).collect { _i -> 0 }]]
+    sec.variation = [genes_multi: 0, ends_only: 0, splice_only: 0, both: 0, neither: 0]
+    return sec
 }

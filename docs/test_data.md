@@ -26,6 +26,10 @@ own folder (CONTRACTS A3).
 | `human_region/human_region.regions.bed` | 16 | `chr19 0 2000000` |
 | `human_region/human_region.pacbio.fa.gz` | 1,752,650 | 20,000 PacBio reads (of 52,626 in the window) |
 | `human_region/human_region.ont.fa.gz` | 2,879,511 | 20,000 ONT reads (of 34,492 in the window) |
+| `human_region/human_region.refTSS.bed` | 24,278 | refTSS v4.1 human hg38 TSS clusters wholly inside the window (620 sites). refTSS is CC BY 4.0: Abugessaisa et al., *J Mol Biol* 2019 and later releases, https://reftss.riken.jp |
+| `human_region/human_region.polyA_DB.bed` | 31,190 | PolyA_DB v4.1 main polyA sites inside the window (648 sites), one row per cleavage site `[pos-1, pos)`. Source: PolyA_DB v4.1 `HumanPas` release (`hg38.PAS.main.tsv`), redistributed as a small subset with citation |
+| `human_region/human_region.tusco.tsv` | 3,158 | SQANTI3 `tusco_human.tsv` (TUSCO single-isoform genes, 46 genes), copied whole from SQANTI3 commit 589dfd4 (GPL-3.0). No TUSCO gene lies in the window, so the test profile's TUSCO panel is empty by design. |
+| `build_test_refs.sh` | | cuts the three reference files above from the lab copies (the `hg38` preset files in `/private/groups/brookslab/flair-eval/reference/`); `build_test_data.sh` calls it |
 
 Total: 13.6 MB on disk. Git stores it compressed, mostly because the GTF and genome compress well.
 

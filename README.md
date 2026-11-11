@@ -34,7 +34,9 @@ nextflow run hdheath/flair-eval \
 ```
 
 `--genome hg38` is a lab preset: GRCh38 primary assembly + GENCODE v49 basic from
-`/private/groups/brookslab/reference_*`, and it fills `--gtf` unless you give one. Any other genome:
+`/private/groups/brookslab/reference_*`, and it fills `--gtf` unless you give one. It also brings
+the end references and the TUSCO gene list used by the report's Ends and TUSCO panels (refTSS v4.1,
+PolyA_DB v4.1 and SQANTI3's `tusco_human.tsv`, in `/private/groups/brookslab/flair-eval/reference/`). Any other genome:
 `--genome genome.fa --gtf annotation.gtf`. The Nextflow driver itself runs for the whole
 comparison, so start it inside a SLURM job or `tmux`, not as a bare login-node command; the
 `flair-eval run` CLI ([docs/usage_cli.md](docs/usage_cli.md)) submits it for you.
@@ -102,6 +104,10 @@ first, then from the launch directory. Columns and keys are listed in
 
 `--regions regions.bed` restricts assembly and evaluation to a set of regions. FLAIR then gets a
 genome + GTF cut to the chromosomes in the BED (same coordinates), which keeps test regions fast.
+
+`--ref_tss sites.bed`, `--ref_pas sites.bed` (BED6; poly(A) sites as [pos-1,pos)) and
+`--tusco tusco_human.tsv` turn on the Ends and TUSCO evaluation for genomes without a preset, or
+replace the preset's files. Each is optional; a missing one only hides its panel.
 
 ### Reports over many launches
 

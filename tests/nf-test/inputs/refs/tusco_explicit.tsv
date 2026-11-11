@@ -1,0 +1,4 @@
+# tiny TUSCO list for nf-test
+# All genes: 2
+g1	t1	GENE1	1	NM_1	NP_1
+g2	t2	GENE2	2	NM_2	NP_2

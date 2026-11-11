@@ -19,6 +19,8 @@ def SAMPLE_FILE_COLUMNS() { ['reads', 'bam', 'genome', 'gtf', 'cage', 'pas', 'ju
 def QUICK_SAMPLE_PARAMS() { ['reads', 'bam', 'genome', 'gtf', 'sample', 'platform', 'library'] }
 def RUN_KEYS()          { ['id', 'flair', 'transcriptome_args', 'quantify', 'productivity', 'own_align', 'label', 'tags'] }
 def FLAIR_SOURCES()     { ['release', 'git', 'env', 'container'] }
+// A26: end references and TUSCO list, given as params or filled from the genome preset
+def REF_PARAMS()        { ['ref_tss', 'ref_pas', 'tusco'] }
 
 /*
  * ---------------------------------------------------------------------------------------------
@@ -44,6 +46,12 @@ def loadInputs(Map p) {
     }
     if (!hasParam(p, 'runs') && !hasParam(p, 'flair')) {
         errors << "No FLAIR runs given. Use --runs runs.yaml, or --flair with comma-separated tokens, e.g. --flair 3.0.1,dev."
+    }
+    // A26: explicit end references / TUSCO list must exist (presets that are missing only turn off their section)
+    REF_PARAMS().each { k ->
+        if (hasParam(p, k) && !file(p[k].toString()).exists()) {
+            errors << "--${k} file '${p[k]}' does not exist."
+        }
     }
     if (errors) {
         failInputs(errors)
@@ -183,6 +191,7 @@ def splitCsvLine(String line) {
 /*
  * Genome presets (params.genomes, lab references on phoenix): a genome value that is a preset key
  * becomes that preset's FASTA, and an empty gtf becomes the preset's GTF. Returns false on error.
+ * The preset's end references and TUSCO list are picked up by sampleRefs().
  */
 def genomePresetKeys() {
     def g = params.genomes instanceof Map ? params.genomes : [:]
@@ -208,6 +217,30 @@ def expandGenomePreset(Map row, String where, List errors) {
     return !errors.any { e -> e.startsWith("${where}: genome preset") }
 }
 
+/*
+ * A26: the sample's end references and TUSCO list. An explicit --ref_tss / --ref_pas / --tusco wins
+ * (for every sample); otherwise a preset genome brings its own; a custom genome gets none. A preset
+ * file that is missing on this machine only turns its section off (with a warning).
+ */
+def sampleRefs(String presetKey) {
+    def presets = params.genomes instanceof Map ? params.genomes : [:]
+    def preset = presetKey && presets[presetKey] instanceof Map ? presets[presetKey] : [:]
+    return REF_PARAMS().collectEntries { k ->
+        def v = params[k]
+        if (v != null && v != false && v.toString() != '') {
+            return [(k): file(v.toString())]
+        }
+        if (preset[k]) {
+            def f = file(preset[k].toString())
+            if (f.exists()) {
+                return [(k): f]
+            }
+            log.warn("genome preset '${presetKey}': ${k} ${preset[k]} is not on this machine; that report section is skipped.")
+        }
+        return [(k): null]
+    }
+}
+
 def checkSample(Map row, String where, Object baseDir, List errors) {
     def ok = true
     if (!row.sample) {
@@ -222,6 +255,8 @@ def checkSample(Map row, String where, Object baseDir, List errors) {
         errors << "${where}: give 'reads' (FASTQ/FASTA) or 'bam' (sorted and indexed), or both."
         ok = false
     }
+    def presets = params.genomes instanceof Map ? params.genomes : [:]
+    def presetKey = row.genome && presets.containsKey(row.genome.toString()) ? row.genome.toString() : null
     if (!expandGenomePreset(row, where, errors)) {
         ok = false
     }
@@ -274,7 +309,7 @@ def checkSample(Map row, String where, Object baseDir, List errors) {
         pas        : files.pas,
         junctions  : files.junctions,
         spikein_gtf: files.spikein_gtf,
-    ]
+    ] + sampleRefs(presetKey)
 }
 
 def isRelative(String v) {

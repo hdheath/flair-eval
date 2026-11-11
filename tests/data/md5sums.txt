@@ -3,4 +3,7 @@ f9cd5110557edcfe488214b9b806def9  human_region/human_region.genome.fa.fai
 a2e7564caf414bb007e5cb7f0e6ffa48  human_region/human_region.gtf
 aba2b3f44cbd9ca23ad6c6d4a29627b0  human_region/human_region.ont.fa.gz
 aaf5dec7838431a3adc25d58698a1cfc  human_region/human_region.pacbio.fa.gz
+5da845a9c93b20c966ea35bfe0214755  human_region/human_region.polyA_DB.bed
+1edf2cc7f1b54b3b8e8593e14eb33663  human_region/human_region.refTSS.bed
 00ba1f792d8e8a83485a057c06caca24  human_region/human_region.regions.bed
+70ca88066231c2dfaa1f302121acd220  human_region/human_region.tusco.tsv

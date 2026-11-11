@@ -130,6 +130,54 @@ nextflow_pipeline {
         }
     }
 
+    test("A26: a genome preset brings its end references and TUSCO list; an explicit param wins") {
+        when {
+            params {
+                reads   = "${projectDir}/tests/nf-test/inputs/sampleA.fastq"
+                genome  = "tiny"
+                genomes = [tiny: [fasta  : "${projectDir}/tests/nf-test/inputs/genome.fa",
+                                  gtf    : "${projectDir}/tests/nf-test/inputs/annotation.gtf",
+                                  ref_tss: "${projectDir}/tests/nf-test/inputs/refs/tss.bed",
+                                  ref_pas: "${projectDir}/tests/nf-test/inputs/refs/missing_pas.bed",
+                                  tusco  : "${projectDir}/tests/nf-test/inputs/refs/tusco.tsv",
+                                  note   : 'nf-test preset']]
+                tusco   = "${projectDir}/tests/nf-test/inputs/refs/tusco_explicit.tsv"
+                flair   = "3.0.1"
+                outdir  = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            def b = path("$outputDir/bundles/sampleA/flair-3.0.1/bundle.json").json
+            assert b.inputs.ref_tss == "${projectDir}/tests/nf-test/inputs/refs/tss.bed"
+            assert b.inputs.ref_pas == null                 // preset file missing: section off, run goes on
+            assert b.inputs.tusco == "${projectDir}/tests/nf-test/inputs/refs/tusco_explicit.tsv"
+            assert b.sections.ends.refs.tss.file == 'tss.bed'
+            assert b.sections.ends.tes == null
+            assert b.sections.tusco.file == 'tusco_explicit.tsv'
+            assert b.sections.keySet().containsAll(['priming', 'variation'])
+            assert path("$outputDir/bundles/sampleA/flair-3.0.1/tables/ends.tsv").exists()
+        }
+    }
+
+    test("A26: a custom genome gets no preset refs; without refs there is no ends or tusco section") {
+        when {
+            params {
+                reads   = "${projectDir}/tests/nf-test/inputs/sampleA.fastq"
+                genome  = "${projectDir}/tests/nf-test/inputs/genome.fa"
+                gtf     = "${projectDir}/tests/nf-test/inputs/annotation.gtf"
+                flair   = "3.0.1"
+                outdir  = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            def b = path("$outputDir/bundles/sampleA/flair-3.0.1/bundle.json").json
+            assert !b.sections.containsKey('ends') && !b.sections.containsKey('tusco')
+            assert b.inputs.ref_tss == null && b.inputs.tusco == null
+        }
+    }
+
     test("--bundles adds earlier bundles to the report") {
         when {
             params {

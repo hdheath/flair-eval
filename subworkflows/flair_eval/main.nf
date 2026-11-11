@@ -8,7 +8,7 @@
  *   ASSEMBLE            per job
  *   QUANTIFY            per job, when run.quantify and the sample has reads
  *   PRODUCTIVITY        per job, when run.productivity
- *   EVALUATE_STRUCTURE  per job
+ *   EVALUATE_STRUCTURE  per job (+ end references and TUSCO list when the sample has them, A26)
  *   BUNDLE              per job -> <outdir>/bundles/<sample>/<run_id>/
  *
  * Channel items carry a small job map ("meta"): id = "<sample>/<run_id>", sample, run_id, run.
@@ -163,10 +163,13 @@ workflow FLAIR_EVAL {
 
     // ---- evaluate and bundle ------------------------------------------------------------------
     // A13: always the genome (junction motifs); reads/BAM paths are recorded in bundle inputs.
+    // A26: the sample's end references and TUSCO list (explicit params or the genome preset);
+    // a missing one is passed as [] and only turns its section off.
     EVALUATE_STRUCTURE(
         ch_asm.map { id, d, json, _env, _bam, _bai, g, fai, a ->
             def s = S[J[id].sample]
-            [J[id], d, a, g, fai, json, [reads: s.reads?.toString(), bam: s.bam?.toString()]]
+            [J[id], d, a, g, fai, json, s.ref_tss ?: [], s.ref_pas ?: [], s.tusco ?: [],
+             [reads: s.reads?.toString(), bam: s.bam?.toString()]]
         },
         regions
     )
@@ -228,6 +231,10 @@ def bundleInfo(Map j, Map s, List parts) {
             regions : params.regions ? file(params.regions).toString() : null,
             platform: s.platform,
             library : s.library,
+            // A26: original paths of the end references / TUSCO list this job used (null = off)
+            ref_tss : s.ref_tss?.toString(),
+            ref_pas : s.ref_pas?.toString(),
+            tusco   : s.tusco?.toString(),
             // with --regions FLAIR saw PREP_REFERENCE's copy cut to these chromosomes
             reference_cut_to_regions: params.regions ? true : false,
         ],

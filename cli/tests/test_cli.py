@@ -306,8 +306,7 @@ def test_cli_genome_presets_match_nextflow_config(repo):
         nf[key] = dict(re.findall(r"(\w+)\s*:\s*'([^']*)'", body))
     assert sorted(nf) == sorted(phoenix.GENOME_PRESETS)
     for key, preset in phoenix.GENOME_PRESETS.items():
-        assert nf[key]["fasta"] == preset["fasta"], key
-        assert nf[key]["gtf"] == preset["gtf"], key
+        assert nf[key] == preset, key      # fasta, gtf, ref_tss, ref_pas, tusco, note
 
 
 # ---------------------------------------------------------------- phoenix launch

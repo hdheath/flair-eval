@@ -14,9 +14,11 @@ run_index at all, the first run id in name order is used (A5). The page says whi
 the baseline and lets the reader switch it. Runs are ordered baseline first, then by
 bundle.json run_index, then by id (A17), and keep that colour throughout the report.
 
-Round-2 sections (CONTRACTS section 8) are computed here when their inputs sit beside each
-bundle.json: run-vs-run concordance from isoforms.bed (+ tables/isoforms.tsv), and CPM
-agreement between runs from counts.tsv. Per-bundle sections (quant, productivity) and the
+Cross-run data (CONTRACTS section 8 and A33) is computed here per sample when its inputs sit
+beside each bundle.json: run-vs-run concordance from isoforms.bed (+ tables/isoforms.tsv), CPM
+agreement from counts.tsv, TSS/TTS end-cluster agreement from isoforms.bed, TUSCO incremental
+recall from sections.tusco.per_gene, and lost genes by baseline expression decile from
+counts.tsv. Per-bundle sections (quant, productivity, ends, tusco, priming, variation) and the
 compute block are passed through.
 """
 
@@ -35,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from flair_eval_lib import __version__  # noqa: E402
 from flair_eval_lib.concordance import (  # noqa: E402
     RunModels, concordance, quant_agreement, read_counts, read_gene_names)
+from flair_eval_lib.crossrun import end_agreement, lost_by_decile, tusco_incremental  # noqa: E402
 from flair_eval_lib.schema import load_schema, validate  # noqa: E402
 from flair_eval_lib.sections import quant_input_from_dir  # noqa: E402
 
@@ -135,7 +138,15 @@ def sample_sections(entries):
         names = {}
         models = []
         cpm = {}
+        tusco = {}
         for b, d in rows:
+            ts = (b.get("sections") or {}).get("tusco") or {}
+            pg = ts.get("per_gene")
+            if isinstance(pg, dict) and pg:
+                tusco[b["run_id"]] = pg
+            tnames = ts.get("gene_names")
+            if isinstance(tnames, dict):
+                names.update({g: n for g, n in tnames.items() if n and g not in names})
             names.update(read_gene_names(d))
             try:
                 m = RunModels.from_bundle_dir(b["run_id"], d)
@@ -156,6 +167,15 @@ def sample_sections(entries):
         quant = quant_agreement(models, cpm)
         if quant:
             entry["quant"] = quant
+        ends = end_agreement(models)
+        if ends:
+            entry["end_agreement"] = ends
+        inc = tusco_incremental(tusco, names)
+        if inc:
+            entry["tusco_incremental"] = inc
+        lost = lost_by_decile(models, cpm)
+        if lost:
+            entry["lost_deciles"] = lost
         if entry:
             out[sample] = entry
     return out

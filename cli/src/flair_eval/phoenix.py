@@ -30,6 +30,10 @@ GENOME_PRESETS = {
     "hg38": {
         "fasta": f"{LAB_ROOT}/reference_sequence/GRCh38.primary_assembly.genome.fa",
         "gtf": f"{LAB_ROOT}/reference_annotations/gencode.v49.basic.annotation.gtf",
+        # end references and TUSCO (CONTRACTS A26): filled in by the pipeline, never written
+        "ref_tss": f"{LAB_ROOT}/flair-eval/reference/end_refs/refTSS_v4.1.hg38.bed",
+        "ref_pas": f"{LAB_ROOT}/flair-eval/reference/end_refs/PolyA_DB_v4.1.main.hg38.bed",
+        "tusco": f"{LAB_ROOT}/flair-eval/reference/tusco/tusco_human.tsv",
         "note": "GRCh38 primary assembly + GENCODE v49 basic",
     },
 }

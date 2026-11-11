@@ -1,0 +1,94 @@
+nextflow_process {
+
+    name "EVALUATE_STRUCTURE stages the end references and TUSCO list (A26-A32)"
+    script "modules/evaluate_structure/main.nf"
+    process "EVALUATE_STRUCTURE"
+
+    test("all three refs: ends, tusco, priming and variation sections and tables/ends.tsv") {
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', label: 'r', tags: [:]]],
+                    file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"), file("\${d}/genome.fa"), [],
+                    file("\${d}/refs/flair_env.json"),
+                    file("\${d}/refs/tss.bed"), file("\${d}/refs/pas.bed"), file("\${d}/refs/tusco.tsv"),
+                    [reads: null, bam: null],
+                ]
+                input[1] = []
+                """
+            }
+        }
+        then {
+            assert process.success
+            def ev = process.out.dir[0][1]
+            def sec = path("${ev}/bundle.json").json.sections
+            assert sec.keySet() == ['ends', 'tusco', 'priming', 'variation'] as Set
+            assert sec.ends.refs.tss.file == 'tss.bed' && sec.ends.refs.tss.sites == 1
+            assert sec.ends.refs.pas.sites == 1          // the duplicated PolyA_DB-style row counts once
+            assert sec.ends.tss.n == 1 && sec.ends.tss.within[0] == 1
+            assert sec.ends.tes.within[0] == 1
+            assert sec.ends.tss.dist_hist.counts.size() == sec.ends.tss.dist_hist.edges.size() + 1
+            assert sec.tusco.per_gene == [g1: 'TP', g2: 'FN']
+            assert sec.tusco.genes_total == 2
+            assert sec.priming.n == 1 && sec.priming.down_a_hist.counts.size() == 11
+            assert sec.variation.genes_multi == 0
+            def ends = path("${ev}/tables/ends.tsv").readLines()
+            assert ends[0].split('\t')[6] == 'd_reftss'
+            assert ends.size() == 2
+        }
+    }
+
+    test("no refs: only priming and variation") {
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', label: 'r', tags: [:]]],
+                    file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"), file("\${d}/genome.fa"), [],
+                    file("\${d}/refs/flair_env.json"), [], [], [],
+                    [reads: null, bam: null],
+                ]
+                input[1] = []
+                """
+            }
+        }
+        then {
+            assert process.success
+            def sec = path("${process.out.dir[0][1]}/bundle.json").json.sections
+            assert sec.keySet() == ['priming', 'variation'] as Set
+        }
+    }
+
+    test("stub: sections keep their shape, ends half null without its file") {
+        options "-stub"
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', label: 'r', tags: [:]]],
+                    file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"), file("\${d}/genome.fa"), [],
+                    file("\${d}/refs/flair_env.json"), file("\${d}/refs/tss.bed"), [], [],
+                    [reads: null, bam: null],
+                ]
+                input[1] = []
+                """
+            }
+        }
+        then {
+            assert process.success
+            def ev = process.out.dir[0][1]
+            def sec = path("${ev}/bundle.json").json.sections
+            assert sec.keySet() == ['ends', 'priming', 'variation'] as Set
+            assert sec.ends.tes == null && sec.ends.refs.pas == null
+            assert sec.ends.refs.tss.file == 'tss.bed'
+            assert sec.ends.tss.dist_hist.counts.size() == 10
+            assert sec.ends.by_category.FSM == [n: 0, tss_within_50: 0, tes_within_50: null]
+            assert sec.priming.down_a_hist.edges.size() == 11
+            assert path("${ev}/tables/ends.tsv").readLines().size() == 3
+        }
+    }
+}

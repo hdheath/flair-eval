@@ -13,18 +13,19 @@
 <div class="page">
   <header class="masthead">
     <div>
-      <p class="eyebrow">flair-eval report</p>
+      <p class="eyebrow">flair-eval · transcriptome viewer</p>
       <h1 id="title">__TITLE__</h1>
       <p class="dek" id="subtitle"></p>
     </div>
-    <div class="mast-tools">
-      <div class="seg" id="theme" role="group" aria-label="Colour theme"></div>
+    <div class="mast-tools no-print">
+      <div id="theme"></div>
       <button class="btn" id="print" type="button">Print / PDF</button>
     </div>
   </header>
-  <section class="runbar" id="runbar" aria-label="Runs and sample"></section>
-  <nav class="tabs" id="tabs" role="tablist" aria-label="Report views"></nav>
-  <main id="view"></main>
+  <nav class="controls" id="controls" aria-label="Sample, runs and baseline"></nav>
+  <p class="basenote" id="basenote"></p>
+  <div class="tabs" id="tabs" role="tablist" aria-label="Report views"></div>
+  <main id="view" role="tabpanel"></main>
   <footer id="footer"></footer>
 </div>
 <div id="tooltip" class="tooltip" role="tooltip" hidden></div>

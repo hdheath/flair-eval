@@ -274,3 +274,85 @@ Each section is optional and has its own panel. It is computed only when its inp
   - `params.genomes` (hidden) maps preset keys to `{fasta, gtf, note}`; today only `hg38` = GRCh38 primary assembly + GENCODE v49 basic from the lab reference folders. A `genome` value (flag or samples.csv cell) equal to a key becomes the preset FASTA, and an empty `gtf` becomes the preset GTF. Presets are explicit: no genome is still an error.
   - `flair_env.py resolve` sets umask 002 so a shared cache stays group-writable. The cache root is setgid, group brookslab.
   - Front ends assume phoenix: no profile, `--outdir` required, `hg38` offered as the genome, and the CLI submits the Nextflow driver as a SLURM job.
+
+## 11. Round 3: the transcriptome viewer report (2026-11-10)
+The report becomes the viewer from the concept mockup. Its tabs are What differs, Structure, Recovery, Diversity, Agreement, Ends, Reads and Compute. It replaces today's views, and one sample is shown at a time.
+**Out of scope here (a separate branch later):** the Loci tab (compact read-to-isoform locus plots) and the read 5′-end heatmap. Both need read alignments in the bundle. Signal metaplots around ends (per-sample bigWig) and recall against a sample's own `cage`/`pas` are also left for later.
+
+- A26 [core, frontend] **End references and TUSCO are params:** `params.ref_tss` (BED6), `params.ref_pas` (BED6, one row per cleavage site, [pos-1,pos)) and `params.tusco` (SQANTI3 `tusco_human.tsv` format). All default to null.
+  - The `hg38` preset in `params.genomes` (and `GENOME_PRESETS` in the CLI and builder) gains `ref_tss`, `ref_pas` and `tusco` keys pointing at `/private/groups/brookslab/flair-eval/reference/{end_refs/refTSS_v4.1.hg38.bed, end_refs/PolyA_DB_v4.1.main.hg38.bed, tusco/tusco_human.tsv}`. Each folder has a `SOURCE.tsv`.
+  - When the genome is the preset, a null param is filled from it; an explicit param wins. A sample with a custom genome gets no preset refs.
+  - EVALUATE_STRUCTURE stages whichever of the three exist and passes them on. A missing one turns off only its section.
+- A27 [report] **`structure_metrics.py` gains optional `--ref-tss BED --ref-pas BED --tusco TSV`.** It uses the genome it already receives. It writes `tables/ends.tsv` and the sections below.
+  - The code lives in `bin/flair_eval_lib/ends.py`, `tusco.py` and `variation.py`: pandas/numpy, no new dependencies.
+  - Main chromosomes only.
+- A28 [report] **`tables/ends.tsv`:** one row per isoform, one header line. Columns:
+  `isoform_id category subcategory strand tss tes d_reftss d_pas d_ref_tss d_ref_tes polya_motif down_a_frac`
+  - `tss`/`tes` are the isoform's 5′/3′ end positions (0-based, strand-aware).
+  - Distances are signed in transcript orientation: negative = the isoform end is upstream (5′) of the site, the SQANTI3 convention.
+    - `d_reftss`: to the nearest same-strand refTSS site (0 inside a site interval).
+    - `d_pas`: to the nearest same-strand PolyA_DB site.
+    - `d_ref_tss` / `d_ref_tes`: to the matched reference transcript's ends; FSM/ISM only, empty otherwise.
+    - A distance with no site within 10 kb is empty.
+  - `polya_motif`: the first hexamer found from {AATAAA, ATTAAA, AGTAAA, TATAAA, CATAAA, GATAAA, AATATA, AATACA, AATAGA, AAAAAG, ACTAAA, AAGAAA} in the 50 nt upstream of the 3′ end, or empty.
+  - `down_a_frac`: the fraction of A in the 20 nt of genome just downstream of the 3′ end, strand-aware. Internal-priming risk = ≥ 0.6.
+- A29 [report] **`sections.ends`** (needs `--ref-tss` and/or `--ref-pas`; each half is null without its file):
+  ```json
+  {"refs": {"tss": {"file": "refTSS_v4.1.hg38.bed", "md5": "…", "sites": 0}, "pas": {…}},
+   "windows": [0, 10, 25, 50, 100, 200, 300, 500],
+   "tss": {"n": 0, "within": [n per window], "dist_hist": {"edges": E, "counts": []}},
+   "tes": {"n": 0, "within": [...], "dist_hist": {"edges": E, "counts": []}},
+   "fsm_tss_hist": {"edges": E, "counts": []}, "fsm_tes_hist": {"edges": E, "counts": []},
+   "by_category": {"FSM": {"n": 0, "tss_within_50": 0, "tes_within_50": 0}, "…": {}},
+   "polya_motif": {"n_with_motif": 0, "n": 0}}
+  ```
+  - E = `[-1000, -200, -50, -10, 0, 10, 50, 200, 1000]`. A bin is [edge_i, edge_i+1), with open bins below the first edge and above the last, so `len(counts) == len(E) + 1`. A value of exactly 0 falls in [0, 10).
+  - `within[i]` = isoforms with |d| ≤ windows[i]. Precision = within / n.
+  - With database references this is precision only; the report never shows recall from them.
+  - `fsm_*_hist` bin `d_ref_tss` / `d_ref_tes` of FSM isoforms.
+- A30 [report] **`sections.tusco`** (needs `--tusco`): `{"genes_total": 46, "genes_in_regions": n, "TP": n, "PTP": n, "FP": n, "FN": n, "sensitivity": x, "precision": x, "per_gene": {gene_id: "TP|PTP|FP|FN"}}`.
+  - Definitions follow SQANTI3's `src/utilities/report_qc/TUSCO_report.R` (commit 589dfd4). `ends.py`/`tusco.py` documents the exact rules and cites the lines.
+  - With `--regions`, only TUSCO genes inside the regions count, and `genes_in_regions` says how many.
+- A31 [report] **`sections.priming`:** `{"n": 0, "risk": 0, "down_a_hist": {"edges": [0,0.1,…,1.0], "counts": []}}`, from `down_a_frac`.
+- A32 [report] **`sections.variation`:** for genes with ≥ 2 isoforms, `{"genes_multi": n, "ends_only": n, "splice_only": n, "both": n}`.
+  - "ends only" means every isoform shares one intron chain (or all are mono-exon) but the ends differ by > 50 bp.
+  - "splice only" means more than one chain, and isoforms that share a chain have ends within 50 bp.
+  - "both" covers the rest.
+  - The rule is in `variation.py`.
+- A33 [report] **Computed by `build_report.py` across one sample's bundles** (not stored per bundle):
+  - **TSS/TTS agreement:** Jaccard of end clusters (same strand, single-linkage within 50 bp) between run pairs, from `isoforms.bed`.
+  - **TUSCO incremental recall:** genes that are TP/PTP in a run but FN in the baseline, from `sections.tusco.per_gene`.
+  - **Lost genes by baseline expression decile:** genes in the baseline missing from the run, binned by the baseline's gene CPM from `counts.tsv`.
+- A34 [report] **Report rules:**
+  - One sample at a time: a Sample picker drives every tab, and nothing is pooled across samples.
+  - Colour = run, a fixed `--series-N` slot in run order, so colours never move when the baseline changes. Shared and "other" are neutral grey.
+  - The baseline is drawn first, with a slightly larger, outlined dot. It is switchable in the control bar, and every comparison is "vs baseline".
+  - With ≥ 2 runs, plots overlay by default, with a side-by-side toggle.
+  - "Every metric, one row each" is driven by a metric registry: each section registers its own rows, including a lower-is-worse flag.
+  - Read-count panels say that dev counts from the genome BAM (A21).
+  - A panel whose section is missing is hidden with a one-line reason ("needs --ref-tss").
+  - Old bundles without the new sections still render.
+- A35 [report, core] **Round-3 as built** (settles A26–A34):
+  - **Distances (A28):**
+    - Signed in transcript orientation as isoform minus site, using genomic (not spliced) distance; negative means upstream (5′).
+    - This equals SQANTI3 `diff_to_TTS` and has the opposite sign to SQANTI3 `diff_to_TSS`.
+    - The 10 kb cap applies only to database sites; `d_ref_tss` and `d_ref_tes` are uncapped.
+  - **ends.tsv rows (A28):**
+    - Only main-chromosome isoforms get a row.
+    - An unstranded isoform gets `tss`/`tes` and empty cells elsewhere, and is left out of section counts.
+    - `polya_motif` takes the first hexamer in list (priority) order.
+  - **sections.ends (A29):**
+    - Each half also has `no_site` (stranded isoforms with no site within 10 kb); `n` includes them.
+    - `by_category` lists all 9 categories, with null where a reference is missing.
+    - `polya_motif` is null without a genome.
+    - `refs.*.sites` counts sites after removing duplicate position+strand rows.
+  - **sections.tusco (A30):**
+    - `TP/PTP/FP/FN` are gene counts that sum to `genes_in_regions`. FP = a TUSCO gene with transcripts but none FSM/ISM.
+    - `sensitivity` = TP genes / genes in scope. `precision` = TP transcripts / TUSCO-gene transcripts, as in SQANTI3 TUSCO_report.R.
+    - Extra keys: `precision_redundant`, `positive_detection_rate`, `transcripts {n, TP, PTP, FP}`, `id_type`, `file`, `md5`, `gene_names`.
+  - **sections.priming (A31):** `down_a_hist` uses the §3 convention: 11 edges 0…1.0, `len(counts) == len(edges)`, and the last bin is exactly 1.0.
+  - **sections.variation (A32):** adds `neither` (one chain, ends within 50 bp), so `genes_multi = ends_only + splice_only + both + neither`.
+  - **Always written:** the genome is always passed, so `tables/ends.tsv`, `sections.priming` and `sections.variation` are always present.
+  - **Missing reference files (A26):** a missing preset file warns and turns its section off; a missing explicit file stops the run before any task.
+  - **Hidden params:** `ref_tss`, `ref_pas` and `tusco` are hidden in `nextflow_schema.json` until the CLI and builder expose them.
+  - **Payload (A33):** `build_report.py` embeds `by_sample.<s>.end_agreement`, `.tusco_incremental` and `.lost_deciles`. These are precomputed for every ordered run pair or baseline, so switching the baseline needs no rebuild. They come from `bin/flair_eval_lib/crossrun.py`.

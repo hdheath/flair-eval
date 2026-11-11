@@ -51,6 +51,9 @@
     hg38: {
       fasta: "/private/groups/brookslab/reference_sequence/GRCh38.primary_assembly.genome.fa",
       gtf: "/private/groups/brookslab/reference_annotations/gencode.v49.basic.annotation.gtf",
+      ref_tss: "/private/groups/brookslab/flair-eval/reference/end_refs/refTSS_v4.1.hg38.bed",
+      ref_pas: "/private/groups/brookslab/flair-eval/reference/end_refs/PolyA_DB_v4.1.main.hg38.bed",
+      tusco: "/private/groups/brookslab/flair-eval/reference/tusco/tusco_human.tsv",
       note: "GRCh38 primary assembly + GENCODE v49 basic"
     }
   };

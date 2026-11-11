@@ -15,6 +15,15 @@ With --regions, isoforms and reference transcripts that overlap a region are cou
 classification still sees the whole reference. With --genome, novel junctions are split
 into canonical (GT-AG, GC-AG, AT-AC) and non-canonical; without it they are counted as
 novel only (junctions.motif_checked = false).
+
+Round 3 (CONTRACTS A27-A32), main chromosomes only:
+  tables/ends.tsv       every isoform's 5'/3' end, distances to the end databases and to the
+                        matched reference transcript, poly(A) motif and downstream A fraction
+                        (bin/flair_eval_lib/ends.py)
+  sections.ends         with --ref-tss and/or --ref-pas (refTSS / PolyA_DB BED6)
+  sections.tusco        with --tusco (SQANTI3 tusco_human.tsv; bin/flair_eval_lib/tusco.py)
+  sections.priming      with --genome: downstream-A internal-priming risk
+  sections.variation    always: genes that vary by ends, splicing or both (variation.py)
 """
 
 from __future__ import annotations
@@ -34,7 +43,11 @@ from flair_eval_lib.annotation import (  # noqa: E402
     InputError, Regions, assign_isoform_genes, keep_contig, read_bed12, read_gtf_gene_map,
     read_gtf_transcripts)
 from flair_eval_lib.classify import FSM_END_WINDOW, Classifier, Reference  # noqa: E402
+from flair_eval_lib.ends import (  # noqa: E402
+    SiteIndex, end_rows, ends_section, priming_section, write_ends_table)
 from flair_eval_lib.fasta import Fasta  # noqa: E402
+from flair_eval_lib.tusco import read_tusco, tusco_section  # noqa: E402
+from flair_eval_lib.variation import variation_section  # noqa: E402
 from flair_eval_lib.metrics import (  # noqa: E402
     normalise_version, ref_in_scope, summarise, write_gene_names, write_tables)
 from flair_eval_lib.schema import load_schema, validate  # noqa: E402
@@ -57,6 +70,10 @@ def parse_args(argv=None):
     p.add_argument("--genome", help="genome FASTA (optional; enables junction motif check)")
     p.add_argument("--reads", help="reads path, recorded in bundle inputs only")
     p.add_argument("--bam", help="BAM path, recorded in bundle inputs only")
+    p.add_argument("--ref-tss", help="refTSS-style BED6 of TSS sites (enables sections.ends.tss)")
+    p.add_argument("--ref-pas", help="PolyA_DB-style BED6 of cleavage sites, [pos-1,pos) "
+                                     "(enables sections.ends.tes)")
+    p.add_argument("--tusco", help="SQANTI3 tusco_human.tsv (enables sections.tusco)")
     p.add_argument("--end-window", type=int, default=FSM_END_WINDOW,
                    help="bp window for FSM end matching (default %(default)s)")
     return p.parse_args(argv)
@@ -86,7 +103,7 @@ def _pipeline_commit():
 
 
 def build_bundle(args):
-    """Return (bundle dict, isoforms, calls, reference transcripts)."""
+    """Return (bundle dict, isoforms, calls, reference transcripts, end rows)."""
     if not re.match(_ID_RE, args.sample):
         raise InputError(f"--sample {args.sample!r} must match {_ID_RE}")
     run = _load_json(args.run_json, "--run-json")
@@ -114,15 +131,28 @@ def build_bundle(args):
         isoforms = [t for t in isoforms if regions.overlaps(t.chrom, t.start, t.end)]
     assign_isoform_genes(isoforms, read_gtf_gene_map(args.isoforms_gtf))
 
+    tss_sites = SiteIndex(args.ref_tss) if args.ref_tss else None
+    pas_sites = SiteIndex(args.ref_pas) if args.ref_pas else None
+    tusco = read_tusco(args.tusco) if args.tusco else None
+
     ref = Reference(ref_tx)
     clf = Classifier(ref, args.end_window)
     calls = [clf.classify(t) for t in isoforms]
     fasta = Fasta(args.genome) if args.genome else None
     try:
         metrics = summarise(isoforms, calls, ref_in_scope(ref_tx, regions), ref, fasta)
+        rows = end_rows(isoforms, calls, {t.tid: t for t in ref_tx}, tss_sites, pas_sites, fasta)
     finally:
         if fasta is not None:
             fasta.close()
+    sections = {}
+    if tss_sites is not None or pas_sites is not None:
+        sections["ends"] = ends_section(rows, tss_sites, pas_sites, fasta is not None)
+    if tusco is not None:
+        sections["tusco"] = tusco_section(tusco, calls, ref_tx, regions, args.tusco)
+    if fasta is not None:
+        sections["priming"] = priming_section(rows)
+    sections["variation"] = variation_section(isoforms)
 
     tags = run.get("tags") or {}
     bundle = {
@@ -145,6 +175,7 @@ def build_bundle(args):
         "inputs": {
             "genome": args.genome, "gtf": args.gtf, "reads": args.reads, "bam": args.bam,
             "regions": args.regions,
+            "ref_tss": args.ref_tss, "ref_pas": args.ref_pas, "tusco": args.tusco,
             "regions_intervals": regions.as_list() if regions else None,
             "isoforms_in_file": n_read,
             "isoforms_dropped_contigs": n_contig,
@@ -154,15 +185,15 @@ def build_bundle(args):
         },
         **metrics,
         "compute": {"cpu_hours": None, "peak_rss_gb": None, "wall_minutes": None},
-        "sections": {},
+        "sections": sections,
     }
-    return bundle, isoforms, calls, ref_tx
+    return bundle, isoforms, calls, ref_tx, rows
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
     try:
-        bundle, isoforms, calls, ref_tx = build_bundle(args)
+        bundle, isoforms, calls, ref_tx, rows = build_bundle(args)
     except InputError as e:
         print(f"structure_metrics.py: error: {e}", file=sys.stderr)
         return 2
@@ -182,6 +213,7 @@ def main(argv=None) -> int:
     os.makedirs(args.out, exist_ok=True)
     write_tables(args.out, isoforms, calls)
     write_gene_names(args.out, calls, ref_tx)
+    write_ends_table(args.out, rows)
     with open(os.path.join(args.out, "bundle.json"), "w") as fh:
         json.dump(bundle, fh, indent=1)
         fh.write("\n")

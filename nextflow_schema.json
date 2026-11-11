@@ -151,6 +151,30 @@
                     "format": "file-path",
                     "fa_icon": "fas fa-map"
                 },
+                "ref_tss": {
+                    "type": "string",
+                    "description": "BED6 of TSS sites (refTSS) for the Ends section. Filled from the genome preset when not given.",
+                    "help_text": "Turns on sections.ends.tss (TSS precision against the sites). An explicit value wins over the preset and applies to every sample; samples with a custom genome get no preset file. Hidden because the front ends rely on the hg38 preset.",
+                    "format": "file-path",
+                    "hidden": true,
+                    "fa_icon": "fas fa-map-marker"
+                },
+                "ref_pas": {
+                    "type": "string",
+                    "description": "BED6 of poly(A) cleavage sites, [pos-1,pos) (PolyA_DB), for the Ends section. Filled from the genome preset when not given.",
+                    "help_text": "Turns on sections.ends.tes (3' end precision against the sites). Same preset rules as --ref_tss.",
+                    "format": "file-path",
+                    "hidden": true,
+                    "fa_icon": "fas fa-map-marker"
+                },
+                "tusco": {
+                    "type": "string",
+                    "description": "SQANTI3 tusco_human.tsv (single-isoform control genes) for the TUSCO section. Filled from the genome preset when not given.",
+                    "help_text": "Turns on sections.tusco, scored with SQANTI3's TUSCO rules. Same preset rules as --ref_tss.",
+                    "format": "file-path",
+                    "hidden": true,
+                    "fa_icon": "fas fa-check-double"
+                },
                 "env_cache": {
                     "type": "string",
                     "description": "Where FLAIR environments are built and cached.",
