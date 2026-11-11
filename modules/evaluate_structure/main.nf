@@ -86,21 +86,31 @@ def stubHist(List edges) {
 
 // Round-3 sections with zeros and nulls (A29-A32), so stub bundles have the real shape. ends and
 // tusco appear only when their files were staged, as in the real script.
-def stubSections(Object refTss, Object refPas, Object tusco) {
+// Parser v2 cannot call a closure held in a local variable as name(), so these are functions.
+def stubDistHist() {
     def distEdges = [-1000, -200, -50, -10, 0, 10, 50, 200, 1000]
-    def distHist = { -> [edges: distEdges, counts: (0..distEdges.size()).collect { _i -> 0 }] }
-    def half = { -> [n: 0, within: [0, 0, 0, 0, 0, 0, 0, 0], dist_hist: distHist(), no_site: 0] }
-    def refMeta = { f -> [file: f.toString().tokenize('/')[-1], md5: null, sites: 0] }
+    return [edges: distEdges, counts: (0..distEdges.size()).collect { _i -> 0 }]
+}
+
+def stubEndHalf() {
+    return [n: 0, within: [0, 0, 0, 0, 0, 0, 0, 0], dist_hist: stubDistHist(), no_site: 0]
+}
+
+def stubRefMeta(Object f) {
+    return [file: f.toString().tokenize('/')[-1], md5: null, sites: 0]
+}
+
+def stubSections(Object refTss, Object refPas, Object tusco) {
     def cats = ['FSM', 'ISM', 'NIC', 'NNC', 'genic', 'genic_intron', 'antisense', 'intergenic', 'fusion']
     def sec = [:]
     if (refTss || refPas) {
         sec.ends = [
-            refs        : [tss: refTss ? refMeta(refTss) : null, pas: refPas ? refMeta(refPas) : null],
+            refs        : [tss: refTss ? stubRefMeta(refTss) : null, pas: refPas ? stubRefMeta(refPas) : null],
             windows     : [0, 10, 25, 50, 100, 200, 300, 500],
-            tss         : refTss ? half() : null,
-            tes         : refPas ? half() : null,
-            fsm_tss_hist: distHist(),
-            fsm_tes_hist: distHist(),
+            tss         : refTss ? stubEndHalf() : null,
+            tes         : refPas ? stubEndHalf() : null,
+            fsm_tss_hist: stubDistHist(),
+            fsm_tes_hist: stubDistHist(),
             by_category : cats.collectEntries { c -> [(c): [n: 0, tss_within_50: refTss ? 0 : null, tes_within_50: refPas ? 0 : null]] },
             polya_motif : [n_with_motif: 0, n: 0],
         ]
