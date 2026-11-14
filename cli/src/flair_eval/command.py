@@ -91,25 +91,31 @@ class Command:
         return " ".join(quote(a) for a in self.argv)
 
 
+#: Why a run needs runs.yaml when a step setting is not the default (config.RUN_DEFAULTS).
+NOT_DEFAULT = {"quantify": "quantify is turned off",
+               "productivity": "productivity prediction is turned off",
+               "own_align": "it aligns its own BAM"}
+
+
 def quick_form(samples: list[dict], runs: list[dict]) -> tuple[list | None, list[str]]:
     """Return (args, []) for the one-command form, or (None, reasons) if it cannot express
     these samples and runs exactly."""
     reasons: list[str] = []
     if len(samples) != 1:
-        reasons.append(f"{len(samples)} samples (one-command mode takes exactly one)")
+        reasons.append(f"{len(samples)} samples (the one-line command takes one)")
     else:
         s = samples[0]
         used = [c for c in TRACK_COLUMNS if s.get(c)]
         if used:
             reasons.append(f"extra tracks ({', '.join(used)}) need samples.csv")
         if s.get("reads") and s.get("bam"):
-            reasons.append("the sample has both reads and bam")
+            reasons.append("the sample gives both reads and a BAM")
     tokens = []
     for r in runs:
         rid = r.get("id", "?")
         tok = token_for_run(r)
         if tok is None:
-            reasons.append(f"run {rid}: its id or FLAIR source has no --flair token")
+            reasons.append(f"run {rid}: its id or FLAIR source can only be written in runs.yaml")
         tokens.append(tok)
         if r.get("label") and r.get("label") != r.get("id"):
             reasons.append(f"run {rid}: labels need runs.yaml")
@@ -117,10 +123,10 @@ def quick_form(samples: list[dict], runs: list[dict]) -> tuple[list | None, list
             reasons.append(f"run {rid}: tags need runs.yaml")
         for k in ("quantify", "productivity", "own_align"):
             if not run_is_default(r, k):
-                reasons.append(f"run {rid}: {k} is not the default")
+                reasons.append(f"run {rid}: {NOT_DEFAULT[k]}")
     arg_sets = {r.get("transcriptome_args", "") or "" for r in runs}
     if len(arg_sets) > 1:
-        reasons.append("runs use different transcriptome_args")
+        reasons.append("runs use different FLAIR arguments")
     if not runs:
         reasons.append("no runs")
     if reasons:
@@ -212,15 +218,46 @@ def report_command(bundles: list[str], opts: Options | None = None) -> Command:
     return Command(argv, "report", [])
 
 
-NO_VALUE = {"-resume"}
+NO_VALUE = {"-resume", "--resume"}
 VALUE_FLAGS = {"-r", "-profile", "-work-dir"}
+
+#: Nextflow spellings that `flair-eval run` writes differently; every other flag is the same.
+CLI_FLAGS = {"--input": "--samples", "-profile": "--profile", "-resume": "--resume",
+             "-work-dir": "--work-dir"}
+
+
+def as_cli_run(argv: list) -> list:
+    """The same launch as `flair-eval run ...` (on phoenix it submits the Nextflow driver to
+    SLURM). Only the head and the CLI_FLAGS spellings change; `-r` is dropped when it is the
+    default. `Options.extra` is not supported. Same rule as asCliRun() in logic.js."""
+    out = ["flair-eval", "run"]
+    if argv[2] != PIPELINE:
+        out += ["--pipeline", argv[2]]
+    i = 3
+    if len(argv) > 4 and argv[3] == "-r":
+        if argv[4] != DEFAULT_REF:
+            out += ["-r", argv[4]]
+        i = 5
+    while i < len(argv):
+        a = argv[i]
+        out.append(CLI_FLAGS.get(a, a))
+        takes_value = a not in NO_VALUE and "=" not in a and (a.startswith("--")
+                                                             or a in VALUE_FLAGS)
+        if takes_value and i + 1 < len(argv):
+            i += 1
+            out.append(argv[i])
+        i += 1
+    return out
 
 
 def format_command(argv: list) -> str:
-    """Multi-line display: `nextflow run X -r REF` on the first line, then one option
-    (with its value) per line, joined with ` \\`. Same layout as logic.js."""
+    """Multi-line display: `nextflow run X -r REF` (or `flair-eval run`) on the first line,
+    then one option (with its value) per line, joined with ` \\`. Same layout as logic.js."""
     q = [quote(a) for a in argv]
-    n = 5 if len(argv) > 4 and argv[3] == "-r" else 3
+    if argv[:1] == ["flair-eval"]:
+        n = 2
+    else:
+        n = 5 if len(argv) > 4 and argv[3] == "-r" else 3
     lines = [" ".join(q[:n])]
     i = n
     while i < len(argv):

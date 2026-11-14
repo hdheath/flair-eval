@@ -206,6 +206,14 @@
           message: "this does not end in .bam; choose Reads if it is a FASTQ/FASTA file" });
       }
     });
+    var bamOnly = state.samples.map(function (s, i) { return s.kind === "bam" ? i + 1 : 0; }).filter(Boolean);
+    if (bamOnly.length) {
+      state.runs.forEach(function (r, i) {
+        if (r.own_align) list.push({ path: ["runs", i, "own_align"], code: "own_align_bam", level: "warning",
+          message: "this run aligns its own BAM from reads, but sample " + bamOnly.join(", ") + " only " +
+            (bamOnly.length === 1 ? "has" : "have") + " a BAM; add reads or untick it" });
+      });
+    }
     var out = state.opts.outdir.trim();
     if (!out) {
       list.push({ path: ["opts", "outdir"], code: "required", level: "error", message: "missing output folder" });
@@ -313,21 +321,22 @@
             h("span", { class: "label", text: "Input" }),
             seg("Input type", [["reads", "Reads (FASTQ/FASTA)"], ["bam", "Aligned BAM"]], s.kind, function (v) { s.kind = v; })
           ]),
-          textField({ key: k + "path", label: s.kind === "bam" ? "BAM file (sorted, with .bai next to it)" : "Reads file (.fq, .fa, .gz is fine)",
+          textField({ key: k + "path", label: s.kind === "bam" ? "BAM file (sorted, .bai next to it, aligned to this genome)" : "Reads file (.fq, .fa, .gz is fine)",
             mono: true, wide: true, value: s.path, placeholder: s.kind === "bam" ? "/data/HG002.bam" : "/data/HG002.fq.gz",
             set: function (v) { s.path = v; } })
         ]),
         h("div", { class: "field wide" }, [
           h("span", { class: "label", text: "Genome" }),
           seg("Genome", GENOME_KINDS, s.genomeKind, function (v) { s.genomeKind = v; }),
-          s.genomeKind !== "custom" ? h("span", { class: "hint", text: FE.GENOME_PRESETS[s.genomeKind].note +
-            " (lab reference on phoenix). The GTF below is optional." }) : null,
+          h("span", { class: "hint", text: s.genomeKind !== "custom"
+            ? FE.GENOME_PRESETS[s.genomeKind].note + " (lab reference on phoenix). The GTF below is optional."
+            : "Without a preset, the report's Ends and TUSCO panels are hidden." }),
           h("span", { class: "err", "data-err": k + "genomeKind", hidden: true })
         ]),
         h("div", { class: "grid pair" }, [
           s.genomeKind === "custom" ? textField({ key: k + "genome", label: "Genome FASTA", mono: true, value: s.genome,
             placeholder: "/ref/GRCh38.fa", set: function (v) { s.genome = v; } }) : null,
-          textField({ key: k + "gtf", label: s.genomeKind === "custom" ? "Reference annotation GTF" : "Annotation GTF (optional)",
+          textField({ key: k + "gtf", label: s.genomeKind === "custom" ? "Annotation GTF" : "Annotation GTF (optional)",
             mono: true, value: s.gtf,
             placeholder: s.genomeKind === "custom" ? "/ref/gencode.gtf" : "from the preset: GENCODE v49 basic",
             set: function (v) { s.gtf = v; } })
@@ -335,12 +344,14 @@
         h("div", { class: "grid" }, [
           nameInput,
           selectField({ key: k + "platform", label: "Platform", value: s.platform,
-            options: [["", "Not set"], ["pacbio", "PacBio"], ["ont", "Oxford Nanopore"]], set: function (v) { s.platform = v; } }),
+            options: [["", "Not set"], ["pacbio", "PacBio"], ["ont", "Oxford Nanopore"]],
+            hint: "Recorded in the report; FLAIR has no platform setting.", set: function (v) { s.platform = v; } }),
           selectField({ key: k + "library", label: "Library", value: s.library,
-            options: [["", "Not set"], ["cDNA", "cDNA"], ["dRNA", "Direct RNA"]], set: function (v) { s.library = v; } })
+            options: [["", "Not set"], ["cDNA", "cDNA"], ["dRNA", "Direct RNA"]],
+            hint: "Direct RNA aligns with --nvrna.", set: function (v) { s.library = v; } })
         ]),
         h("details", { class: "more", open: (s.cage || s.pas || s.junctions || s.spikein_gtf) ? "open" : null }, [
-          h("summary", { text: "Extra tracks (optional, for later report sections)" }),
+          h("summary", { text: "Extra tracks (optional; not used in the report yet)" }),
           h("div", { class: "grid two" }, [
             textField({ key: k + "cage", label: "CAGE peaks (TSS)", mono: true, value: s.cage, placeholder: "optional", set: function (v) { s.cage = v; } }),
             textField({ key: k + "pas", label: "PAS / 3′-seq peaks (TES)", mono: true, value: s.pas, placeholder: "optional", set: function (v) { s.pas = v; } }),
@@ -369,7 +380,7 @@
       var src;
       if (r.source === "release") {
         src = [textField({ key: k + "release", label: "FLAIR version", mono: true, value: r.release, list: "releases",
-          placeholder: "3.0.1", hint: "Installed from bioconda and cached.", set: function (v) { r.release = v; } })];
+          placeholder: "3.0.1", hint: "Built once into a conda env and cached.", set: function (v) { r.release = v; } })];
       } else if (r.source === "git") {
         src = [textField({ key: k + "ref", label: "Branch, tag or commit", mono: true, value: r.ref, list: "refs", placeholder: "dev",
                  hint: "Pinned to the exact commit when the run starts.", set: function (v) { r.ref = v; } }),
@@ -411,14 +422,14 @@
         h("div", { class: "grid two" }, [
           selectField({ key: k + "preset", label: "Settings", value: presetOf(r.args) === "custom" ? "custom" : r.preset,
             options: FE.PRESETS.map(function (p) { return [p.key, p.label]; }).concat([["custom", "Custom arguments"]]),
-            hint: preset && presetOf(r.args) !== "custom" ? preset.note : "Your own flair transcriptome arguments.",
+            hint: preset && presetOf(r.args) !== "custom" ? preset.note : "Passed to flair transcriptome (flair collapse in 2.2.0).",
             rerender: true,
             set: function (v) {
               r.preset = v;
               var p = FE.PRESETS.filter(function (x) { return x.key === v; })[0];
               if (p) r.args = p.args;
             } }),
-          textField({ key: k + "args", label: "flair transcriptome arguments", mono: true, value: r.args, placeholder: "none",
+          textField({ key: k + "args", label: "FLAIR arguments", mono: true, value: r.args, placeholder: "none",
             set: function (v) { r.args = v; r.preset = presetOf(v); } })
         ]),
         h("details", { class: "more", open: (r.label || r.tags || !r.idAuto || !r.quantify || !r.productivity || r.own_align) ? "open" : null }, [
@@ -431,12 +442,12 @@
               textField({ key: k + "label", label: "Label in the report", value: r.label, placeholder: ids[i],
                 set: function (v) { r.label = v; } }),
               textField({ key: k + "tags", label: "Tags", mono: true, value: r.tags, placeholder: "version=3.0.1, setting=stringent",
-                hint: "Filters in the report.", set: function (v) { r.tags = v; } })
+                hint: "key=value pairs, used as filters in the report.", set: function (v) { r.tags = v; } })
             ]),
             h("div", { class: "checks" }, [
-              check("Quantify (flair quantify)", r.quantify, function (v) { r.quantify = v; }),
+              check("Quantify", r.quantify, function (v) { r.quantify = v; }),
               check("Predict productivity", r.productivity, function (v) { r.productivity = v; }),
-              check("Align its own BAM", r.own_align, function (v) { r.own_align = v; })
+              check("Align reads with this run's FLAIR (not the shared BAM)", r.own_align, function (v) { r.own_align = v; })
             ])
           ])
         ])
@@ -519,7 +530,7 @@
     else { pill.className = "pill ok"; pill.textContent = "Ready to run"; }
     var nj = samples.length * runs.length;
     $("jobs").textContent = samples.length + " sample" + (samples.length === 1 ? "" : "s") + " × " + runs.length + " run" +
-      (runs.length === 1 ? "" : "s") + " = " + nj + " job" + (nj === 1 ? "" : "s");
+      (runs.length === 1 ? "" : "s") + " = " + nj + (nj === 1 ? " result" : " results");
     var ul = $("issues");
     ul.textContent = "";
     issues.forEach(function (x) {
@@ -537,22 +548,26 @@
       return y;
     });
     var c = FE.buildCommand(shown, runs, cmdOptions(runs));
-    $("cmd").textContent = FE.formatCommand(c.argv);
+    // on phoenix (no custom profile) show the same launch as `flair-eval run`, which submits it to SLURM
+    var viaCli = state.opts.executor === "phoenix" && !state.opts.profile.trim();
+    var argv = viaCli ? FE.asCliRun(c.argv) : c.argv;
+    $("cmd").textContent = FE.formatCommand(argv);
     var why = $("why");
     why.textContent = "";
-    $("launch-hint").hidden = state.opts.executor === "local";
+    $("hint-cli").hidden = !viaCli;
+    $("hint-sbatch").hidden = viaCli || state.opts.executor === "local";
     if (c.mode === "quick") {
       $("mode").textContent = "One command, no files needed";
       $("mode-sub").textContent = "Run it where the paths exist.";
       why.hidden = true;
     } else {
       $("mode").textContent = "Uses samples.csv and runs.yaml";
-      $("mode-sub").textContent = "Download both files next to where you launch.";
+      $("mode-sub").textContent = "Save both files in the folder you launch from.";
       var reasons = c.reasons.filter(function (x) { return x !== "files requested"; });
       why.hidden = reasons.length === 0;
       reasons.slice(0, 5).forEach(function (x) { why.appendChild(h("li", { text: "Needs files: " + x })); });
     }
-    lastCommand = FE.oneLine(c.argv);
+    lastCommand = FE.oneLine(argv);
 
     // files
     lastFiles.samples = FE.samplesCsv(samples);

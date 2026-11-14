@@ -449,25 +449,29 @@
     return v.charAt(0) === "-" ? [name + "=" + v] : [name, v];
   }
 
+  /* Why a run needs runs.yaml when a step setting is not the default (RUN_DEFAULTS). */
+  var NOT_DEFAULT = { quantify: "quantify is turned off", productivity: "productivity prediction is turned off",
+    own_align: "it aligns its own BAM" };
+
   function quickForm(samples, runs) {
     var reasons = [];
-    if (samples.length !== 1) reasons.push(samples.length + " samples (one-command mode takes exactly one)");
+    if (samples.length !== 1) reasons.push(samples.length + " samples (the one-line command takes one)");
     else {
       var s0 = samples[0];
       var used = TRACK_COLUMNS.filter(function (c) { return !!s0[c]; });
       if (used.length) reasons.push("extra tracks (" + used.join(", ") + ") need samples.csv");
-      if (s0.reads && s0.bam) reasons.push("the sample has both reads and bam");
+      if (s0.reads && s0.bam) reasons.push("the sample gives both reads and a BAM");
     }
     var tokens = [];
     runs.forEach(function (r) {
       var rid = has(r, "id") ? r.id : "?";
       var tok = tokenForRun(r);
-      if (tok === null) reasons.push("run " + rid + ": its id or FLAIR source has no --flair token");
+      if (tok === null) reasons.push("run " + rid + ": its id or FLAIR source can only be written in runs.yaml");
       tokens.push(tok);
       if (r.label && r.label !== r.id) reasons.push("run " + rid + ": labels need runs.yaml");
       if (r.tags && Object.keys(r.tags).length) reasons.push("run " + rid + ": tags need runs.yaml");
       ["quantify", "productivity", "own_align"].forEach(function (k) {
-        if (!runIsDefault(r, k)) reasons.push("run " + rid + ": " + k + " is not the default");
+        if (!runIsDefault(r, k)) reasons.push("run " + rid + ": " + NOT_DEFAULT[k]);
       });
     });
     var argSet = [];
@@ -475,7 +479,7 @@
       var a = (has(r, "transcriptome_args") ? r.transcriptome_args : "") || "";
       if (argSet.indexOf(a) < 0) argSet.push(a);
     });
-    if (argSet.length > 1) reasons.push("runs use different transcriptome_args");
+    if (argSet.length > 1) reasons.push("runs use different FLAIR arguments");
     if (!runs.length) reasons.push("no runs");
     if (reasons.length) return { args: null, reasons: reasons };
 
@@ -527,11 +531,28 @@
     return { argv: head(o).concat(["--input", o.samples_path, "--runs", o.runs_path], tail(o)), mode: "files", reasons: reasons };
   }
 
-  var NO_VALUE = ["-resume"];
+  /* The same launch as `flair-eval run` (phoenix: it submits the Nextflow driver to SLURM).
+   * The CLI takes the pipeline's flags as they are; only the head and four Nextflow spellings
+   * change. -r is dropped when it is the CLI's default. Extra args are not supported here. */
+  var CLI_FLAGS = { "--input": "--samples", "-profile": "--profile", "-resume": "--resume", "-work-dir": "--work-dir" };
+  function asCliRun(argv) {
+    var out = ["flair-eval", "run"], i = 3;
+    if (argv[2] !== PIPELINE) out.push("--pipeline", argv[2]);
+    if (argv.length > 4 && argv[3] === "-r") { if (argv[4] !== DEFAULT_REF) out.push("-r", argv[4]); i = 5; }
+    for (; i < argv.length; i++) {
+      var a = argv[i];
+      out.push(has(CLI_FLAGS, a) ? CLI_FLAGS[a] : a);
+      var takes = NO_VALUE.indexOf(a) < 0 && a.indexOf("=") < 0 && (a.indexOf("--") === 0 || VALUE_FLAGS.indexOf(a) >= 0);
+      if (takes && i + 1 < argv.length) { i += 1; out.push(argv[i]); }
+    }
+    return out;
+  }
+
+  var NO_VALUE = ["-resume", "--resume"];
   var VALUE_FLAGS = ["-r", "-profile", "-work-dir"];
   function formatCommand(argv) {
     var qd = argv.map(quote);
-    var n = argv.length > 4 && argv[3] === "-r" ? 5 : 3;
+    var n = argv[0] === "flair-eval" ? 2 : argv.length > 4 && argv[3] === "-r" ? 5 : 3;
     var lines = [qd.slice(0, n).join(" ")];
     var i = n;
     while (i < argv.length) {
@@ -555,7 +576,7 @@
     tokenForFlair: tokenForFlair, tokenForRun: tokenForRun,
     defaultSampleName: defaultSampleName, cleanSample: cleanSample, samplesCsv: samplesCsv, runsYaml: runsYaml,
     validateSamples: validateSamples, validateRuns: validateRuns, setSchemas: setSchemas,
-    quote: quote, opt: opt, quickForm: quickForm, buildCommand: buildCommand,
+    quote: quote, opt: opt, quickForm: quickForm, buildCommand: buildCommand, asCliRun: asCliRun,
     formatCommand: formatCommand, oneLine: oneLine
   };
 });

@@ -40,17 +40,17 @@ The assemblies were genome-wide runs; quantify and productivity were run on the 
 Caveats, so the numbers are not over-read:
 - **Quantify differs by version** (A21, recorded in `sections.quant.input`; the report notes it).
   FLAIR 2.2.0 and 3.0.1 quantify from reads (via the adapter). The dev branch quantifies from
-  the genome BAM. The adapter's dev path passed `-g`, which this
-  dev `flair quantify` rejects (it only accepts `--genome`), so the dev counts were made with the
-  same command and `--genome` spelled out. FLAIR itself was not changed.
+  the genome BAM. (When these fixtures were made the adapter passed `-g`, which these dev builds
+  reject, so the dev counts were made with `--genome` spelled out; the adapter now does that
+  itself, A20.)
 - CPM is relative to the slice's reads, so values are much higher than genome-wide CPM.
 - `compute` covers quantify + productivity on the slice, not the genome-wide assembly.
 
 ## Round-3 sections (CONTRACTS A28-A32)
 
 Added by hand for the report tests, before `structure_metrics.py` wrote them, so they follow the
-contract shapes but were not made by the pipeline. Regenerate them with
-`structure_metrics.py --ref-tss --ref-pas --tusco` once that lands.
+contract shapes but were not made by the pipeline. `structure_metrics.py --ref-tss --ref-pas
+--tusco` now writes them, so they can be regenerated (except the synthetic `sections.tusco`).
 
 - `tables/ends.tsv`, `sections.ends`, `sections.priming` and `sections.variation` were computed
   from each bundle's `isoforms.bed` and `tables/isoforms.tsv` by a one-off script that reads

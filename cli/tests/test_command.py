@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from flair_eval.command import Options, build_command, format_command, opt, quote, \
+from flair_eval.command import Options, as_cli_run, build_command, format_command, opt, quote, \
     report_command
 
 
@@ -48,14 +48,14 @@ def test_quick_form_with_args_bam_platform_and_options(sample, two_runs):
 @pytest.mark.parametrize("change,reason", [
     (lambda s, r: ([s, dict(s, sample="s2")], r), "2 samples"),
     (lambda s, r: ([dict(s, cage="c.bed")], r), "extra tracks (cage)"),
-    (lambda s, r: ([dict(s, bam="x.bam")], r), "both reads and bam"),
+    (lambda s, r: ([dict(s, bam="x.bam")], r), "both reads and a BAM"),
     (lambda s, r: ([s], [dict(r[0], id="mine"), r[1]]), "run mine: its id"),
     (lambda s, r: ([s], [dict(r[0], label="FLAIR 3"), r[1]]), "labels need runs.yaml"),
     (lambda s, r: ([s], [dict(r[0], tags={"v": "3"}), r[1]]), "tags need runs.yaml"),
-    (lambda s, r: ([s], [dict(r[0], quantify=False), r[1]]), "quantify is not the default"),
-    (lambda s, r: ([s], [dict(r[0], own_align=True), r[1]]), "own_align is not the default"),
+    (lambda s, r: ([s], [dict(r[0], quantify=False), r[1]]), "quantify is turned off"),
+    (lambda s, r: ([s], [dict(r[0], own_align=True), r[1]]), "aligns its own BAM"),
     (lambda s, r: ([s], [dict(r[0], transcriptome_args="--stringent"), r[1]]),
-     "different transcriptome_args"),
+     "different FLAIR arguments"),
     (lambda s, r: ([s], []), "no runs"),
 ])
 def test_files_form_reasons(sample, two_runs, change, reason):
@@ -140,3 +140,27 @@ def test_local_pipeline_has_no_revision(sample, two_runs):
     assert format_command(c.argv).split(" \\\n")[0] == "nextflow run /home/me/flair-eval"
     c = build_command([sample], two_runs, Options(pipeline="me/fork", ref="dev"))
     assert c.argv[:5] == ["nextflow", "run", "me/fork", "-r", "dev"]
+
+
+def test_as_cli_run_quick_and_files(sample, two_runs):
+    """The builder shows `flair-eval run` on phoenix: same flags, CLI head and spellings."""
+    quick = build_command([sample], two_runs, Options(outdir="/o", resume=True, work_dir="/w"))
+    cli = as_cli_run(quick.argv)
+    assert cli[:4] == ["flair-eval", "run", "--reads", sample["reads"]]
+    assert "-r" not in cli  # main is the CLI default
+    assert cli[-5:] == ["--outdir", "/o", "--work-dir", "/w", "--resume"]
+    first_two = format_command(cli).split(" \\\n")[:2]
+    assert first_two == ["flair-eval run", "  --reads " + sample["reads"]]
+    files = build_command([sample], two_runs, Options(prefer_files=True, ref="v2", profile="x"))
+    assert as_cli_run(files.argv)[:8] == ["flair-eval", "run", "-r", "v2", "--profile", "x",
+                                          "--samples", "samples.csv"]
+
+
+def test_as_cli_run_parses_with_the_cli(sample, two_runs):
+    """Every flag as_cli_run writes is one `flair-eval run` accepts."""
+    from flair_eval.cli import make_parser
+    for opts in (Options(outdir="/o", resume=True, params={"report_title": "-x", "baseline": "b"}),
+                 Options(outdir="/o", prefer_files=True, ref="v2")):
+        argv = as_cli_run(build_command([sample], two_runs, opts).argv)
+        a = make_parser().parse_args(argv[1:])
+        assert a.cmd == "run" and a.outdir == "/o"

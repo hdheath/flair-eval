@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>flair-eval Config Builder</title>
+<title>flair-eval config builder</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<meta name="description" content="Set up a flair-eval run: samples, FLAIR runs and the exact nextflow command.">
+<meta name="description" content="Set up a flair-eval launch: samples, FLAIR runs and the exact command.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -198,7 +198,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
       </svg>
       <h1>flair-eval config builder</h1>
       <p>Describe your samples and the FLAIR runs you want to compare. The page writes the
-        <code>nextflow run</code> command and, when you need them, <code>samples.csv</code> and
+        launch command and, when you need them, <code>samples.csv</code> and
         <code>runs.yaml</code>. Nothing leaves your browser.</p>
     </div>
     <div class="top-actions">
@@ -221,8 +221,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
           <h2 id="h-samples">Samples</h2>
           <span class="count" id="sample-count"></span>
         </div>
-        <p class="hint">One dataset each: long reads (or an aligned BAM) plus the genome and annotation to compare against.
-          On phoenix, the <code>hg38</code> preset picks the lab reference (GRCh38 + GENCODE v49 basic). Full paths are safest. A relative path is read next to <code>samples.csv</code> first, then from the folder you launch in.</p>
+        <p class="hint">One card per dataset: a reads file or an aligned BAM, and the genome to compare against. Use full paths.</p>
         <div class="col" id="samples" style="gap:12px"></div>
         <div class="adders"><button class="btn add" type="button" id="add-sample">+ Add sample</button></div>
       </section>
@@ -250,7 +249,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
               <label for="o-outdir">Output folder (required)</label>
               <input type="text" class="mono" id="o-outdir" data-opt="outdir" data-key="o:outdir"
                 placeholder="/private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name" autocomplete="off" spellcheck="false">
-              <span class="hint">Bundles, the report and (on phoenix) Nextflow's work files. Use groups or warm-archive storage, not your home folder (about 100 GB quota). Type your user name in place of <code>$USER</code>.</span>
+              <span class="hint">Results, the report and (on phoenix) Nextflow's work files. Use groups or warm-archive storage, not your home folder (about 100 GB quota). Type your user name in place of <code>$USER</code>.</span>
               <span class="err" data-err="o:outdir" hidden></span>
             </div>
             <div class="field">
@@ -259,7 +258,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
                 <option value="phoenix">phoenix (default)</option>
                 <option value="local">This computer (local)</option>
               </select>
-              <span class="hint">phoenix (UCSC PRISM) needs no <code>-profile</code>: every step is a SLURM job, and FLAIR envs come from the shared lab cache.</span>
+              <span class="hint">On phoenix (UCSC PRISM) the command is <code>flair-eval run</code>: every step is a SLURM job, and FLAIR envs come from the shared lab cache.</span>
             </div>
             <div class="field" id="software-field" hidden>
               <label for="o-software">How FLAIR is installed</label>
@@ -267,14 +266,14 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
                 <option value="conda">conda</option>
                 <option value="singularity">Singularity / Apptainer</option>
                 <option value="docker">Docker</option>
-                <option value="">None</option>
+                <option value="">None (uses python3 on PATH, with pandas and numpy)</option>
               </select>
               <span class="hint">conda builds each FLAIR version for you. <code>flair-eval doctor</code> shows what this machine has.</span>
             </div>
             <div class="field">
               <label for="o-baseline">Baseline run</label>
               <select id="o-baseline" data-opt="baseline"></select>
-              <span class="hint">The report shows differences against this run.</span>
+              <span class="hint">The report shows differences against this run (you can switch it in the report).</span>
             </div>
             <div class="field">
               <label for="o-title">Report title</label>
@@ -283,7 +282,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
           </div>
           <div class="checks">
             <label class="check"><input type="checkbox" id="o-resume" data-opt="resume"> Resume an earlier launch (<code>-resume</code>)</label>
-            <label class="check"><input type="checkbox" id="o-files" data-opt="prefer_files"> Always use config files</label>
+            <label class="check"><input type="checkbox" id="o-files" data-opt="prefer_files"> Write <code>samples.csv</code> and <code>runs.yaml</code> even when one command would do</label>
           </div>
           <details class="more">
             <summary>More options</summary>
@@ -291,7 +290,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
               <div class="field">
                 <label for="o-profile">Custom profile</label>
                 <input type="text" class="mono" id="o-profile" data-opt="profile" placeholder="e.g. local,singularity">
-                <span class="hint">Replaces the two choices above when filled in.</span>
+                <span class="hint">Overrides "Where it runs" and "How FLAIR is installed". The command is then <code>nextflow run</code>.</span>
               </div>
               <div class="field">
                 <label for="o-ref">Pipeline version</label>
@@ -301,7 +300,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
               <div class="field">
                 <label for="o-align">FLAIR for the shared alignment</label>
                 <input type="text" class="mono" id="o-align" data-opt="align_flair" placeholder="3.0.1">
-                <span class="hint">Every run gets the same BAM, aligned once per sample with this release.</span>
+                <span class="hint">Reads are aligned once per sample with this FLAIR release, and every run assembles from that BAM. Not used for samples that give a BAM.</span>
               </div>
               <div class="field">
                 <label for="o-regions">Regions BED</label>
@@ -311,7 +310,7 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
               <div class="field">
                 <label for="o-bundles">Earlier results to include</label>
                 <input type="text" class="mono" id="o-bundles" data-opt="bundles" placeholder="optional, comma-separated folders">
-                <span class="hint">Bundle folders from earlier launches, added to this report.</span>
+                <span class="hint">Result (bundle) folders from earlier launches, added to this report.</span>
               </div>
               <div class="field">
                 <label for="o-envcache">FLAIR environment cache</label>
@@ -341,10 +340,11 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
           </div>
           <button class="btn" type="button" id="copy-cmd">Copy</button>
         </div>
-        <pre id="cmd" aria-label="nextflow command"></pre>
+        <pre id="cmd" aria-label="launch command"></pre>
         <ul class="why-list" id="why" hidden></ul>
-        <p class="launch-hint" id="launch-hint">On phoenix, do not run Nextflow on the login node (mustard): put this command in an
-          <code>sbatch</code> job, or give the same flags to <code>flair-eval run</code>, which submits the driver as a SLURM job for you.</p>
+        <p class="launch-hint" id="hint-cli"><code>flair-eval run</code> checks your inputs, submits the run as a SLURM job and prints the
+          job id and log file. Activate the Nextflow conda env first. Run it from the folder that holds the files, if any.</p>
+        <p class="launch-hint" id="hint-sbatch" hidden>On phoenix, run this inside an <code>sbatch</code> job, not on the login node (mustard).</p>
       </div>
 
       <details class="first" id="first-time">
@@ -352,10 +352,10 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
         <ol>
           <li>Install Java 17+ and Nextflow (once):
             <div class="snip"><code id="snip-1">conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17 &amp;&amp; conda activate nextflow</code><button class="btn" type="button" data-copy="snip-1">Copy</button></div></li>
-          <li>Install the flair-eval helper and check this machine:
+          <li>Install the flair-eval command and check this machine:
             <div class="snip"><code id="snip-2">pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@main#subdirectory=cli"</code><button class="btn" type="button" data-copy="snip-2">Copy</button></div>
             <div class="snip"><code id="snip-3">flair-eval doctor</code><button class="btn" type="button" data-copy="snip-3">Copy</button></div></li>
-          <li>Try the bundled test data, then run the command above on your own:
+          <li>Try the bundled test data first, then run the command above for your data:
             <div class="snip"><code id="snip-4">flair-eval run --test --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_test</code><button class="btn" type="button" data-copy="snip-4">Copy</button></div></li>
         </ol>
       </details>
@@ -378,8 +378,8 @@ footer { margin-top: 32px; color: var(--ink-2); font-size: 0.84rem; display: gri
   </div>
 
   <footer>
-    <p>Same rules as <code>flair-eval check</code> and the pipeline's schemas (<code>assets/schema/*.json</code>). Your entries are kept in this browser only.</p>
-    <p><a href="https://github.com/hdheath/flair-eval" rel="noopener">hdheath/flair-eval</a> · <a href="https://github.com/hdheath/flair-eval/blob/main/docs/usage_cli.md" rel="noopener">pip CLI guide</a></p>
+    <p>Checks use the same rules as <code>flair-eval check</code>. Your entries are saved in this browser only.</p>
+    <p><a href="https://github.com/hdheath/flair-eval" rel="noopener">hdheath/flair-eval</a> · <a href="https://github.com/hdheath/flair-eval/blob/main/docs/usage.md" rel="noopener">Setup guide</a></p>
   </footer>
 </div>
 <script src="schemas.js"></script>

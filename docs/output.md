@@ -1,18 +1,51 @@
-# flair-eval v2: outputs
+# Outputs and the report
 
-Everything lands under `--outdir` (default `./flair-eval-results`; on PRISM put it on groups or
-warm-archive storage). The layout is fixed by [CONTRACTS.md](CONTRACTS.md) sections 3 and 5.
+Everything lands under `--outdir` (required; on phoenix put it on groups or warm-archive storage).
+The layout is fixed by [CONTRACTS.md](CONTRACTS.md) sections 3 and 5.
 
 ```
 <outdir>/
 ├── bundles/<sample>/<run_id>/     one folder per job (sample × run)
 ├── report/report.html             the comparison report
+├── work/                          Nextflow work dir (phoenix profile; FLAIR's raw outputs)
 └── pipeline_info/
     ├── execution_trace.txt        Nextflow trace of every task
     ├── report.html                Nextflow resource report
     ├── timeline.html              Nextflow timeline
-    └── params.json                the parameters of this launch
+    ├── params.json                the parameters of this launch
+    └── launch.sbatch, nextflow-<job>.log   the driver job (flair-eval run on phoenix)
 ```
+
+## Reading the report
+
+`report/report.html` is one file with all data and code inlined: it opens offline, and can be
+emailed or hosted. It is built from this launch's bundles plus any `--bundles` folders
+([report-only mode](usage.md#reports-over-many-launches)). See the
+[demo report](https://hdheath.github.io/flair-eval/demo/report.html).
+
+- **One sample at a time.** The Sample picker drives every tab; nothing is pooled across samples.
+- **Every comparison is against the baseline run.** It defaults to the first run (`--baseline`
+  changes it), and the control bar switches it. Each run keeps its colour when you switch.
+- **Overlay or side by side.** With two or more runs, charts overlay; the Layout toggle draws one
+  panel per run. Every chart has a Table toggle with its numbers.
+- **Missing inputs hide panels.** A panel whose data is missing says what it needs (for
+  example "needs refTSS sites (--genome hg38, or --ref_tss)"). When only some runs have the data,
+  the panel is drawn for those and names the others.
+
+| Tab | Answers |
+|---|---|
+| What differs | Where do the runs differ most? Headline metrics side by side, each run's biggest differences from the baseline (at most one per metric family), and every metric in one table ("All metrics") |
+| Structure | How do the isoforms compare with the reference annotation? Structural categories (FSM, ISM, NIC, NNC, …, each defined in one line), isoform counts, lengths, exons per isoform |
+| Recovery | Which reference genes and transcripts are found? TUSCO benchmark, genes detected, gained and lost against the baseline, FSM isoforms with exact ends |
+| Diversity | How many isoforms per gene, how many are coding or NMD, and do genes vary by ends, splicing or both? |
+| Agreement | How similar are the runs? Shared and unique isoforms, expression correlation, 5′ and 3′ end agreement, TUSCO genes vs the baseline |
+| Ends | How close are isoform 5′ and 3′ ends to refTSS and PolyA_DB sites (precision only) and to the reference transcript's ends, and which 3′ ends sit on genomic A-runs (internal-priming risk)? |
+| Quantification | How many reads were assigned, and how many isoforms have reads? |
+| Compute | Wall time, CPU time and peak memory of each run's FLAIR steps |
+
+**Read counts are not always like for like across versions:** dev counts alignments in the
+genome BAM, while 2.2.0 and 3.0.1 count reads from the reads file. The Quantification tab says so
+when the runs being compared counted differently.
 
 ## Bundles
 
@@ -39,8 +72,7 @@ bundles/<sample>/<run_id>/
     └── trace.tsv                  resource use of this job's tasks
 ```
 
-`<step>` is `assemble`, `quantify`, `productivity`, `eval`, or `align` for runs with
-`own_align: true`. A FLAIR version that cannot run a step leaves `adapter_<step>_skipped.json`
+`<step>` is `assemble`, `quantify`, `productivity`, or `align` for runs with `own_align: true`. A FLAIR version that cannot run a step leaves `adapter_<step>_skipped.json`
 instead of that step's table.
 
 ### What fills `bundle.json`
@@ -61,7 +93,7 @@ pipeline knows:
 ### `compute` and `provenance/trace.tsv`
 
 `compute` is the cost of the FLAIR run itself: the job's `assemble`, `quantify` and
-`productivity` tasks (CONTRACTS section 7, A12). Alignment (shared or `own_align`) and the
+`productivity` tasks (CONTRACTS A12). Alignment (shared or `own_align`) and the
 evaluation step are not counted, so runs on the same sample compare fairly.
 
 | field | meaning |
@@ -74,7 +106,7 @@ Values come from each task's `.command.trace`, which Nextflow writes because `ne
 turns tracing on. A value is `null` when a trace could not be read.
 
 `trace.tsv` has one row per task of the job (all steps, including `align` for own_align runs and
-the evaluation), with the columns of CONTRACTS section 7, A15, in raw units:
+the evaluation), with the columns of CONTRACTS A15, in raw units:
 
 | column | meaning |
 |---|---|
@@ -87,7 +119,7 @@ the evaluation), with the columns of CONTRACTS section 7, A15, in raw units:
 
 ### `sections`
 
-BUNDLE adds two report sections (CONTRACTS sections 8 and 9) when their files exist, by calling
+BUNDLE adds two report sections (CONTRACTS section 8) when their files exist, by calling
 the one shared implementation, `python3 -m flair_eval_lib.sections <bundle_dir>` (A19):
 
 | key | from | content |
@@ -98,10 +130,10 @@ the one shared implementation, `python3 -m flair_eval_lib.sections <bundle_dir>`
 Both count only isoforms listed in `tables/isoforms.tsv`, so a `--regions` run counts the same
 isoforms in every panel. The CPM bin edges are defined in `bin/flair_eval_lib/sections.py`.
 
-### Round-3 sections from `structure_metrics.py` (CONTRACTS section 11)
+### End, TUSCO, priming and variation sections (CONTRACTS section 10)
 
 EVALUATE_STRUCTURE passes the sample's end references and TUSCO list (`--ref_tss`, `--ref_pas`,
-`--tusco`, or the genome preset's, A26). Only main chromosomes (chr1-22, X, Y) are evaluated.
+`--tusco`, or the genome preset's, A26). These sections cover main chromosomes only (chr1-22, X, Y).
 
 | key | needs | content |
 |---|---|---|
@@ -128,20 +160,6 @@ productivity and the structure evaluation use that copy; the shared alignment st
 full genome. This keeps a small test region fast: on the first real run some FLAIR builds
 otherwise re-read a 3 GB genome over shared storage for every region, or spent 20+ minutes
 building whole-genome annotation indexes. `inputs.reference_cut_to_regions` records it.
-
-## Report
-
-`report/report.html` is built by `bin/build_report.py` from this launch's bundles plus any
-`--bundles` folders. It is a single file with all data and code inlined, so it opens offline and
-can be emailed or hosted. `--report_title` sets its heading and `--baseline` the run that
-differences are computed against.
-
-To rebuild the report later from bundles only, without running FLAIR:
-
-```bash
-nextflow run hdheath/flair-eval --report_only \
-  --bundles 'results_a/bundles,results_b/bundles/*/flair-dev' --outdir results_combined
-```
 
 ## What is not published
 

@@ -25,7 +25,7 @@ EPILOG = f"""New here? Three steps:
 On phoenix (UCSC PRISM) no -profile is needed, --genome hg38 picks the lab reference, and
 `run` submits the Nextflow driver as a SLURM job (--foreground runs it in this shell).
 Try it on the bundled test data first: flair-eval run --test --outdir <folder>
-Guide: https://github.com/{PIPELINE}/blob/v2/docs/usage_cli.md"""
+Guide: https://github.com/{PIPELINE}/blob/main/docs/usage.md"""
 
 
 # ---------------------------------------------------------------- argument parsing

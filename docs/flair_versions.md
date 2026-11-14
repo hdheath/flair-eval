@@ -22,7 +22,9 @@ dev and TED report the same version string, so the adapter **detects the CLI by 
 the adapter uses the long name (`--genome`, `--threads`, `--output`, …) whenever a command lists
 it, and the short one only when it does not (CONTRACTS A20).
 
-**dev builds differ from each other**, so the "dev" column below is d033600 unless noted:
+**dev builds differ from each other.** The "dev" columns in the tables below were checked on
+d033600. The current tip, 389748e, matches them except where this table or §7 says otherwise
+(no transcriptome parallel option; quantify's counts file renamed):
 
 | dev build | `align` | `quantify` genome option | transcriptome parallel option | `predictProductivity` script |
 |---|---|---|---|---|
@@ -53,9 +55,9 @@ SHA through the fork network, so `flair_env.py` resolves such short SHAs with th
 | | 2.2.0 collapse | 3.0.1 transcriptome | TED transcriptome | dev transcriptome |
 |---|---|---|---|---|
 | alignment input | reads BED12 from `-q` (adapter makes it from the shared BAM with FLAIR's own `flair.bam2Bed12`, which keeps primary flag 0/16 like 2.x align) + raw reads `-r` | `-b BAM` | `-b BAM` | `-b BAM` |
-| `--sample_name` | — | — (silently ignored if given) | **required** (adapter passes `--sample flaireval`) | **required** (same) |
+| `--sample_name` | — | — (silently ignored if given) | **required** (adapter passes `--sample_name flaireval`) | **required** (same) |
 | parallel flag | — | `--parallelmode` | `--parallel_mode` | `--parallel_mode` |
-| adapter adds | `--generate_map --temp_dir` | `--parallelmode byregion` | `--parallel_mode byregion --generate_map` | `--parallel_mode byregion --generate_map --temp_dir` |
+| adapter adds | `--generate_map --temp_dir` | `--parallelmode byregion` | `--parallel_mode byregion --generate_map` | `--parallel_mode byregion --generate_map --temp_dir` (389748e: no parallel option) |
 | unknown flags | error | **ignored silently** (`parse_known_args`, logged only at `--log-level INFO`) | error | error |
 | temp files | `--temp_dir` | uuid dir in cwd | cwd | `--temp_dir` (default `$TMPDIR`) |
 | isoform BED | 12 col | 12 col | **30 col** (31 with `--ted`) | **25 col** (`flair_bed.as`) |
@@ -214,13 +216,20 @@ interface symmetry and not passed on.
   before assignment and crashes when the first locus has all chains rejected.
 - **3.0.1 predictProductivity**: GENCODE `NMD_exception` never matches combine-style names; an
   open ORF that is a multiple of 3 drops its final codon (NST).
-- **`--tpm`** in 3.0.1 and dev-pr684 writes CPM (counts_to_tpm.py is called without lengths).
+- **`--tpm`** in 3.0.1 writes CPM (counts_to_tpm.py is called without lengths). The adapter
+  computes CPM itself and never uses `--tpm`.
 - **TED**: `FlairBed.toRow` crashes when `frac_support` is None; standalone `predictProductivity`
   takes start codons from any gene (differs from the inline column 18) and splits paths on `.bed`;
   a genome-wide run in one job can deadlock even with the OMP exports. Run it per chromosome or
   with `--regions`, and always with `byregion`.
-- **TED env provenance**: it is an editable install with uncommitted edits, so `resolved_commit`
-  (20c0f47) is its HEAD, not the exact code; `flair_env.py` prints a note when this happens.
+- **TED intron-support database is slow with a full annotation**: building it re-freezes the
+  interval index for every annotated intron (`intron_support.py` → `interval_index.py`), so it
+  grows roughly with the square of the number of introns (20+ minutes at one core with GENCODE
+  v49 basic; 3.0.1 and dev take seconds). With `--regions`, PREP_REFERENCE hands FLAIR a
+  reference cut to the regions, which avoids most of the cost.
+- **Editable-install provenance** (seen with TED): for an env that is an editable install with
+  uncommitted edits, `resolved_commit` is the checkout's HEAD, not the exact code; `flair_env.py`
+  prints a note when this happens.
 - Every adapter call exports `OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=XGBOOST_NTHREAD=1`
   (TED byregion deadlocks without them).
 

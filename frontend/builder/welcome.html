@@ -74,12 +74,9 @@ code { font-family: var(--font-mono); font-size: 0.9em; }
 .demo dd { margin: 0; font-family: var(--font-mono); font-size: 0.84rem; }
 .section { display: grid; gap: 14px; }
 .section > p { color: var(--ink-2); max-width: 66ch; }
-table { border-collapse: collapse; font-size: 0.9rem; width: 100%; }
-.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
-th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
-tr:last-child td { border-bottom: 0; }
-th { font-size: 0.8rem; color: var(--ink-2); letter-spacing: 0.03em; text-transform: uppercase; }
-td code { white-space: nowrap; }
+details.more > summary { cursor: pointer; font-weight: 500; color: var(--ink-2); }
+details.more[open] > * + * { margin-top: 10px; }
+details.more > p { color: var(--ink-2); max-width: 66ch; font-size: 0.93rem; }
 footer { color: var(--ink-2); font-size: 0.86rem; display: flex; flex-wrap: wrap; gap: 6px 18px; }
 </style>
 </head>
@@ -109,7 +106,7 @@ footer { color: var(--ink-2); font-size: 0.86rem; display: flex; flex-wrap: wrap
     <ol class="steps">
       <li>
         <h3>Install</h3>
-        <p>Nextflow (with Java 17+) runs the pipeline. The flair-eval helper checks your machine and writes the config files.</p>
+        <p>Nextflow (with Java 17+) runs the pipeline. The <code>flair-eval</code> command (Python 3.10+) checks your setup, writes the config files and launches runs.</p>
         <div class="snip"><pre id="c1">conda create -y -n nextflow -c conda-forge -c bioconda nextflow openjdk=17
 conda activate nextflow</pre><button type="button" data-copy="c1">Copy</button></div>
         <div class="snip"><pre id="c2">pip install "flair-eval @ git+https://github.com/hdheath/flair-eval@main#subdirectory=cli"
@@ -119,13 +116,15 @@ flair-eval doctor</pre><button type="button" data-copy="c2">Copy</button></div>
         <h3>Try the test data</h3>
         <p>A small run on bundled test data shows the whole thing working before you point it at your own files.</p>
         <div class="snip"><pre id="c3">flair-eval run --test --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_test</pre><button type="button" data-copy="c3">Copy</button></div>
-        <p>On phoenix (UCSC PRISM) this submits the Nextflow driver as a SLURM job and prints its job id and log.
+        <p>On phoenix (UCSC PRISM) this submits the run as a SLURM job and prints the job id and log file.
           The report lands in <code>&lt;outdir&gt;/report/report.html</code>. <code>--outdir</code> is always required:
-          use groups or warm-archive storage, not your home folder.</p>
+          use groups or warm-archive storage, not your home folder. Name folders date first
+          (<code>dd_mm_yy</code> = today, e.g. <code>13_11_26_test</code>).</p>
       </li>
       <li>
         <h3>Describe your data</h3>
-        <p>Fill in the <a href="builder/">config builder</a> and copy its command, or answer a few questions in the terminal:</p>
+        <p>Fill in the <a href="builder/">config builder</a>, save <code>samples.csv</code> and <code>runs.yaml</code> if it
+          asks for them, and run the command it gives you. Or answer a few questions in the terminal:</p>
         <div class="snip"><pre id="c4">flair-eval init
 flair-eval run --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name</pre><button type="button" data-copy="c4">Copy</button></div>
       </li>
@@ -135,50 +134,45 @@ flair-eval run --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name
   <section class="demo" aria-labelledby="h-demo">
     <div class="section">
       <h2 id="h-demo">What the report looks like</h2>
-      <p>A real report from five FLAIR runs on LRGASP WTC11 data, cut to the TP53 locus on chr17.
-        Open any run on its own, or tick several to compare them against a baseline.</p>
+      <p>A real report from three FLAIR runs (2.2.0, 3.0.1 and dev) on LRGASP WTC11 PacBio data,
+        cut to a 2 Mb region of chr17 around TP53. Open any run on its own, or tick several to
+        compare them against a baseline.</p>
       <div class="cta"><a class="btn primary" href="demo/report.html">Open the demo report</a></div>
     </div>
     <dl>
-      <dt>Samples</dt><dd>WTC11 PacBio cDNA, WTC11 ONT cDNA</dd>
+      <dt>Sample</dt><dd>WTC11 PacBio cDNA</dd>
       <dt>Region</dt><dd>chr17:7,400,000-9,400,000</dd>
-      <dt>Runs</dt><dd>flair-2.2.0, flair-3.0.1, dev ×3</dd>
+      <dt>Runs</dt><dd>flair-2.2.0, flair-3.0.1, dev (tip)</dd>
       <dt>Reference</dt><dd>GENCODE v49 basic</dd>
     </dl>
   </section>
 
   <section class="section" aria-labelledby="h-one">
-    <h2 id="h-one">No files needed for a quick look</h2>
-    <p>One sample against three FLAIR builds, in one command. Each <code>--flair</code> token becomes a run.
-      On phoenix no <code>-profile</code> is needed and <code>--genome hg38</code> picks the lab reference
-      (GRCh38 + GENCODE v49 basic), so <code>--gtf</code> can be left out. <code>flair-eval run</code> takes the same flags
-      and submits the Nextflow driver as a SLURM job.</p>
+    <h2 id="h-one">One sample? Skip the config files</h2>
+    <p>One sample against three FLAIR versions. Each <code>--flair</code> token becomes a run. On phoenix,
+      <code>--genome hg38</code> picks the lab reference (GRCh38 + GENCODE v49 basic), so <code>--gtf</code> can be
+      left out, and <code>flair-eval run</code> submits the job to SLURM for you.</p>
     <div class="snip"><pre id="c5">flair-eval run --reads sample.fq.gz --genome hg38 \
   --flair 2.2.0,3.0.1,dev --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name</pre><button type="button" data-copy="c5">Copy</button></div>
-    <p>The same with Nextflow directly (inside an <code>sbatch</code> job on phoenix; add <code>-profile local,conda</code> elsewhere):</p>
-    <div class="snip"><pre id="c6">nextflow run hdheath/flair-eval -r main \
+    <p>Other tokens pick a branch, a conda env or a container: see
+      <a href="https://github.com/hdheath/flair-eval/blob/main/docs/usage.md#--flair-tokens" rel="noopener">--flair tokens</a>
+      in the guide.</p>
+    <details class="more">
+      <summary>The same with plain Nextflow</summary>
+      <p>On phoenix, run it inside an <code>sbatch</code> job and leave out <code>-profile</code>. Elsewhere, add
+        <code>-profile local,conda</code>.</p>
+      <div class="snip"><pre id="c6">nextflow run hdheath/flair-eval -r main \
   --reads sample.fq.gz --genome hg38 \
   --flair 2.2.0,3.0.1,dev --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name</pre><button type="button" data-copy="c6">Copy</button></div>
-    <div class="tablewrap">
-      <table>
-        <thead><tr><th>Token</th><th>FLAIR used</th><th>Run id</th></tr></thead>
-        <tbody>
-          <tr><td><code>3.0.1</code></td><td>that release, from bioconda</td><td><code>flair-3.0.1</code></td></tr>
-          <tr><td><code>dev</code>, <code>main</code>, <code>git:&lt;branch&gt;</code></td><td>that branch of BrooksLabUCSC/flair</td><td><code>flair-&lt;branch&gt;</code></td></tr>
-          <tr><td><code>git:&lt;url&gt;@&lt;ref&gt;</code></td><td>a branch, tag or commit of another repository</td><td><code>flair-&lt;ref&gt;</code></td></tr>
-          <tr><td><code>env:/path/to/env</code></td><td>a conda env you already have</td><td><code>env-&lt;name&gt;</code></td></tr>
-          <tr><td><code>container:&lt;image&gt;</code></td><td>a Docker or Singularity image</td><td><code>ctr-&lt;name&gt;</code></td></tr>
-        </tbody>
-      </table>
-    </div>
-    <p>Extra FLAIR arguments go in with an equals sign: <code>--flair_args='--stringent'</code>.
-      Nextflow misreads the form with a space.</p>
+      <p>Extra FLAIR arguments: <code>--flair_args='--stringent'</code>. With plain <code>nextflow run</code>, keep the
+        <code>=</code>: Nextflow reads <code>--flair_args --stringent</code> as two options.</p>
+    </details>
   </section>
 
   <footer>
     <a href="builder/">Config builder</a>
     <a href="demo/report.html">Demo report</a>
-    <a href="https://github.com/hdheath/flair-eval/blob/main/docs/usage_cli.md" rel="noopener">Setup guide</a>
+    <a href="https://github.com/hdheath/flair-eval/blob/main/docs/usage.md" rel="noopener">Setup guide</a>
     <a href="https://github.com/hdheath/flair-eval" rel="noopener">Source</a>
   </footer>
 </div>

@@ -322,20 +322,23 @@ def test_viewer_renders_every_view(tmp_path):
     assert set(s) == {"wtc11_ont", "wtc11_pacbio"}
     for sample, tabs in s.items():
         assert list(tabs) == ["diff", "structure", "recovery", "diversity", "agreement", "ends", "reads", "compute"]
-        assert "Every metric, one row each" in tabs["diff"]["cards"]
+        assert {"All metrics", "Terms"} <= set(tabs["diff"]["cards"])
         assert {"Precision at 50 bp", "5′ precision as the window widens", "Distance to the nearest refTSS site",
-                "FSM 3′ end vs the reference transcript", "PolyA signal before the 3′ end"} <= set(tabs["ends"]["cards"])
+                "FSM 3′ end vs the reference transcript", "PolyA signal before the 3′ end",
+                "End precision by category", "Internal-priming risk"} <= set(tabs["ends"]["cards"])
         assert not any("recall" in c.lower() for c in tabs["ends"]["cards"])       # precision only (A29)
-        assert {"End precision by category"} <= set(tabs["structure"]["cards"])
+        assert "End precision by category" not in tabs["structure"]["cards"]          # moved to Ends
         assert {"How genes vary"} <= set(tabs["diversity"]["cards"])
-        assert {"TSS and TTS agreement", "Expression on shared structures"} <= set(tabs["agreement"]["cards"])
+        assert {"5′ and 3′ end agreement", "Expression on shared isoforms"} <= set(tabs["agreement"]["cards"])
         assert {"Who are the lost genes?", "Genes gained and lost vs baseline"} <= set(tabs["recovery"]["cards"])
-        assert "genome BAM" in tabs["reads"]["text"]                                 # A21 note
+        assert "Not like for like" in tabs["reads"]["text"] and "genome alignment (BAM)" in tabs["reads"]["text"]  # A21
+        assert tabs["reads"]["text"].count("Not like for like") == 1                 # once per tab
+        assert "A21" not in tabs["reads"]["text"] and "A21" not in tabs["agreement"]["text"]
         assert tabs["ends"]["svgs"] >= 6
     assert "TUSCO" in s["wtc11_pacbio"]["recovery"]["cards"]
-    assert "TUSCO incremental recall" in s["wtc11_pacbio"]["agreement"]["cards"]
+    assert "TUSCO genes vs baseline" in s["wtc11_pacbio"]["agreement"]["cards"]
     hidden = dict(s["wtc11_ont"]["recovery"]["hidden"])
-    assert hidden["TUSCO"] == "Hidden: needs --tusco."                              # one-line reason (A34)
+    assert hidden["TUSCO"] == "Hidden: needs the TUSCO gene list (--genome hg38, or --tusco)."  # one-line reason (A34)
 
 
 @needs_node
@@ -356,11 +359,11 @@ def test_old_bundles_still_render(tmp_path):
     assert build("--bundles", tmp_path / "old", "--out", out).returncode == 0
     s = drive(tmp_path, out)["summary"]
     ends = s["wtc11_pacbio"]["ends"]
-    assert ends["cards"] == [] and ends["hidden"][0][1].startswith("Hidden: needs --ref-tss")
-    assert dict(s["wtc11_pacbio"]["reads"]["hidden"])["Internal-priming risk"].startswith("Hidden: needs")
-    assert "Intron-chain Jaccard" in s["wtc11_pacbio"]["agreement"]["cards"]
+    assert ends["cards"] == [] and ends["hidden"][0][1].startswith("Hidden: needs refTSS or PolyA_DB sites (--genome hg38, or --ref_tss")
+    assert dict(ends["hidden"])["Internal-priming risk"].startswith("Hidden: not in these results")
+    assert "Isoforms shared between runs (Jaccard)" in s["wtc11_pacbio"]["agreement"]["cards"]
     ont = dict(s["wtc11_ont"]["agreement"]["hidden"])                                # no isoforms.bed
-    assert "Intron-chain Jaccard" in ont and "TSS and TTS agreement" in ont
+    assert "Isoforms shared between runs (Jaccard)" in ont and "5′ and 3′ end agreement" in ont
     assert "Isoforms by structural category" in s["wtc11_ont"]["structure"]["cards"]
 
 
@@ -370,10 +373,29 @@ def test_single_run_sample_renders(tmp_path):
     dst = tmp_path / "one" / rid
     shutil.copytree(d, dst)
     out = tmp_path / "r.html"
-    assert build("--bundles", tmp_path / "one", "--out", out).returncode == 0
+    res = build("--bundles", tmp_path / "one", "--out", out)
+    assert res.returncode == 0 and "1 bundle (1 run, 1 sample)" in res.stderr
     s = drive(tmp_path, out)["summary"][sample]
     assert "Only one run on this sample" in s["diff"]["text"]
-    assert any(h[0] == "Intron-chain Jaccard" for h in s["agreement"]["hidden"])
+    assert any(h[0] == "Isoforms shared between runs (Jaccard)" for h in s["agreement"]["hidden"])
+
+
+@needs_node
+def test_neither_genes_get_their_own_part(tmp_path):
+    """A35: genes_multi includes `neither`; the stacked bar shows it rather than dropping it."""
+    for sample, rid, d in fixture_dirs():
+        if sample != "wtc11_pacbio":
+            continue
+        b = json.load(open(os.path.join(d, "bundle.json")))
+        v = b["sections"]["variation"]
+        v["neither"] = 3
+        v["genes_multi"] += 3
+        dst = tmp_path / "b" / sample / rid
+        os.makedirs(dst)
+        json.dump(b, open(dst / "bundle.json", "w"))
+    out = tmp_path / "r.html"
+    assert build("--bundles", tmp_path / "b", "--out", out).returncode == 0
+    assert "Neither (same splicing, ends within 50 bp)" in drive(tmp_path, out)["summary"]["wtc11_pacbio"]["diversity"]["text"]
 
 
 def test_colour_slots_do_not_follow_the_in_page_baseline():

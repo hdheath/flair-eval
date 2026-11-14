@@ -318,6 +318,11 @@ def render_html(data):
     return out.replace("__DATA__", payload)
 
 
+def _n(k, word):
+    """'1 sample', '2 samples'."""
+    return f"{k} {word}{'' if k == 1 else 's'}"
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     try:
@@ -332,8 +337,8 @@ def main(argv=None) -> int:
     os.makedirs(out_dir, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as fh:
         fh.write(page)
-    print(f"build_report.py: {len(entries)} bundles ({len(data['runs'])} runs, "
-          f"{len(data['samples'])} samples) -> {args.out} "
+    print(f"build_report.py: {_n(len(entries), 'bundle')} ({_n(len(data['runs']), 'run')}, "
+          f"{_n(len(data['samples']), 'sample')}) -> {args.out} "
           f"({os.path.getsize(args.out) / 1024:.0f} KB)", file=sys.stderr)
     return 0
 

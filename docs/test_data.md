@@ -2,6 +2,13 @@
 
 One small dataset is committed under `tests/data/`. It lets anyone run the pipeline in minutes:
 
+```bash
+flair-eval run --test --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_test
+```
+
+or `nextflow run hdheath/flair-eval -r main -profile test,phoenix --outdir …` (off phoenix:
+`-profile test,local,conda`). It compares FLAIR 3.0.1 (the baseline), 2.2.0 and dev on two samples.
+
 | set | genome | annotation | reads |
 |---|---|---|---|
 | `human_region` | hg38 `chr19:1-2,000,000` | GENCODE v49 basic, genes wholly inside the window | 20,000 PacBio + 20,000 ONT (WTC11 cDNA) |

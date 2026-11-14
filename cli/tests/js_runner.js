@@ -27,7 +27,7 @@ process.stdin.on("end", function () {
   out.commands = c.commands.map(function (k) {
     var r = FE.buildCommand(k.samples, k.runs, k.opts);
     return { argv: r.argv, mode: r.mode, reasons: r.reasons, pretty: FE.formatCommand(r.argv),
-      line: FE.oneLine(r.argv), csv: FE.samplesCsv(k.samples), yaml: FE.runsYaml(k.runs) };
+      line: FE.oneLine(r.argv), cli: FE.formatCommand(FE.asCliRun(r.argv)), csv: FE.samplesCsv(k.samples), yaml: FE.runsYaml(k.runs) };
   });
   out.presets = FE.PRESETS;
   out.meta = { not_exposed: FE.NOT_EXPOSED, launch_options: FE.LAUNCH_OPTIONS,

@@ -10,7 +10,7 @@ import subprocess
 import pytest
 
 from flair_eval import config, presets
-from flair_eval.command import Options, build_command, format_command
+from flair_eval.command import Options, as_cli_run, build_command, format_command
 from flair_eval.tokens import TokenError, parse_token, parse_tokens, token_for_flair
 from flair_eval.validate import validate_runs, validate_samples
 
@@ -126,6 +126,7 @@ def python_side():
         c = build_command(k["samples"], k["runs"], Options(**k["opts"]))
         commands.append({"argv": c.argv, "mode": c.mode, "reasons": c.reasons,
                          "pretty": format_command(c.argv), "line": str(c),
+                         "cli": format_command(as_cli_run(c.argv)),
                          "csv": config.samples_csv(k["samples"]),
                          "yaml": config.runs_yaml(k["runs"])})
     return {

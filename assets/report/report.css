@@ -188,12 +188,16 @@ table.data .num { text-align: right; font-variant-numeric: tabular-nums; white-s
 table.data th.num { text-align: right; }
 table.data .famrow td { padding-top: 14px; border-bottom-color: var(--axis); font-weight: 600; }
 table.data .hiddenrow td { font-size: 12px; color: var(--muted); }
-table.data td.strip { width: 134px; }
 table.data th.runhead { white-space: normal; vertical-align: bottom; }
 table.data th.runhead .runtag { white-space: normal; text-align: left; }
 table.metrics td:first-child { min-width: 150px; }
 table.metrics td.num, table.metrics th.num { padding-left: 8px; }
 .cell-delta { display: block; font-size: 11px; color: var(--muted); }
+details.more > summary { cursor: pointer; color: var(--focus); font-size: 13px; margin: 2px 0 8px; }
+.terms { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 13px; }
+.terms dt { font-weight: 600; }
+.terms dd { margin: 0; color: var(--ink-2); }
+@media (max-width: 559px) { .terms { grid-template-columns: 1fr; } .terms dd { margin-bottom: 6px; } }
 
 footer { margin-top: 30px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); max-width: 940px; }
 .tooltip { position: fixed; z-index: 20; pointer-events: none; background: var(--ink); color: var(--page); font-size: 12px; padding: 5px 8px; border-radius: 6px; max-width: 300px; }

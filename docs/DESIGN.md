@@ -1,133 +1,79 @@
-# flair-eval v2: design
-
-Status: draft, 2026-11-09. Decisions were agreed in the setup session. The old
-multi-assembler pipeline stays on `wip/2026-11-09-snapshot`.
+# flair-eval: design
 
 ## Goal
-A Nextflow pipeline that other people can run to **compare FLAIR runs**, meaning different
-versions, branches or settings, on the same data. Results land in **one self-contained HTML
-report**. In the report you can open any single run, or tick several runs to compare them
-side by side.
+A Nextflow pipeline that anyone in the lab can run to **compare FLAIR runs** (different
+versions, branches or settings) on the same data. Results land in **one self-contained HTML
+report** where you can look at any single run, or compare runs against a baseline.
+
+Principles:
+- **Isolate FLAIR.** Every run of a sample assembles from the same alignment, and every FLAIR env
+  that flair-eval builds gets the same minimap2/samtools/bedtools, so differences come from FLAIR
+  itself.
+- **Never patch FLAIR.** Version differences are handled in one adapter; FLAIR bugs are
+  documented ([flair_versions.md](flair_versions.md)), not fixed.
+- **Results are reusable.** Each job writes an immutable, self-contained bundle, and a report can
+  be built from any set of bundles, from one launch or many.
+- **Phoenix first.** Defaults suit the lab's phoenix cluster; other machines need a profile.
 
 ## Vocabulary
 | Term | Meaning |
 |---|---|
-| **sample** | One dataset: reads or BAM + genome + GTF, plus optional orthogonal tracks. |
-| **run** | One FLAIR configuration: *which FLAIR* (version source) + *which arguments*. |
+| **sample** | One dataset: reads and/or BAM + genome + GTF. |
+| **run** | One FLAIR configuration: which FLAIR (release, git ref, conda env or container) + which arguments. |
 | **job** | One run applied to one sample. The pipeline executes runs × samples. |
-| **bundle** | A job's results folder: `metrics.json` + a few standard tables + `provenance.json`. Bundles are immutable and reusable. |
-| **report** | `report.html`, built from any set of bundles, whether from one launch or many over time. |
+| **bundle** | A job's results folder: `bundle.json`, a few standard tables, provenance. |
+| **report** | `report.html`, built from any set of bundles. |
+| **baseline** | The run that every comparison in the report is made against. |
 
-## Inputs
-`samples.csv` has one row per sample:
-- Required: `sample`, `genome`, `gtf`, and either `reads` or `bam`.
-- Optional: `platform` (pacbio/ont), `library` (cDNA/dRNA).
-- Optional tracks for later report sections: `cage`, `pas`, `junctions` (STAR SJ.out.tab),
-  `spikein_gtf`.
+## Pipeline
+```
+FLAIR_ENV            once per distinct FLAIR source (+ align_flair); cached by release / commit / path
+PREP_REFERENCE       with --regions: genome + GTF cut to the regions' chromosomes
+ALIGN_SHARED         once per sample without a BAM, with the pinned align_flair
+ALIGN_OWN            per job, for runs with own_align: true
+ASSEMBLE             per job: flair transcriptome (≥3) or correct + collapse (2.x), via the adapter
+QUANTIFY             per job, when run.quantify (reads, or reads extracted from the BAM, or the BAM for dev)
+PRODUCTIVITY         per job, when run.productivity (FLAIR's inline call, else predictProductivity)
+EVALUATE_STRUCTURE   per job: SQANTI-style classes vs the GTF, end precision, TUSCO, priming, variation
+BUNDLE               per job -> <outdir>/bundles/<sample>/<run_id>/
+REPORT               all bundles of this launch + --bundles -> <outdir>/report/report.html
+```
+`--report_only` runs REPORT alone over `--bundles`.
 
-`runs.yaml` has one entry per run. Each run gives exactly one FLAIR source:
-```yaml
-runs:
-  - id: flair-3.0.1
-    flair: { release: "3.0.1" }                     # bioconda/pip; the env is built and cached
-    transcriptome_args: ""
-  - id: dev-tip
-    flair: { git: "https://github.com/BrooksLabUCSC/flair", ref: "dev" }   # pip-installed, cached per commit
-    transcriptome_args: "--stringent"
-  - id: ted-local
-    flair: { env: "/path/to/conda/env" }            # or { container: "docker://..." }
-    transcriptome_args: "--ted --ted_chemistry pacbio_cdna"
-    label: "TED (local build)"                       # optional display name
-    tags: { branch: ted-port, setting: ted }          # optional free-form tags for report filters
+## Code layout
+```
+main.nf, nextflow.config, nextflow_schema.json   entry, params, profiles (phoenix is the default)
+conf/                    base, modules (publishing), phoenix, slurm, test
+subworkflows/inputs/     samples.csv / runs.yaml / one-command parsing and validation
+subworkflows/flair_eval/ the job graph above
+modules/<step>/          one process per step
+bin/flair_env.py         builds and caches FLAIR envs (stdlib only)
+bin/flair_adapter.py     the only caller of `flair`; maps each version's CLI, normalises outputs (stdlib only)
+bin/structure_metrics.py classification + bundle.json (SQANTI3-compatible category names)
+bin/build_report.py      the report: bundles + cross-run data, inlined into assets/report/template.html
+bin/flair_eval_lib/      shared Python: classify, metrics, sections, ends, tusco, variation, concordance, crossrun
+assets/schema/           JSON schemas for samples.csv, runs.yaml, bundle.json
+assets/report/           report template, CSS and the viewer (report.js)
+assets/demo/bundles/     real bundles for the GitHub Pages demo report
+cli/                     pip package `flair-eval`: doctor, init, check, run, report
+frontend/builder/        static config-builder page + Pages start page
+tests/                   pytest (tests/python, cli/tests), nf-test, test data, report fixtures
 ```
 
-## Pipeline steps
-1. **Resolve FLAIR environments.** There is one env per distinct source. git refs resolve to a commit SHA, so the
-   cache key is the exact code. Each env records `flair --version` and its pip freeze.
-2. **Shared alignment, once per sample.** A pinned FLAIR + minimap2 runs `flair align` (+ `correct` when a
-   run needs it). Every run sees the same BAM. A run can set `own_align: true` to test alignment
-   itself. Pre-aligned BAMs skip this step.
-3. **Per job: assemble.** FLAIR ≥3 runs `flair transcriptome`; FLAIR 2.x runs `correct` → `collapse`. A small
-   **version adapter** maps a run onto the right CLI and normalises outputs to
-   `isoforms.bed/.gtf/.fa` + `read_map`. Known 3.0.1 quirks are documented in the adapter.
-   Then `quantify` and `predictProductivity` run when the version supports them.
-4. **Per job: evaluate → bundle.** Structure vs GTF (v1), described below. Compute cost comes from the Nextflow trace.
-5. **Report.** Collects bundles from this launch plus any `--bundles <dir|list>` from earlier ones.
-   It writes `report.html` with the data embedded, so it opens offline, can be emailed, or can be hosted on private.prism.
+The interfaces between these parts are in [CONTRACTS.md](CONTRACTS.md).
 
-FLAIR source code is never patched. Version differences are handled in the adapter.
+## Ways in
+All map onto the same params and schemas:
+1. **One command:** `--reads/--bam`, `--genome`, `--flair 2.2.0,3.0.1,dev`.
+2. **Config files:** `samples.csv` + `runs.yaml`.
+3. **`flair-eval` CLI:** writes and checks the files, builds the command, and on phoenix submits
+   the Nextflow driver as a SLURM job.
+4. **Config-builder page:** the same rules in the browser (`logic.js`, tested for parity with the CLI).
+5. **`nextflow_schema.json`:** `--help` and validation (it also enables `nf-core pipelines launch`).
 
-## Report v1: isoform structure vs GTF
-The classifier is in-house and SQANTI-compatible. It reuses `bin/evaluation/flair_structural.py`
-(FSM/ISM/NIC/NNC/genic/intergenic/antisense/fusion; FSM subcategories CIM/FSM5/FSM3/FSMTE; 50-bp end window).
-Category names match SQANTI3.
-
-Each run's page shows:
-- isoforms, genes and loci detected
-- category counts and fractions
-- isoforms per gene
-- transcript and exon length distributions
-- mono- vs multi-exon split
-- junction novelty (known / novel canonical / novel non-canonical)
-- reference transcripts recovered (FSM/CIM)
-
-Comparison view:
-- Tick runs and filter by tag, version or sample.
-- The same panels are shown overlaid or side by side, plus a run × metric table with differences
-  against a chosen baseline run.
-
-Later sections are only shown when their input exists:
-- TSS/TTS end accuracy (CAGE/PAS, `ted_end_precision.py`)
-- run-vs-run concordance (shared/unique isoforms, changed genes, example loci)
-- quantification / spike-in / CDS / runtime
-
-## Front end for new users
-Every user is on the lab's phoenix cluster (UCSC PRISM), so the defaults are phoenix's (CONTRACTS A25):
-SLURM + conda with no `-profile`, one shared FLAIR env cache for the lab, `--genome hg38` as a lab
-reference preset, and a required `--outdir` on groups or warm-archive storage.
-
-There are four ways in, all mapping onto the same params and schemas (see CONTRACTS.md §1):
-1. **One command, no files.**
-   `nextflow run hdheath/flair-eval --reads r.fq.gz --genome hg38 --flair 2.2.0,3.0.1,dev --outdir /private/groups/brookslab/$USER/flair-eval/dd_mm_yy_name`.
-2. **`nextflow_schema.json`.** Gives `--help`, input validation with plain-English errors, a web
-   launch form via `nf-core pipelines launch`, and a Seqera Platform launchpad.
-3. **Config-builder page** (`frontend/builder/`, GitHub Pages). It has a form for samples, plus run cards
-   with a version picker and presets. It validates against `assets/schema/*.json`, shows the
-   exact command, and downloads `samples.csv` / `runs.yaml`.
-4. **pip CLI** (`cli/`, package `flair-eval`):
-   - `flair-eval init` is an interactive wizard that writes the config files.
-   - `flair-eval run` wraps `nextflow run` and, on phoenix, submits the driver as a SLURM job.
-   - `flair-eval report` gives report-only mode.
-   - `flair-eval check` validates configs.
-
-## Layout (new, lean)
-```
-main.nf                      # one entry; -entry REPORT rebuilds the report from bundles only
-nextflow.config              # profiles: test, slurm (PRISM), local, docker/singularity/conda
-conf/                        # per-profile resources
-modules/  flair_env/  align/  assemble/  quantify/  productivity/  evaluate_structure/  report/
-bin/      flair_adapter.py  structure_metrics.py (from flair_structural.py)  build_report.py
-assets/   report template (HTML + JS, charting lib inlined)
-tests/    pytest for bin/, nf-test for modules; data/ = tiny test sets
-docs/     DESIGN.md, usage.md, output.md
-```
-
-## Test data (`-profile test`)
-- **Human region.** About 1–2 Mb of hg38 + its GENCODE slice + about 20k subsampled public reads
-  (PacBio and ONT, from public sources such as ENCODE or PacBio downloads).
-- **SIRV.** SIRV genome + annotation + spike-in reads (known truth).
-- Both are small enough to commit or fetch from a fixed URL. CI runs `-profile test` on both.
-
-## Milestones
-1. **Skeleton.** samples.csv + runs.yaml parsing. Env resolution for `env` and `release`. Shared align → `flair transcriptome` →
-   bundle with structure metrics. Report v1 for a single run. Runs on the human test region.
-2. **Comparison report.** Multi-run toggles, baseline differences, tag filters, `--bundles` accumulation.
-3. **Version breadth.** `git` sources cached by SHA. 2.x collapse adapter. quantify + productivity. SIRV test set.
-4. **Usability.** Containers, README/usage docs, GitHub Actions CI on `-profile test`.
-5. **Extra sections.** End accuracy, concordance, quant/CDS/runtime.
-
-## Open points (decide during M1)
-- Exact pinned versions for the shared align step.
-- Whether `report.html` embeds the full per-isoform tables or only aggregates. Aggregates
-  keep the file small; per-isoform tables enable drill-down.
-- Which public reads to use for the test region (needs a source with a clear licence).
+## Not done yet
+- Report sections that use a sample's own `cage`, `pas`, `junctions` or `spikein_gtf` (the
+  columns are parsed but unused).
+- A Loci tab and a read 5′-end heatmap (need read alignments in the bundle).
+- `--ref_tss`, `--ref_pas` and `--tusco` in the CLI and the builder.
+- A SIRV spike-in test set (on a separate branch).
