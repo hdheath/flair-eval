@@ -416,3 +416,89 @@ def test_page_shell_has_viewer_controls(tmp_path):
     # no concept-only badges or out-of-scope views
     for gone in ("Illustrative", "badge real", "Plot map", "drawCompact", "metaplot"):
         assert gone not in html, gone
+
+
+# --------------------------------------------------------------------- A40: end accuracy
+def _ea_section(i, truth=True):
+    """A synthetic sections.end_accuracy (A38 shape); numbers vary with i so runs differ."""
+    f = lambda x: round(x + 0.01 * i, 4)          # noqa: E731
+    sets = [{"id": "refTSS", "kind": "reference", "end": "tss", "assay": "refTSS", "file": "refTSS.bed", "path": "refTSS.bed", "md5": "a" * 32, "provisional": False},
+            {"id": "PolyA_DB", "kind": "reference", "end": "tes", "assay": "PolyA_DB", "file": "polya.bed", "path": "polya.bed", "md5": "b" * 32, "provisional": False}]
+    ref = lambda s, e, p: {"set": s, "kind": "reference", "end": e, "assay": s, "isoforms": 100, "isoform_ends": 100,  # noqa: E731
+                           "sites": 900, "sites_hit": None, "precision": p, "naive_precision": p, "dedup_tp": 40,
+                           "redundant_calls": 3, "recall": None, "f1": None}
+    ends = [ref("refTSS", "tss", f(0.6)), ref("PolyA_DB", "tes", f(0.4))]
+    pairs = [{"kind": "reference", "tss_set": "refTSS", "tes_set": "PolyA_DB", "isoforms": 100, "unique_pairs": 90,
+              "both_hit": 25, "both_hit_raw": 28, "precision": f(0.25), "naive_precision": f(0.28)}]
+    if truth:
+        sets += [{"id": "CAGE", "kind": "truth", "end": "tss", "assay": "CAGE", "file": "S.CAGE.truth.bed", "path": "S.CAGE.truth.bed", "md5": "c" * 32, "provisional": True},
+                 {"id": "dRNA", "kind": "truth", "end": "tes", "assay": "dRNA", "file": "S.dRNA.truth.bed", "path": "S.dRNA.truth.bed", "md5": "d" * 32, "provisional": False}]
+        tr = lambda s, e, p, r: {"set": s, "kind": "truth", "end": e, "assay": s, "isoforms": 100, "isoform_ends": 100,  # noqa: E731
+                                 "sites": 200, "sites_hit": int(200 * r), "precision": p, "naive_precision": p, "dedup_tp": 40,
+                                 "redundant_calls": 3, "recall": r, "f1": 2 * p * r / (p + r)}
+        ends += [tr("CAGE", "tss", f(0.5), f(0.3)), tr("dRNA", "tes", f(0.45), f(0.2))]
+        ends.sort(key=lambda e: (e["kind"] == "truth", e["end"] == "tes"))
+        pairs.append({"kind": "truth", "tss_set": "CAGE", "tes_set": "dRNA", "isoforms": 100, "unique_pairs": 90,
+                      "both_hit": 20, "both_hit_raw": 22, "precision": f(0.2), "naive_precision": f(0.22)})
+    return {"scorer": {"script": "ted_end_precision.py", "source": "test", "md5": "e" * 32, "window": 50, "regions": None},
+            "provisional": truth, "sets": sets, "ends": ends, "pairs": pairs}
+
+
+def _with_end_accuracy(tmp_path, drop_ends=False):
+    """Fixture copies with sections.end_accuracy: wtc11_pacbio with truth sets (one run left
+    without, to test the missing-run note), wtc11_ont with the databases only."""
+    for sample, rid, d in fixture_dirs():
+        b = json.load(open(os.path.join(d, "bundle.json")))
+        i = b.get("run_index", 0) or 0
+        if not (sample == "wtc11_pacbio" and rid == "flair-2.2.0"):
+            b["sections"]["end_accuracy"] = _ea_section(i, truth=sample == "wtc11_pacbio")
+        if drop_ends:
+            b["sections"].pop("ends", None)
+        dst = tmp_path / "ea" / sample / rid
+        shutil.copytree(d, dst)
+        json.dump(b, open(dst / "bundle.json", "w"))
+    out = tmp_path / "r.html"
+    assert build("--bundles", tmp_path / "ea", "--out", out).returncode == 0
+    return drive(tmp_path, out)["summary"]
+
+
+@needs_node
+def test_end_accuracy_on_the_ends_tab(tmp_path):
+    from flair_eval_lib.schema import validate
+    schema = json.load(open(os.path.join(ROOT, "assets", "schema", "bundle.schema.json")))
+    sub = schema["properties"]["sections"]["properties"]["end_accuracy"]
+    for truth in (True, False):
+        assert validate(_ea_section(1, truth), sub) == []          # the synthetic section is A38-shaped
+    s = _with_end_accuracy(tmp_path)
+    pb, ont = s["wtc11_pacbio"]["ends"], s["wtc11_ont"]["ends"]
+    # truth sets: one panel each (provisional marked), the both-ends panel, the provisional callout
+    assert {"Precision at 50 bp", "5′ end vs CAGE (provisional)", "3′ end vs dRNA", "Both ends on a site",
+            "5′ precision as the window widens"} <= set(pb["cards"])
+    assert "Provisional truth. CAGE is marked provisional" in pb["text"]
+    assert "Truth sets: precision and recall." in pb["text"] and "P 52.0% · R 32.0%" in pb["text"]
+    assert "Not shown for " in pb["text"] and ": needs truth sets for this sample (--truth)." in pb["text"]  # 2.2.0 has none
+    assert "CAGE × dRNA" in pb["text"] and "refTSS × PolyA_DB (databases)" in pb["text"]
+    assert "Scored by ted_end_precision.py (md5 eeeeeeee), window 50 bp" in pb["text"]
+    assert "can differ a little from the table above" in pb["text"]
+    # databases only: precision only, no recall anywhere, no truth panels, no provisional callout
+    assert "Precision at 50 bp" in ont["cards"] and "Both ends on a site" in ont["cards"]
+    assert not any("recall" in c.lower() or "CAGE" in c for c in ont["cards"])
+    assert "Provisional truth" not in ont["text"] and "Precision only." in ont["text"] and "P 52.0%" not in ont["text"]
+
+
+@needs_node
+def test_end_accuracy_without_ends_section(tmp_path):
+    """Truth sets but no refTSS / PolyA_DB distances (no --ref_tss / --ref_pas): the table and
+    truth panels draw; the distance charts are hidden with their reason."""
+    pb = _with_end_accuracy(tmp_path, drop_ends=True)["wtc11_pacbio"]["ends"]
+    assert {"Precision at 50 bp", "3′ end vs dRNA"} <= set(pb["cards"])
+    assert dict(pb["hidden"])["5′ precision as the window widens"].startswith("Hidden: needs refTSS sites")
+    assert "can differ a little" not in pb["text"]
+
+
+@needs_node
+def test_ends_tab_without_truth_says_how_to_add_it(tmp_path):
+    out = tmp_path / "r.html"
+    assert build("--bundles", FIXTURES, "--out", out).returncode == 0
+    ends = drive(tmp_path, out)["summary"]["wtc11_pacbio"]["ends"]
+    assert dict(ends["hidden"])["Ends against truth sets"] == "Hidden: needs truth sets for this sample (--truth)."

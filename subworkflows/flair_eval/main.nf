@@ -9,6 +9,7 @@
  *   QUANTIFY            per job, when run.quantify and the sample has reads
  *   PRODUCTIVITY        per job, when run.productivity
  *   EVALUATE_STRUCTURE  per job (+ end references and TUSCO list when the sample has them, A26)
+ *   END_ACCURACY        per job whose sample has end sets: --truth sets + end references (section 12)
  *   BUNDLE              per job -> <outdir>/bundles/<sample>/<run_id>/
  *
  * Channel items carry a small job map ("meta"): id = "<sample>/<run_id>", sample, run_id, run.
@@ -22,6 +23,7 @@ include { ASSEMBLE                 } from '../../modules/assemble/main'
 include { QUANTIFY                 } from '../../modules/quantify/main'
 include { PRODUCTIVITY             } from '../../modules/productivity/main'
 include { EVALUATE_STRUCTURE       } from '../../modules/evaluate_structure/main'
+include { END_ACCURACY             } from '../../modules/end_accuracy/main'
 include { BUNDLE                   } from '../../modules/bundle/main'
 include { PREP_REFERENCE           } from '../../modules/prep_reference/main'
 include { flairSourceKey; safeId   } from '../inputs/keys'
@@ -31,7 +33,7 @@ include { flairSourceKey; safeId   } from '../inputs/keys'
 def COUNTED_STEPS() { ['assemble', 'quantify', 'productivity'] }
 
 // Trace row columns of provenance/trace.tsv (A15).
-def STEP_PROCESS() { [align: 'FLAIR_EVAL:ALIGN_OWN', assemble: 'FLAIR_EVAL:ASSEMBLE', quantify: 'FLAIR_EVAL:QUANTIFY', productivity: 'FLAIR_EVAL:PRODUCTIVITY', eval: 'FLAIR_EVAL:EVALUATE_STRUCTURE'] }
+def STEP_PROCESS() { [align: 'FLAIR_EVAL:ALIGN_OWN', assemble: 'FLAIR_EVAL:ASSEMBLE', quantify: 'FLAIR_EVAL:QUANTIFY', productivity: 'FLAIR_EVAL:PRODUCTIVITY', eval: 'FLAIR_EVAL:EVALUATE_STRUCTURE', end_accuracy: 'FLAIR_EVAL:END_ACCURACY'] }
 
 workflow FLAIR_EVAL {
     take:
@@ -174,14 +176,27 @@ workflow FLAIR_EVAL {
         regions
     )
 
+    // Section 12: end accuracy against the sample's truth sets and the end references, scored by
+    // ted_end_precision.py. Only for samples with at least one end set (hasEndSets).
+    END_ACCURACY(
+        ch_asm
+            .filter { id, _d, _json, _env, _bam, _bai, _g, _fai, _a -> hasEndSets(S[J[id].sample]) }
+            .map { id, d, _json, _env, _bam, _bai, _g, _fai, a ->
+                def s = S[J[id].sample]
+                [J[id], d, a, (s.truth ?: []).collect { t -> t.path }, endAccuracyInfo(s), s.ref_tss ?: [], s.ref_pas ?: []]
+            },
+        regions
+    )
+
     ch_bundle_in = ASSEMBLE.out.dir.map { j, d -> [j.id, 'assemble', d] }
         .mix(
             QUANTIFY.out.dir.map { j, d -> [j.id, 'quantify', d] },
             PRODUCTIVITY.out.dir.map { j, d -> [j.id, 'productivity', d] },
             ALIGN_OWN.out.dir.map { j, d -> [j.id, 'align', d] },
             EVALUATE_STRUCTURE.out.dir.map { j, d -> [j.id, 'eval', d] },
+            END_ACCURACY.out.dir.map { j, d -> [j.id, 'end_accuracy', d] },
         )
-        .map { id, step, d -> [groupKey(id, nParts(J[id])), [step: step, dir: d]] }
+        .map { id, step, d -> [groupKey(id, nParts(J[id], S[J[id].sample])), [step: step, dir: d]] }
         .groupTuple()
         .map { gk, parts -> [gk.getGroupTarget().toString(), parts] }
         .join(ch_jobenv)
@@ -235,6 +250,9 @@ def bundleInfo(Map j, Map s, List parts) {
             ref_tss : s.ref_tss?.toString(),
             ref_pas : s.ref_pas?.toString(),
             tusco   : s.tusco?.toString(),
+            // section 12: the --truth sheet and the truth sets this job was scored against
+            truth   : params.truth ? file(params.truth.toString()).toString() : null,
+            truth_sets: (s.truth ?: []).collect { t -> [assay: t.assay, end: t.end, path: t.path.toString(), provisional: t.provisional] },
             // with --regions FLAIR saw PREP_REFERENCE's copy cut to these chromosomes
             reference_cut_to_regions: params.regions ? true : false,
         ],
@@ -300,8 +318,22 @@ def refKey(Map s) {
 }
 
 // Parts BUNDLE waits for: assemble + eval, plus the optional steps this job runs.
-def nParts(Map j) {
-    return 2 + (j.run.quantify ? 1 : 0) + (j.run.productivity ? 1 : 0) + (j.run.own_align ? 1 : 0)
+def nParts(Map j, Map s) {
+    return 2 + (j.run.quantify ? 1 : 0) + (j.run.productivity ? 1 : 0) + (j.run.own_align ? 1 : 0) + (hasEndSets(s) ? 1 : 0)
+}
+
+// Section 12: a sample has end sets when it has --truth rows or an end reference.
+def hasEndSets(Map s) {
+    return (s.truth ?: []) || s.ref_tss || s.ref_pas
+}
+
+// END_ACCURACY's info value: the truth sets (in staging order) and the references' original paths.
+def endAccuracyInfo(Map s) {
+    return [
+        truth  : (s.truth ?: []).collect { t -> [assay: t.assay, end: t.end, source: t.path.toString(), provisional: t.provisional] },
+        ref_tss: s.ref_tss?.toString(),
+        ref_pas: s.ref_pas?.toString(),
+    ]
 }
 
 def computeFromTrace(List rows) {

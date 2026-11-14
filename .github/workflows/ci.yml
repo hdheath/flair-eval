@@ -36,7 +36,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "pandas>=2" "numpy>=1.24" "pytest>=7" -e "cli[test]"
+          python -m pip install "pandas>=2" "numpy>=1.24" "scipy>=1.10" "pytest>=7" -e "cli[test]"   # scipy: the end judge (END_ACCURACY)
       - name: tests/python
         run: python -m pytest tests/python -q
       - name: cli/tests
@@ -54,6 +54,8 @@ jobs:
       - uses: actions/setup-python@v5   # host python3 runs the bundle step in stub mode
         with:
           python-version: "3.12"
+      - name: Python packages for END_ACCURACY (its module tests run the judge for real)
+        run: python -m pip install "pandas>=2" "numpy>=1.24" "scipy>=1.10"
       - uses: nf-core/setup-nextflow@v2
         with:
           version: ${{ env.NXF_VER }}

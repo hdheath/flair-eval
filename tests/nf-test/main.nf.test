@@ -157,6 +157,39 @@ nextflow_pipeline {
             assert b.sections.tusco.file == 'tusco_explicit.tsv'
             assert b.sections.keySet().containsAll(['priming', 'variation'])
             assert path("$outputDir/bundles/sampleA/flair-3.0.1/tables/ends.tsv").exists()
+            // section 12: the preset's refTSS is also scored by the judge (no truth sets given)
+            assert b.sections.end_accuracy.sets*.id == ['refTSS']
+            assert b.sections.end_accuracy.provisional == false
+        }
+    }
+
+    test("section 12: --truth adds sections.end_accuracy for samples with truth sets") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/samples.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/runs.yaml"
+                truth  = "${projectDir}/tests/nf-test/inputs/truth/truth.csv"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            // the K562 row is for a sample not in this launch: skipped with a warning
+            assert path("$metaDir/nextflow.log").text.contains('--truth: skipped rows for sample(s) not in this launch: K562')
+            ['flair-3.0.1', 'flair-dev', 'dev-own-align'].each { r ->
+                def a = path("$outputDir/bundles/sampleA/${r}/bundle.json").json
+                assert a.sections.end_accuracy.sets*.id == ['CAGE', 'dRNA']
+                assert a.sections.end_accuracy.provisional == true
+                assert a.inputs.truth.endsWith('truth.csv')
+                assert a.inputs.truth_sets*.assay == ['CAGE', 'dRNA']
+                assert path("$outputDir/bundles/sampleA/${r}/tables/end_accuracy.tsv").exists()
+                // sampleC has no truth sets and no references: no END_ACCURACY task, no section
+                def c = path("$outputDir/bundles/sampleC/${r}/bundle.json").json
+                assert !c.sections.containsKey('end_accuracy')
+                assert c.inputs.truth_sets == []
+            }
+            def names = workflow.trace.tasks().collect { t -> t.name }
+            assert names.count { n -> n.contains('FLAIR_EVAL:END_ACCURACY') } == 3
         }
     }
 

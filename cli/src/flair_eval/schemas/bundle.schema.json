@@ -411,7 +411,304 @@
       }
     },
     "sections": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "end_accuracy": {
+          "type": "object",
+          "description": "CONTRACTS section 12 (A38): end accuracy against truth sets and end references, scored by ted_end_precision.py",
+          "additionalProperties": false,
+          "required": [
+            "scorer",
+            "provisional",
+            "sets",
+            "ends",
+            "pairs"
+          ],
+          "properties": {
+            "scorer": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "script",
+                "source",
+                "md5",
+                "window",
+                "regions"
+              ],
+              "properties": {
+                "script": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "md5": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "window": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "regions": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "provisional": {
+              "type": "boolean"
+            },
+            "sets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "kind",
+                  "end",
+                  "assay",
+                  "file",
+                  "path",
+                  "md5",
+                  "provisional"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                  },
+                  "kind": {
+                    "enum": [
+                      "truth",
+                      "reference"
+                    ]
+                  },
+                  "end": {
+                    "enum": [
+                      "tss",
+                      "tes"
+                    ]
+                  },
+                  "assay": {
+                    "type": "string"
+                  },
+                  "file": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "md5": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "provisional": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "ends": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "set",
+                  "kind",
+                  "end",
+                  "assay",
+                  "isoforms",
+                  "isoform_ends",
+                  "sites",
+                  "sites_hit",
+                  "precision",
+                  "naive_precision",
+                  "dedup_tp",
+                  "redundant_calls",
+                  "recall",
+                  "f1"
+                ],
+                "properties": {
+                  "set": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                  },
+                  "kind": {
+                    "enum": [
+                      "truth",
+                      "reference"
+                    ]
+                  },
+                  "end": {
+                    "enum": [
+                      "tss",
+                      "tes"
+                    ]
+                  },
+                  "assay": {
+                    "type": "string"
+                  },
+                  "isoforms": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "isoform_ends": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "sites": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "sites_hit": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "precision": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "naive_precision": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "dedup_tp": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "redundant_calls": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "recall": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "f1": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            },
+            "pairs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "kind",
+                  "tss_set",
+                  "tes_set",
+                  "isoforms",
+                  "unique_pairs",
+                  "both_hit",
+                  "both_hit_raw",
+                  "precision",
+                  "naive_precision"
+                ],
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "truth",
+                      "reference"
+                    ]
+                  },
+                  "tss_set": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                  },
+                  "tes_set": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+                  },
+                  "isoforms": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "unique_pairs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "both_hit": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "both_hit_raw": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "precision": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "naive_precision": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "run_index": {
       "type": "integer",

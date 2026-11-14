@@ -1,0 +1,7 @@
+sample,end,assay,path,provisional
+sampleA,5p,CAGE,../truth/S.CAGE.truth.bed,
+sampleA,tss,refTSS,../truth/S.CAGE.truth.bed,
+sampleA,tss,PROcap,../truth/S.CAGE.truth.bed,yes
+sampleA,tes,dRNA,../truth/nope.bed,
+sampleA,tes,dRNA,../truth/S.dRNA.truth.bed,
+sampleA,tss,bad name,../truth/S.CAGE.truth.bed,

@@ -7,7 +7,7 @@ Machine-readable parts are in `assets/schema/*.json`. Architecture: [DESIGN.md](
 User guide: [usage.md](usage.md); outputs: [output.md](output.md).
 
 Change an interface here and in the schemas together, in the same commit. Rules carry tags
-`A1`–`A35` from the rounds in which they were agreed; code comments cite them, and
+`A1`–`A40` from the rounds in which they were agreed; code comments cite them, and
 [section 7](#7-rule-index) lists where each one now lives.
 
 `legacy/` holds the old multi-assembler pipeline. Read it and port from it; never edit it.
@@ -24,7 +24,7 @@ Change an interface here and in the schemas together, in the same commit. Rules 
 | `gtf` | yes, unless `genome` is a preset | reference annotation |
 | `platform` | no | `pacbio` \| `ont` |
 | `library` | no | `cDNA` \| `dRNA` |
-| `cage`, `pas`, `junctions`, `spikein_gtf` | no | reserved: parsed, checked and passed through; no step uses them yet |
+| `cage`, `pas`, `junctions`, `spikein_gtf` | no | reserved: parsed, checked and passed through; no step uses them yet. Truth sets for end accuracy come from `--truth` (section 12), not from `cage`/`pas` |
 
 Relative paths are resolved against the CSV's directory first, then the launch directory (A3).
 
@@ -91,6 +91,7 @@ exclusive, and so are `--runs` and `--flair`.
 | `align_flair` | `"3.0.1"` | FLAIR release used for the shared align step |
 | `regions` | null | BED restricting assembly and evaluation |
 | `ref_tss`, `ref_pas`, `tusco` | null; filled from a genome preset (A26) | end references and TUSCO list (section 10). Hidden in `nextflow_schema.json` until the CLI and builder expose them (A35) |
+| `truth` | null | truth sheet CSV (section 12, A36). Hidden like `ref_tss` (A35) |
 | `env_cache` | `"${launchDir}/flair-env-cache"`; phoenix: the shared lab cache (A25) | where FLAIR envs are built and cached |
 | `genomes` | the `hg38` preset (hidden) | genome presets (section 9) |
 
@@ -171,9 +172,11 @@ tables/isoforms.tsv            one row per isoform (columns below)
 tables/categories.tsv          category, subcategory, n
 tables/genes.tsv               gene_id, gene_name; optional (A18)
 tables/ends.tsv                section 10 (A28)
+tables/end_accuracy.tsv        section 12 (A39)
 provenance/flair_env.json
 provenance/adapter_<step>.json, adapter_<step>_skipped.json (A15)
 provenance/trace.tsv           this job's Nextflow trace rows (A15)
+provenance/end_accuracy/<call>/{precision_recall_summary.tsv, judge.log}   section 12 (A37)
 ```
 
 ### `structure_metrics.py` (EVALUATE_STRUCTURE)
@@ -200,6 +203,7 @@ only as `junctions.novel`. `--ref-tss/--ref-pas/--tusco` add the section 10 outp
   "pipeline": {"version": "…", "commit": "…", "created": "ISO-8601", "launch": "<session id>"},
   "inputs": {"genome": "…", "gtf": "…", "reads": "…", "bam": "…", "regions": null,
              "ref_tss": null, "ref_pas": null, "tusco": null, "platform": null, "library": null,
+             "truth": null, "truth_sets": [],
              "reference_cut_to_regions": false},
   "summary": {"isoforms": 0, "genes": 0, "loci": 0, "mono_exon": 0, "multi_exon": 0,
               "ref_transcripts_total": 0, "ref_transcripts_fsm": 0, "ref_transcripts_cim": 0,
@@ -264,7 +268,9 @@ build_report.py --bundles DIR_OR_GLOB [...] --out report.html [--title T] [--bas
 FLAIR's raw outputs stay in the Nextflow work dir.
 
 ## 6. Conventions
-- Python 3.10+. `bin/` uses the stdlib plus pandas/numpy only. The adapter and `flair_env.py`
+- Python 3.10+. `bin/` uses the stdlib plus pandas/numpy only. The one exception is the vendored
+  end judge under `modules/end_accuracy/resources/usr/bin/` (section 12), which imports scipy; the
+  END_ACCURACY process has its own environment for it. The adapter and `flair_env.py`
   are stdlib only, because they run inside arbitrary FLAIR envs.
 - Every bin script has `--help`, exits non-zero on bad input, and is covered by pytest.
 - FLAIR is never patched: version differences live in the adapter, bugs are documented in
@@ -287,6 +293,7 @@ Where each tagged rule lives now.
 | A25 (phoenix defaults) | 9 |
 | A26–A32, A35 (end references, TUSCO, priming, variation; as built) | 10 |
 | A33, A34 (cross-run data, report rules) | 11 |
+| A36–A40 (truth sheet, end judge, end accuracy section, table, report) | 12 |
 
 ## 8. Sections from counts and productivity; run concordance
 Each section is optional, computed only when its inputs exist, and the report keeps working
@@ -406,7 +413,7 @@ Tabs: What differs, Structure, Recovery, Diversity, Agreement, Ends, Quantificat
 `reads`), Compute
 (`assets/report/report.js`; developer notes in `assets/report/README.md`). Out of scope for now:
 a Loci tab (read-to-isoform locus plots) and a read 5′-end heatmap, which need read alignments
-in the bundle; signal metaplots around ends; recall against a sample's own `cage`/`pas`.
+in the bundle; signal metaplots around ends. Recall against a sample's own truth sets is section 12.
 
 ### Cross-run data (A33, A35)
 Computed by `build_report.py` per sample (`bin/flair_eval_lib/crossrun.py`), not stored per
@@ -433,3 +440,96 @@ rebuild:
 - A panel whose section is missing is replaced by a one-line reason in the reader's terms (the
   param and preset that fill it, never section keys). Old bundles without the newer sections
   still render.
+
+## 12. End accuracy against truth sets
+Each FLAIR run's isoform 5′ and 3′ ends are scored against the sample's own orthogonal truth
+sets (CAGE, PRO-cap, RAMPAGE for the 5′ end; dRNA for the 3′ end), next to the end databases of
+section 10. The ends half of section 10 (`sections.ends`, nearest-site distances from
+`ends.py`) stays as it is. This section adds a second, independent score from the judge below.
+
+### The truth sheet (A36; schema `assets/schema/truth.schema.json`)
+`--truth` is a CSV with one row per truth set:
+
+| column | req | notes |
+|---|---|---|
+| `sample` | yes | a sample of this launch. Rows for other samples are skipped with a warning, so one sheet can serve many launches |
+| `end` | yes | `tss` (5′ end) \| `tes` (3′ end) |
+| `assay` | yes | the set's name in the report: `^[A-Za-z0-9][A-Za-z0-9._-]*$`, unique per sample. `refTSS` and `PolyA_DB` are reserved for the databases |
+| `path` | yes | BED6 or wider, stranded sites; columns 1–3 are the interval matched, column 6 the strand. Relative paths resolve as in A3 |
+| `provisional` | no | `true` \| `false` (empty = false). True marks the set as provisional in the report |
+
+- A sample may have any number of sets per end. Every problem in the sheet is listed before any
+  task runs, together with the samples.csv and runs.yaml problems.
+- Truth data stay outside the repository; the sheet only points at them.
+- The lab's sheet for six cell lines (A549, K562, HCT116, GM12878, HEK293T, WTC11) is
+  `/private/groups/brookslab/flair-eval/reference/ortho_truth/truth_6lines.csv` (with `SOURCE.tsv`).
+  Its sample column holds the cell line names; every row is provisional.
+
+### END_ACCURACY and the judge (A37)
+- One task per job (sample × run) whose sample has at least one end set: its truth sets and/or
+  `ref_tss` / `ref_pas` (section 10). Without any, the task does not run and the section is absent.
+- **The judge.** `bin/end_accuracy.py` scores nothing itself. It runs flair4_ted's end judge,
+  `ted_end_precision.py`, which is copied unchanged with its helpers into
+  `modules/end_accuracy/resources/usr/bin/` (provenance, md5s and documented quirks:
+  `modules/end_accuracy/README.md`). It then reads each call's one-row
+  `precision_recall_summary.tsv`.
+- **Rule.** An isoform end is a hit when it lies on the same strand within 50 bp of any part of a
+  site's interval. Only chr1–22, X and Y are scored. Single-end matching is many-to-one.
+  - precision = hits / isoform ends
+  - recall = sites with a hit / all sites in scope
+  - both ends = isoforms whose two ends both hit / all isoforms, counting isoforms of one
+    junction chain on the same (5′ site, 3′ site) pair once
+  - With `--regions`, only isoforms and sites inside the regions are scored.
+- **Calls.** Each kind is planned separately (`truth`, `reference`): every 5′ set with every
+  3′ set when the kind has both ends, otherwise each set alone. A set's single-end numbers are
+  the same in every call it is in.
+- The judge's own outputs and log are copied to `provenance/end_accuracy/<call>/`, where
+  `<call>` is the set ids joined by `__`.
+
+### `sections.end_accuracy` (A38)
+```json
+{"scorer": {"script": "ted_end_precision.py", "source": "…", "md5": "…", "window": 50, "regions": null},
+ "provisional": true,
+ "sets": [{"id": "CAGE", "kind": "truth", "end": "tss", "assay": "CAGE", "file": "…", "path": "…",
+           "md5": "…", "provisional": true}],
+ "ends": [{"set": "CAGE", "kind": "truth", "end": "tss", "assay": "CAGE", "isoforms": 0,
+           "isoform_ends": 0, "sites": 0, "sites_hit": 0, "precision": 0.0, "naive_precision": 0.0,
+           "dedup_tp": 0, "redundant_calls": 0, "recall": 0.0, "f1": 0.0}],
+ "pairs": [{"kind": "truth", "tss_set": "CAGE", "tes_set": "dRNA", "isoforms": 0, "unique_pairs": 0,
+            "both_hit": 0, "both_hit_raw": 0, "precision": 0.0, "naive_precision": 0.0}]}
+```
+- `sets`: references first (ids `refTSS`, `PolyA_DB`), then truth sets in sheet order. `path` is
+  the original path and `md5` is the md5 of the staged file.
+- `ends`: one row per set, ordered by kind (reference, truth), then end (tss, tes), then set order.
+  Fractions are 0–1 and null when the denominator is 0.
+- **Reference rows are precision only.** `recall`, `f1` and `sites_hit` are null, because the
+  databases pool many tissues (A29). Truth rows have all three.
+- `provisional` is true when any truth set is.
+- `dedup_tp` and `redundant_calls` come from the judge's junction-chain grouping. They are kept
+  as diagnostics. They are not the numerator of `precision`.
+- `regions` lists the judge's `--region` values (`chr:start-end`), or null.
+
+### `tables/end_accuracy.tsv` (A39)
+One header line, then one row per `ends` entry, then one row per `pairs` entry:
+```
+kind end set assay partner isoforms isoform_ends sites sites_hit precision naive_precision
+dedup_tp redundant_calls recall f1 unique_pairs both_hit both_hit_raw pair_precision pair_naive_precision
+```
+- Pair rows have `end` = `pair`, `set` = the 5′ set and `partner` = the 3′ set.
+- Empty cells are null. Floats are written with 6 significant digits.
+
+### Report (A40)
+On the Ends tab, when any shown run has `sections.end_accuracy`:
+- The **Precision at 50 bp** table takes its numbers from this section. It has one column per
+  end set:
+  - databases: precision
+  - truth sets: precision and recall, with F1 and sites hit
+- Each truth set gets a panel with precision, recall and F1.
+- A **Both ends on a site** panel shows the pair precision for each 5′ × 3′ pair.
+- A **Provisional truth** callout names the provisional sets.
+- A note says that the distance charts (section 10) measure each end against the nearest site
+  position, so their 50 bp values can differ a little from the table.
+- Without this section the table falls back to `sections.ends`. A hidden **Ends against truth
+  sets** card then names `--truth`.
+- Metric registry rows are not added for truth sets, because their names differ from sample to
+  sample.

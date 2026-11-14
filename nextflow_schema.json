@@ -175,6 +175,15 @@
                     "hidden": true,
                     "fa_icon": "fas fa-check-double"
                 },
+                "truth": {
+                    "type": "string",
+                    "description": "CSV of each sample's orthogonal end truth sets (sample,end,assay,path[,provisional]) for end accuracy on the Ends tab.",
+                    "help_text": "One row per truth set: end is tss (CAGE, PRO-cap, RAMPAGE ...) or tes (dRNA ...); path is a BED6 of stranded sites. Each FLAIR run is scored against every set of its sample by ted_end_precision.py (precision, recall, F1 within 50 bp), next to refTSS and PolyA_DB. Rows for samples not in this launch are skipped with a warning. Hidden until the CLI and builder expose it.",
+                    "format": "file-path",
+                    "pattern": "^\\S+\\.csv$",
+                    "hidden": true,
+                    "fa_icon": "fas fa-bullseye"
+                },
                 "env_cache": {
                     "type": "string",
                     "description": "Where FLAIR environments are built and cached.",

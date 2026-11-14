@@ -148,7 +148,8 @@ Every problem in the files is reported at once, in plain English.
 2. A shared alignment per sample, skipped when the sample has a BAM.
 3. Per sample × run: assemble, then quantify and predictProductivity (turn them off per run with
    `quantify: false` / `productivity: false`), then structure evaluation against the GTF, end
-   precision against refTSS / PolyA_DB, TUSCO, internal priming and isoform variation.
+   precision against refTSS / PolyA_DB, TUSCO, internal priming and isoform variation, and end
+   accuracy against the sample's truth sets (`--truth`, [below](#truth-sets-for-end-accuracy)).
 4. One results *bundle* per sample × run, and one report over all bundles.
 
 What each step writes: [docs/output.md](output.md).
@@ -163,7 +164,41 @@ What each step writes: [docs/output.md](output.md).
 | `--report_title "…"` | yes | the report heading |
 | `--bundles <dirs>` | yes | add bundles from earlier launches to this report ([below](#reports-over-many-launches)) |
 | `--env_cache <dir>` | yes | where FLAIR envs are built (phoenix default: the shared lab cache) |
+| `--truth truth.csv` | **no**: plain `nextflow run` only, hidden from `--help` | truth sets for end accuracy: each sample's own 5′ and 3′ end calls ([below](#truth-sets-for-end-accuracy)) |
 | `--ref_tss`, `--ref_pas`, `--tusco` | **no**: plain `nextflow run` only, hidden from `--help` | end references (BED6; poly(A) sites as `[pos-1,pos)`) and the SQANTI3 TUSCO list, for genomes without a preset or to replace the preset's files. Each is optional; a missing one only hides its report panels. |
+
+### Truth sets for end accuracy
+
+A truth set is one sample's own end calls from an orthogonal assay: CAGE, PRO-cap or RAMPAGE
+for the 5′ end, and direct RNA for the 3′ end. With truth sets, the Ends tab scores precision,
+**recall** and F1 for each run. The end databases (refTSS, PolyA_DB) get precision only.
+List them in a CSV and pass it with `--truth`:
+
+```
+sample,end,assay,path,provisional
+A549,tss,CAGE,/path/to/A549.CAGE.truth.bed,true
+A549,tss,PROcap,/path/to/A549.PROcap.truth.bed,true
+A549,tes,dRNA,/path/to/A549.dRNA.truth.bed,true
+```
+
+- `sample` must match a sample of the launch. Rows for other samples are skipped with a
+  warning, so one sheet can serve many launches.
+- `end` is `tss` (5′) or `tes` (3′).
+- `assay` names the set in the report. It must be unique per sample, and `refTSS` and
+  `PolyA_DB` are reserved.
+- `path` is a stranded BED6 or wider. Each row is one site: an isoform end on the same strand
+  within 50 bp of any part of the interval in columns 1–3 counts as a hit.
+- `provisional` (`true`/`false`, optional) marks the set as provisional in the report.
+- A sample can have any number of sets per end.
+
+On phoenix, the lab's sheet for A549, K562, HCT116, GM12878, HEK293T and WTC11 is
+`/private/groups/brookslab/flair-eval/reference/ortho_truth/truth_6lines.csv`. Its `sample`
+column holds the cell line names, so copy the rows you need and rename them to your sample
+names. **Every set in it is provisional**: the calls have not passed a final quality gate yet,
+so use recall and F1 to compare runs, not as final numbers.
+
+The test profile (`-profile test`) scores both test samples against WTC11 CAGE, PRO-cap and
+direct-RNA calls cut to its region.
 
 ## The `flair-eval` CLI
 Python 3.10+. Install from GitHub (or `pip install -e cli/` from a clone):

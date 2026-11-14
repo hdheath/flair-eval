@@ -476,11 +476,38 @@
   function priming(r) { var p = sec(r, 'priming'); return p && isNum(p.n) ? p : null; }
   function quant(r) { var q = sec(r, 'quant'); return q && isNum(q.reads_assigned) ? q : null; }
   function compute(r, k) { var c = (B(r) || {}).compute; return c && isNum(c[k]) ? c[k] : null; }
+  // End accuracy (A40): sections.end_accuracy, every number from ted_end_precision.py. Fractions
+  // (0-1) in the section; shown as percentages, F1 as 0-1.
+  function endAcc(r) { var e = sec(r, 'end_accuracy'); return e && e.ends && e.ends.length ? e : null; }
+  function eaRow(r, id) { var e = endAcc(r); return e ? e.ends.find(function (x) { return x.set === id; }) || null : null; }
+  function eaPair(r, a, z) { var e = endAcc(r); return e && e.pairs ? e.pairs.find(function (p) { return p.tss_set === a && p.tes_set === z; }) || null : null; }
+  function asP(v) { return isNum(v) ? 100 * v : null; }
+  // End sets over the runs, by id: 5' before 3', databases before truth sets, then section order.
+  function eaSets(runs) {
+    var seen = {}, out = [], ek = { tss: 0, tes: 1 }, kk = { reference: 0, truth: 1 };
+    runs.forEach(function (r) {
+      var e = endAcc(r);
+      if (e) (e.sets || []).forEach(function (x) { if (!seen[x.id]) { seen[x.id] = 1; out.push(x); } });
+    });
+    return out.map(function (x, i) { return [x, i]; }).sort(function (a, z) {
+      return ek[a[0].end] - ek[z[0].end] || kk[a[0].kind] - kk[z[0].kind] || a[1] - z[1];
+    }).map(function (x) { return x[0]; });
+  }
+  function eaPairs(runs) {
+    var seen = {}, out = [];
+    runs.forEach(function (r) {
+      var e = endAcc(r);
+      if (e) (e.pairs || []).forEach(function (p) { var k = p.tss_set + '|' + p.tes_set; if (!seen[k]) { seen[k] = 1; out.push(p); } });
+    });
+    return out.sort(function (a, z) { return (a.kind === 'reference' ? 0 : 1) - (z.kind === 'reference' ? 0 : 1); });
+  }
+  function endWord(e) { return e === 'tss' ? '5′' : '3′'; }
 
   // One-line reasons for hidden panels, in the reader's terms: pipeline params, never section keys.
   var OLDER = 'not in these results (made by an older flair-eval); rerun to see it';
   var NEEDS = {
     ends: 'needs refTSS or PolyA_DB sites (--genome hg38, or --ref_tss / --ref_pas)',
+    truth: 'needs truth sets for this sample (--truth)',
     tss: 'needs refTSS sites (--genome hg38, or --ref_tss)',
     tes: 'needs PolyA_DB sites (--genome hg38, or --ref_pas)',
     motif: 'needs refTSS or PolyA_DB sites and the genome',
@@ -1018,32 +1045,116 @@
     });
     return out;
   }
+  // Truth sets and end databases scored by ted_end_precision.py (A40). One table (rows = runs,
+  // one column per set), a precision / recall / F1 panel per truth set, and the both-ends panel.
+  function endAccuracy(root, runs, ok) {
+    var b = baseId(), sets = eaSets(ok), pairs = eaPairs(ok);
+    sets.forEach(function (x) {
+      var m = {};
+      ok.forEach(function (r) { var f = (endAcc(r).sets || []).find(function (y) { return y.id === x.id; }); if (f) m[(f.file || '') + '|' + (f.md5 || '')] = f; });
+      var fs = Object.keys(m).map(function (k) { return m[k]; });
+      if (fs.length > 1) root.appendChild(el('p', { class: 'callout' }, [el('strong', { text: 'Not like for like. ' }), 'Runs were scored against different ' + x.assay + ' files: ' + fs.map(function (f) { return f.file + (f.md5 ? ' (md5 ' + f.md5.slice(0, 8) + ')' : ''); }).join(', ') + '.']));
+    });
+    var top = card(root, { title: 'Precision at 50 bp', wide: true, dek: 'Isoform ends on the same strand within 50 bp of a site, per end set. Databases (refTSS, PolyA_DB): precision. Truth sets: precision (P) and recall (R), with F1.' });
+    var head = function (x) {
+      return el('th', { class: 'num' }, [endWord(x.end) + ' end vs ' + x.assay, el('span', { class: 'cell-delta', text: x.kind === 'truth' ? (x.provisional ? 'truth, provisional' : 'truth') : 'database' })]);
+    };
+    var cell = function (r, x) {
+      var e = eaRow(r, x.id), w = eaRow(b, x.id);
+      if (!e || !isNum(e.precision)) return el('td', { class: 'num muted', text: '–' });
+      var p = asP(e.precision), d = [];
+      if (r !== b && w && isNum(w.precision)) d.push('P ' + mdelta({ k: 'p' }, p, asP(w.precision)));
+      if (x.kind !== 'truth') {
+        return el('td', { class: 'num' }, [pct(p) + ' ', el('span', { class: 'muted', text: '(of ' + N(e.isoform_ends) + ' ends)' }), d.length ? el('span', { class: 'cell-delta', text: d[0] + ' vs baseline' }) : null]);
+      }
+      var rc = asP(e.recall);
+      if (r !== b && w && isNum(w.recall) && isNum(rc)) d.push('R ' + mdelta({ k: 'p' }, rc, asP(w.recall)));
+      return el('td', { class: 'num' }, ['P ' + pct(p) + ' · R ' + pct(rc),
+        el('span', { class: 'cell-delta', text: 'F1 ' + f2(e.f1) + ' · ' + N(e.sites_hit) + ' of ' + N(e.sites) + ' sites' }),
+        d.length ? el('span', { class: 'cell-delta', text: d.join(', ') + ' vs baseline' }) : null]);
+    };
+    top.appendChild(el('div', { class: 'tablewrap' }, [el('table', { class: 'data' }, [
+      el('thead', {}, [el('tr', {}, [el('th', { text: 'Run' })].concat(sets.map(head)))]),
+      el('tbody', {}, runs.map(function (r) { return el('tr', {}, [el('td', {}, [runTag(r)])].concat(sets.map(function (x) { return cell(r, x); }))); }))])]));
+    missingNote(top, runs, ok, NEEDS.truth);
+    var g = grid(root);
+    sets.filter(function (x) { return x.kind === 'truth'; }).forEach(function (x) {
+      var w = endWord(x.end);
+      panel(g, { title: w + ' end vs ' + x.assay + (x.provisional ? ' (provisional)' : ''),
+        dek: 'Precision: isoform ' + w + ' ends within 50 bp of a ' + x.assay + ' site. Recall: ' + x.assay + ' sites with an isoform ' + w + ' end within 50 bp. F1: their harmonic mean.' },
+        function (r) { var e = eaRow(r, x.id); return e && isNum(e.precision) ? e : null; }, NEEDS.truth, function (body, rs) {
+          body.appendChild(el('p', { class: 'eyebrow', style: 'margin:0 0 6px', text: 'Precision and recall' }));
+          hbars(body, { runs: rs, cats: ['Precision', 'Recall'], max: 100, labelW: 90, fmt: function (v) { return pct(v); },
+            vals: byRun(rs, function (r) { var e = eaRow(r, x.id); return [asP(e.precision), asP(e.recall)]; }),
+            tip: function (r, i) {
+              var e = eaRow(r, x.id);
+              return i === 0 ? pct(asP(e.precision)) + ' of ' + N(e.isoform_ends) + ' isoform ' + w + ' ends'
+                : pct(asP(e.recall)) + ' (' + N(e.sites_hit) + ' of ' + N(e.sites) + ' ' + x.assay + ' sites)';
+            } });
+          body.appendChild(el('p', { class: 'eyebrow', style: 'margin:14px 0 6px', text: 'F1' }));
+          runBars(body, { runs: rs, max: 1, fmt: f2, name: 'F1', labelW: 120, val: function (r) { return eaRow(r, x.id).f1; },
+            tip: function (r) { return f3(eaRow(r, x.id).f1); } });
+        });
+    });
+    if (pairs.length) {
+      var pname = function (p) { return p.tss_set + ' × ' + p.tes_set; };
+      panel(g, { title: 'Both ends on a site', dek: 'Isoforms whose 5′ and 3′ ends both lie within 50 bp of a site, out of all isoforms. Within a junction chain, isoforms that land on the same (5′ site, 3′ site) pair count once.' },
+        function (r) { return pairs.some(function (p) { var q = eaPair(r, p.tss_set, p.tes_set); return q && isNum(q.precision); }) ? 1 : null; }, NEEDS.truth, function (body, rs) {
+          hbars(body, { runs: rs, cats: pairs.map(function (p) { return pname(p) + (p.kind === 'truth' ? '' : ' (databases)'); }), labelW: 170, fmt: function (v) { return pct(v); },
+            vals: byRun(rs, function (r) { return pairs.map(function (p) { var q = eaPair(r, p.tss_set, p.tes_set); return q ? asP(q.precision) : null; }); }),
+            tip: function (r, i) {
+              var q = eaPair(r, pairs[i].tss_set, pairs[i].tes_set);
+              return pct(asP(q.precision)) + ' (' + N(q.both_hit) + ' of ' + N(q.isoforms) + ' isoforms; ' + N(q.both_hit_raw) + ' before merging same-pair isoforms)';
+            } });
+        });
+    }
+    var sc = null;
+    ok.forEach(function (r) { if (!sc) sc = endAcc(r).scorer; });
+    var files = sets.map(function (x) { return x.assay + ': ' + (x.file || '–') + (x.md5 ? ', md5 ' + x.md5.slice(0, 8) : ''); });
+    note(root, 'Scored by ' + (sc && sc.script ? sc.script : 'ted_end_precision.py') + (sc && sc.md5 ? ' (md5 ' + sc.md5.slice(0, 8) + ')' : '') +
+      ', window ' + (sc && isNum(sc.window) ? sc.window : 50) + ' bp. End sets: ' + files.join(' · ') + '.');
+  }
   function viewEnds(root) {
     var runs = sel(), b = baseId();
-    section(root, 'Ends', 'How close each isoform’s 5′ and 3′ ends sit to known sites (refTSS for transcription start sites, PolyA_DB for poly(A) cleavage sites), and whether 3′ ends sit on genomic A-runs. Distances are signed in transcript orientation: negative means the isoform end is upstream (5′) of the site.');
+    section(root, 'Ends', 'How close each isoform’s 5′ and 3′ ends sit to known sites (refTSS for transcription start sites, PolyA_DB for poly(A) cleavage sites), and, with --truth, to the sample’s own truth sets (CAGE, PRO-cap, direct RNA …), and whether 3′ ends sit on genomic A-runs. Distances are signed in transcript orientation: negative means the isoform end is upstream (5′) of the site.');
     var tssRuns = withData(runs, function (r) { return endsHalf(r, 'tss'); });
     var tesRuns = withData(runs, function (r) { return endsHalf(r, 'tes'); });
-    if (!tssRuns.length && !tesRuns.length) {
+    var eaRuns = withData(runs, endAcc);
+    if (!tssRuns.length && !tesRuns.length && !eaRuns.length) {
       off(root, 'Ends against refTSS and PolyA_DB', NEEDS.ends);
     } else {
-      root.appendChild(el('p', { class: 'callout' }, [el('strong', { text: 'Precision only. ' }),
-        'A known site near an end supports it. The databases pool many tissues, so an end with no site nearby is not necessarily wrong, and recall is not scored against them.']));
+      var truthSets = eaSets(eaRuns).filter(function (x) { return x.kind === 'truth'; });
+      root.appendChild(el('p', { class: 'callout' }, truthSets.length ? [el('strong', { text: 'Databases: precision only. ' }),
+        'A refTSS or PolyA_DB site near an end supports it, but the databases pool many tissues, so an end with no site nearby is not necessarily wrong and recall is not scored against them. ',
+        el('strong', { text: 'Truth sets: precision and recall. ' }),
+        'Truth sets (' + truthSets.map(function (x) { return x.assay; }).join(', ') + ') are this sample’s own end calls from an orthogonal assay, so recall is scored too: the share of truth sites with an isoform end within 50 bp. Every truth site counts, also those of genes the run did not sample.']
+        : [el('strong', { text: 'Precision only. ' }),
+          'A known site near an end supports it. The databases pool many tissues, so an end with no site nearby is not necessarily wrong, and recall is not scored against them.']));
+      var prov = truthSets.filter(function (x) { return x.provisional; });
+      if (prov.length) root.appendChild(el('p', { class: 'callout' }, [el('strong', { text: 'Provisional truth. ' }),
+        prov.map(function (x) { return x.assay; }).join(', ') + (prov.length > 1 ? ' are' : ' is') + ' marked provisional in the truth sheet: the calls have not passed a final quality gate yet. Read recall and F1 against ' + (prov.length > 1 ? 'them' : 'it') + ' as indicative, and compare runs rather than quote the numbers.']));
       [['tss', 'refTSS'], ['pas', 'PolyA_DB']].forEach(function (k) {
         var refs = refLine(runs, k[0]);
         if (refs.length > 1) root.appendChild(el('p', { class: 'callout' }, [el('strong', { text: 'Not like for like. ' }), 'Runs were scored against different ' + k[1] + ' files: ' + refs.map(function (f) { return f.file + (f.md5 ? ' (md5 ' + f.md5.slice(0, 8) + ')' : ''); }).join(', ') + '.']));
       });
-      // One small table instead of a tile per run and end: the same numbers as the dashed 50 bp
-      // point of the two line charts below, with counts and the change against the baseline.
-      var top = card(root, { title: 'Precision at 50 bp', wide: true, dek: 'Share of isoforms whose 5′ end is within 50 bp of a refTSS site, and whose 3′ end is within 50 bp of a PolyA_DB site.' });
-      var cell = function (r, k) {
-        var h = endsHalf(r, k), v = within(r, k, 50), w = within(b, k, 50);
-        if (!h || !isNum(v)) return el('td', { class: 'num muted', text: '–' });
-        var d = r !== b && isNum(w) ? mdelta({ k: 'p' }, v, w) + ' vs baseline' : '';
-        return el('td', { class: 'num' }, [pct(v) + ' ', el('span', { class: 'muted', text: '(' + N(h.within[windowsOf(r).indexOf(50)]) + ' of ' + N(h.n) + ')' }), d ? el('span', { class: 'cell-delta', text: d }) : null]);
-      };
-      top.appendChild(el('div', { class: 'tablewrap' }, [el('table', { class: 'data' }, [
-        el('thead', {}, [el('tr', {}, [el('th', { text: 'Run' }), el('th', { class: 'num', text: '5′ end vs refTSS' }), el('th', { class: 'num', text: '3′ end vs PolyA_DB' })])]),
-        el('tbody', {}, runs.map(function (r) { return el('tr', {}, [el('td', {}, [runTag(r)]), cell(r, 'tss'), cell(r, 'tes')]); }))])]));
+      if (eaRuns.length) endAccuracy(root, runs, eaRuns);
+      else {
+        // One small table instead of a tile per run and end: the same numbers as the dashed 50 bp
+        // point of the two line charts below, with counts and the change against the baseline.
+        var top = card(root, { title: 'Precision at 50 bp', wide: true, dek: 'Share of isoforms whose 5′ end is within 50 bp of a refTSS site, and whose 3′ end is within 50 bp of a PolyA_DB site.' });
+        var cell = function (r, k) {
+          var h = endsHalf(r, k), v = within(r, k, 50), w = within(b, k, 50);
+          if (!h || !isNum(v)) return el('td', { class: 'num muted', text: '–' });
+          var d = r !== b && isNum(w) ? mdelta({ k: 'p' }, v, w) + ' vs baseline' : '';
+          return el('td', { class: 'num' }, [pct(v) + ' ', el('span', { class: 'muted', text: '(' + N(h.within[windowsOf(r).indexOf(50)]) + ' of ' + N(h.n) + ')' }), d ? el('span', { class: 'cell-delta', text: d }) : null]);
+        };
+        top.appendChild(el('div', { class: 'tablewrap' }, [el('table', { class: 'data' }, [
+          el('thead', {}, [el('tr', {}, [el('th', { text: 'Run' }), el('th', { class: 'num', text: '5′ end vs refTSS' }), el('th', { class: 'num', text: '3′ end vs PolyA_DB' })])]),
+          el('tbody', {}, runs.map(function (r) { return el('tr', {}, [el('td', {}, [runTag(r)]), cell(r, 'tss'), cell(r, 'tes')]); }))])]));
+        if (tssRuns.length || tesRuns.length) off(root, 'Ends against truth sets', NEEDS.truth);
+      }
+      if (eaRuns.length && (tssRuns.length || tesRuns.length))
+        note(root, 'The charts below measure each end’s distance to the nearest refTSS or PolyA_DB site position, so their 50 bp values can differ a little from the table above, which counts an end within 50 bp of any part of a site’s interval.');
       var g = grid(root);
       [['tss', '5′ precision as the window widens', 'refTSS'], ['tes', '3′ precision as the window widens', 'PolyA_DB']].forEach(function (k) {
         panel(g, { title: k[1], dek: 'Share of isoforms with an end within the window of a ' + k[2] + ' site. Dashed: 50 bp.' }, function (r) { return endsHalf(r, k[0]); }, NEEDS[k[0]], function (body, ok) {

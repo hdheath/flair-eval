@@ -9,7 +9,7 @@ sections.quant / sections.productivity are built by `python3 -m flair_eval_lib.s
 (CONTRACTS section 9, A19), found in --lib-dir.
 
 DIR holds the step folders written by the pipeline: assemble/ and eval/ (required), and
-quantify/, productivity/, align/ (own_align runs) when they ran. info.json is written by the
+quantify/, productivity/, align/ (own_align runs) and end_accuracy/ (section 12) when they ran. info.json is written by the
 BUNDLE process: sample, run_id, label, tags, inputs, pipeline, compute, trace rows.
 Stdlib only.
 """
@@ -81,6 +81,12 @@ def main(argv=None):
     for name in ("isoforms.bed", "isoforms.gtf"):
         shutil.copyfile(asm / name, out / name)
     copy_if(steps / "quantify" / "counts.tsv", out / "counts.tsv")
+    # Section 12: end accuracy table, and each judge call's summary and log for the record.
+    ea = steps / "end_accuracy"
+    copy_if(ea / "tables" / "end_accuracy.tsv", out / "tables" / "end_accuracy.tsv")
+    for call in sorted((ea / "judge").glob("*")) if (ea / "judge").is_dir() else []:
+        for name in ("precision_recall_summary.tsv", "judge.log"):
+            copy_if(call / name, out / "provenance" / "end_accuracy" / call.name / name)
     copy_if(steps / "productivity" / "productivity.tsv", out / "productivity.tsv")
 
     # Provenance.
@@ -119,6 +125,8 @@ def main(argv=None):
         inputs[k] = v           # original absolute paths, not the staged task-local names
     b["inputs"] = inputs
     b["compute"] = info["compute"]
+    if (ea / "end_accuracy.json").is_file():
+        b.setdefault("sections", {})["end_accuracy"] = json.loads((ea / "end_accuracy.json").read_text())
     if info.get("run_index") is not None:
         b["run_index"] = int(info["run_index"])          # A17: position in runs.yaml / --flair
     (out / "bundle.json").write_text(json.dumps(b, indent=2) + "\n")

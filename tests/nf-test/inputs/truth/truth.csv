@@ -1,0 +1,4 @@
+sample,end,assay,path,provisional
+sampleA,tss,CAGE,S.CAGE.truth.bed,true
+sampleA,tes,dRNA,S.dRNA.truth.bed,
+K562,tss,CAGE,S.CAGE.truth.bed,true

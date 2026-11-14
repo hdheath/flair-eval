@@ -59,6 +59,9 @@ def loadInputs(Map p) {
 
     def samples = hasParam(p, 'input') ? loadSamplesCsv(p.input.toString(), errors) : quickSample(p, errors)
     def runs    = hasParam(p, 'runs')  ? loadRunsYaml(p.runs.toString(), errors)    : quickRuns(p, errors)
+    // Section 12 (A36): each sample's orthogonal truth sets; samples without rows get []
+    def truth = hasParam(p, 'truth') ? loadTruthSheet(p.truth.toString(), samples, errors) : [:]
+    samples = samples.collect { s -> s + [truth: truth[s.sample] ?: []] }
 
     // Cross-checks between samples and runs.
     def ownAlign = runs.findAll { r -> r.own_align }
@@ -328,6 +331,108 @@ def resolveInputPath(String v, Object baseDir) {
 def findBamIndex(Object bam) {
     def candidates = [bam.toString() + '.bai', bam.toString().replaceAll(/\.bam$/, '') + '.bai', bam.toString() + '.csi']
     return candidates.collect { c -> file(c) }.find { f -> f.exists() }
+}
+
+/*
+ * ---------------------------------------------------------------------------------------------
+ * --truth sheet (CONTRACTS section 12, A36)
+ * ---------------------------------------------------------------------------------------------
+ * CSV with columns sample, end (tss|tes), assay, path [, provisional (true|false)]. Returns
+ * [sample: [[assay, end, path (file), provisional (bool)], ...]] in sheet order. Paths resolve
+ * like samples.csv paths. Rows for samples not in this launch are skipped with one warning, so a
+ * shared sheet covering many cell lines can be reused.
+ */
+def TRUTH_COLUMNS()  { ['sample', 'end', 'assay', 'path', 'provisional'] }
+def TRUTH_RESERVED() { ['refTSS', 'PolyA_DB'] }
+
+def loadTruthSheet(String csvPath, List samples, List errors) {
+    def csv = file(csvPath)
+    if (!csv.exists()) {
+        errors << "--truth file '${csvPath}' does not exist."
+        return [:]
+    }
+    def lines = csv.readLines().findAll { l -> l.trim() && !l.trim().startsWith('#') }
+    if (!lines) {
+        errors << "--truth file '${csvPath}' is empty. It needs a header line (sample,end,assay,path) and one row per truth set."
+        return [:]
+    }
+    def header = splitCsvLine(lines[0]).collect { h -> h.trim() }
+    def unknown = header.findAll { h -> h && !(h in TRUTH_COLUMNS()) }
+    if (unknown) {
+        errors << "--truth file '${csvPath}' has unknown column(s) ${unknown.collect { u -> "'${u}'" }.join(', ')}. Allowed columns: ${TRUTH_COLUMNS().join(', ')}."
+    }
+    def missing = ['sample', 'end', 'assay', 'path'].findAll { c -> !(c in header) }
+    if (missing) {
+        errors << "--truth file '${csvPath}' has no ${missing.collect { c -> "'${c}'" }.join(', ')} column${missing.size() == 1 ? '' : 's'} (required)."
+    }
+    if (unknown || missing) {
+        return [:]
+    }
+    def names = samples.collect { s -> s.sample } as Set
+    def baseDir = csv.toAbsolutePath().parent
+    def out = [:]
+    def seen = [:]
+    def skipped = [] as LinkedHashSet
+    lines.drop(1).eachWithIndex { line, i ->
+        def rowNo = i + 2
+        def cells = splitCsvLine(line)
+        if (cells.size() > header.size()) {
+            errors << "--truth file line ${rowNo} has ${cells.size()} values but the header has ${header.size()} columns."
+            return
+        }
+        def row = [:]
+        header.eachWithIndex { h, j ->
+            def v = j < cells.size() ? cells[j].trim() : ''
+            if (h && v) {
+                row[h] = v
+            }
+        }
+        def where = "--truth file line ${rowNo}" + (row.sample ? " (sample '${row.sample}', ${row.assay ?: 'no assay'})" : '')
+        def nBefore = errors.size()
+        ['sample', 'end', 'assay', 'path'].each { c ->
+            if (!row[c]) {
+                errors << "${where}: '${c}' is empty."
+            }
+        }
+        if (errors.size() > nBefore) {
+            return
+        }
+        if (!(row.sample in names)) {
+            skipped << row.sample
+            return
+        }
+        if (!(row.end in ['tss', 'tes'])) {
+            errors << "${where}: end '${row.end}' is not allowed. Use 'tss' (5' end: CAGE, PRO-cap, RAMPAGE) or 'tes' (3' end: dRNA)."
+        }
+        if (!(row.assay ==~ ID_PATTERN())) {
+            errors << "${where}: assay '${row.assay}' may only use letters, digits, '.', '_' and '-', and must start with a letter or digit."
+        }
+        else if (row.assay in TRUTH_RESERVED()) {
+            errors << "${where}: assay '${row.assay}' is reserved for the end databases (--ref_tss / --ref_pas). Name the truth set after its assay, e.g. CAGE."
+        }
+        def key = "${row.sample}|${row.assay}".toString()
+        if (seen.containsKey(key)) {
+            errors << "${where}: sample '${row.sample}' already has a truth set named '${row.assay}' (line ${seen[key]}). Assay names must be unique per sample."
+        }
+        seen[key] = rowNo
+        if (row.provisional && !(row.provisional in ['true', 'false'])) {
+            errors << "${where}: provisional '${row.provisional}' must be 'true' or 'false' (or empty for false)."
+        }
+        def f = resolveInputPath(row.path, baseDir)
+        if (!f.exists()) {
+            errors << "${where}: truth file '${row.path}' does not exist${isRelative(row.path) ? ' (looked next to the truth sheet and in the launch directory)' : ''}."
+        }
+        if (errors.size() == nBefore) {
+            schemaCheck(row, 'truth.schema.json', where, errors)
+        }
+        if (errors.size() == nBefore) {
+            out[row.sample] = (out[row.sample] ?: []) + [[assay: row.assay, end: row.end, path: f, provisional: row.provisional == 'true']]
+        }
+    }
+    if (skipped) {
+        log.warn("--truth: skipped rows for sample(s) not in this launch: ${skipped.join(', ')}.")
+    }
+    return out
 }
 
 /*

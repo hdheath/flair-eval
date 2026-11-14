@@ -39,7 +39,7 @@ emailed or hosted. It is built from this launch's bundles plus any `--bundles` f
 | Recovery | Which reference genes and transcripts are found? TUSCO benchmark, genes detected, gained and lost against the baseline, FSM isoforms with exact ends |
 | Diversity | How many isoforms per gene, how many are coding or NMD, and do genes vary by ends, splicing or both? |
 | Agreement | How similar are the runs? Shared and unique isoforms, expression correlation, 5′ and 3′ end agreement, TUSCO genes vs the baseline |
-| Ends | How close are isoform 5′ and 3′ ends to refTSS and PolyA_DB sites (precision only) and to the reference transcript's ends, and which 3′ ends sit on genomic A-runs (internal-priming risk)? |
+| Ends | How close are isoform 5′ and 3′ ends to refTSS and PolyA_DB sites (precision only) and to the reference transcript's ends? With `--truth`: precision, recall and F1 against the sample's own truth sets, and how many isoforms have both ends on a site. Which 3′ ends sit on genomic A-runs (internal-priming risk)? |
 | Quantification | How many reads were assigned, and how many isoforms have reads? |
 | Compute | Wall time, CPU time and peak memory of each run's FLAIR steps |
 
@@ -64,12 +64,14 @@ bundles/<sample>/<run_id>/
 │   ├── isoforms.tsv               one row per isoform with its structural category
 │   ├── categories.tsv             category, subcategory, n
 │   ├── genes.tsv                  gene_id, gene_name of reference genes (when written)
-│   └── ends.tsv                   per isoform: 5'/3' ends, distances to end references, poly(A) motif, downstream A
+│   ├── ends.tsv                   per isoform: 5'/3' ends, distances to end references, poly(A) motif, downstream A
+│   └── end_accuracy.tsv           per end set (truth sets, refTSS, PolyA_DB): precision, recall, F1; then 5' x 3' pairs
 └── provenance/
     ├── flair_env.json             which FLAIR ran: source, version, commit, env/container
     ├── adapter_<step>.json        exact FLAIR commands, version, exit codes, wall time
     ├── adapter_<step>_skipped.json  present when that FLAIR version cannot do the step
-    └── trace.tsv                  resource use of this job's tasks
+    ├── trace.tsv                  resource use of this job's tasks
+    └── end_accuracy/<call>/       the end judge's summary and log, one folder per call (e.g. CAGE__dRNA)
 ```
 
 `<step>` is `assemble`, `quantify`, `productivity`, or `align` for runs with `own_align: true`. A FLAIR version that cannot run a step leaves `adapter_<step>_skipped.json`
@@ -146,6 +148,27 @@ EVALUATE_STRUCTURE passes the sample's end references and TUSCO list (`--ref_tss
 d_ref_tss d_ref_tes polya_motif down_a_frac`. `tss`/`tes` are 0-based end bases. Distances are
 genomic and signed in transcript orientation: negative means the isoform end is upstream (5′) of
 the site. A site farther than 10 kb leaves the cell empty; `d_ref_*` are for FSM and ISM only.
+
+### End accuracy (CONTRACTS section 12)
+
+END_ACCURACY scores each run's isoform ends against the sample's end sets. These are the truth
+sets from `--truth` plus refTSS / PolyA_DB when present. Every number comes from flair4_ted's end
+judge, `ted_end_precision.py`, copied unchanged into `modules/end_accuracy/` (provenance and known
+quirks in its README). An isoform end is a hit when it lies on the same strand within 50 bp of any
+part of a site's interval, on chr1-22, X or Y.
+
+| key | needs | content |
+|---|---|---|
+| `sections.end_accuracy` | a truth set, `ref_tss` or `ref_pas` | `scorer` (judge, md5, window), `sets` (file, md5, provisional), `ends` (one row per set: isoform ends, sites, precision; for truth sets also sites hit, recall and F1), `pairs` (5′ × 3′: isoforms with both ends on a site), `provisional` (A38) |
+
+- Precision = hits / isoform ends.
+- Recall = truth sites with an isoform end near them / all truth sites in scope, including sites
+  of genes the run's reads never covered.
+- The databases get precision only.
+- `tables/end_accuracy.tsv` (A39) holds the same rows: first the sets, then the pairs, with
+  `end` = `pair`, `set` = the 5′ set and `partner` = the 3′ set.
+- The refTSS and PolyA_DB numbers here can differ a little from `sections.ends`. That section
+  measures distance to the nearest site position; the judge counts any part of a site's interval.
 
 ### Other `bundle.json` keys set by BUNDLE
 

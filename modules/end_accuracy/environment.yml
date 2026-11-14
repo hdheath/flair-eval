@@ -1,0 +1,10 @@
+# Env for END_ACCURACY (CONTRACTS section 6, 12): the tools env plus scipy, which the vendored
+# judge's signal_utils.py imports at module level. Used by -profile conda and on phoenix.
+name: flair-eval-end-accuracy
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pandas=2.2
+  - numpy=1.26
+  - scipy=1.11

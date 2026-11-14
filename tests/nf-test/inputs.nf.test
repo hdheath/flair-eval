@@ -229,4 +229,45 @@ nextflow_pipeline {
             assert workflow.trace.tasks().size() == 0
         }
     }
+
+    test("section 12: a bad --truth sheet lists every problem") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/samples.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/runs.yaml"
+                truth  = "${projectDir}/tests/nf-test/inputs/bad/truth.csv"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            def out = (workflow.stdout + workflow.stderr).join('\n')
+            [
+                "end '5p' is not allowed. Use 'tss'",
+                "assay 'refTSS' is reserved for the end databases",
+                "provisional 'yes' must be 'true' or 'false'",
+                "truth file '../truth/nope.bed' does not exist",
+                "already has a truth set named 'dRNA' (line 5)",
+                "assay 'bad name' may only use letters",
+            ].each { msg -> assert out.contains(msg) : "expected message: ${msg}" }
+            assert workflow.trace.tasks().size() == 0
+        }
+    }
+
+    test("section 12: --truth with an unknown column, and a missing --truth file") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/samples.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/runs.yaml"
+                truth  = "${projectDir}/tests/nf-test/inputs/bad/truth_columns.csv"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            def out = (workflow.stdout + workflow.stderr).join('\n')
+            assert out.contains("has unknown column(s) 'file'")
+            assert out.contains("has no 'path' column (required)")
+        }
+    }
 }

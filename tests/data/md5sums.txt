@@ -1,3 +1,6 @@
+bf3369ca188bf3950d08491b5c1891fa  human_region/human_region.CAGE.truth.bed
+473bca1e931601100c68b2afb7bce684  human_region/human_region.PROcap.truth.bed
+d170cf0e2bc00afc0427f268e4a17a3b  human_region/human_region.dRNA.truth.bed
 a628dd6e6d3360b2ac692afba88b9d71  human_region/human_region.genome.fa
 f9cd5110557edcfe488214b9b806def9  human_region/human_region.genome.fa.fai
 a2e7564caf414bb007e5cb7f0e6ffa48  human_region/human_region.gtf

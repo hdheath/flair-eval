@@ -1,0 +1,3 @@
+#chrom	start	end	call_id	score	strand	ext_start	ext_end	point_source	signal	n_reps	source_id	v49_dist
+chr1	10	11	S_CAGE_000001	5	+	8	14	dominant_ctss	5.0	2	c1	10
+chr1	500	501	S_CAGE_000002	3	+	500	503	dominant_ctss	3.0	2	c2	481

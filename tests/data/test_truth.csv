@@ -1,0 +1,7 @@
+sample,end,assay,path,provisional
+human_region_pacbio,tss,CAGE,human_region/human_region.CAGE.truth.bed,true
+human_region_ont,tss,CAGE,human_region/human_region.CAGE.truth.bed,true
+human_region_pacbio,tss,PROcap,human_region/human_region.PROcap.truth.bed,true
+human_region_ont,tss,PROcap,human_region/human_region.PROcap.truth.bed,true
+human_region_pacbio,tes,dRNA,human_region/human_region.dRNA.truth.bed,true
+human_region_ont,tes,dRNA,human_region/human_region.dRNA.truth.bed,true

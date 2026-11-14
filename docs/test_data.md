@@ -35,7 +35,12 @@ own folder (CONTRACTS A3).
 | `human_region/human_region.ont.fa.gz` | 2,879,511 | 20,000 ONT reads (of 34,492 in the window) |
 | `human_region/human_region.refTSS.bed` | 24,278 | refTSS v4.1 human hg38 TSS clusters wholly inside the window (620 sites). refTSS is CC BY 4.0: Abugessaisa et al., *J Mol Biol* 2019 and later releases, https://reftss.riken.jp |
 | `human_region/human_region.polyA_DB.bed` | 31,190 | PolyA_DB v4.1 main polyA sites inside the window (648 sites), one row per cleavage site `[pos-1, pos)`. Source: PolyA_DB v4.1 `HumanPas` release (`hg38.PAS.main.tsv`), redistributed as a small subset with citation |
+| `human_region/human_region.CAGE.truth.bed` | 9,511 | WTC11 CAGE 5′ end calls wholly inside the window (81 calls), one row per call: the 1-bp mode point in columns 2–3, strand in column 6, a `#` header line. Provisional. |
+| `human_region/human_region.PROcap.truth.bed` | 44,459 | WTC11 PRO-cap 5′ end calls (PINTS) inside the window (338 calls), same layout. Provisional. |
+| `human_region/human_region.dRNA.truth.bed` | 7,576 | WTC11 direct-RNA (ONT RNA002) 3′ end calls inside the window (65 calls), same layout. Provisional. |
 | `human_region/human_region.tusco.tsv` | 3,158 | SQANTI3 `tusco_human.tsv` (TUSCO single-isoform genes, 46 genes), copied whole from SQANTI3 commit 589dfd4 (GPL-3.0). No TUSCO gene lies in the window, so the test profile's TUSCO panel is empty by design. |
+| `test_truth.csv` | | the truth sheet (`--truth`, CONTRACTS section 12): the three WTC11 truth sets below for both samples, all `provisional=true` |
+| `build_test_truth.sh` | | cuts the three truth sets from the WTC11 truth-set build and writes `test_truth.csv`; `build_test_data.sh` calls it |
 | `build_test_refs.sh` | | cuts the three reference files above from the lab copies (the `hg38` preset files in `/private/groups/brookslab/flair-eval/reference/`); `build_test_data.sh` calls it |
 
 Total: 13.6 MB on disk. Git stores it compressed, mostly because the GTF and genome compress well.
@@ -66,6 +71,9 @@ as a prefix (`ENCFF245IPAm54284U_…/ccs`). ONT read names are the original UUID
 | PacBio reads | ENCODE experiment [ENCSR507JOF](https://www.encodeproject.org/experiments/ENCSR507JOF/) (LRGASP WTC11, PacBio Sequel II, Mortazavi lab, UCI). FASTQ files ENCFF563QZR (rep 1), ENCFF370NFS (rep 2) and ENCFF245IPA (rep 3); all three reps are pooled. | ENCODE data use policy |
 | ONT reads | ENCODE experiment [ENCSR539ZXJ](https://www.encodeproject.org/experiments/ENCSR539ZXJ/) (LRGASP Nanopore PCR-cDNA WTC11, Brooks lab, UCSC), file ENCFF263YFG (rep 1) | ENCODE data use policy |
 | hg38 | GRCh38 primary assembly (GENCODE `GRCh38.primary_assembly.genome.fa`) | Genome Reference Consortium reference, publicly available |
+| WTC11 PRO-cap truth calls | ENCODE experiment [ENCSR178XKL](https://www.encodeproject.org/experiments/ENCSR178XKL/) (PRO-cap, Yu lab, Cornell; ENCODE4), PINTS calls ENCFF187HGX, ENCFF525LEP, ENCFF927UKV, with the ENCODE 5′ bigWigs for the signal | ENCODE data use policy |
+| WTC11 dRNA truth calls | ENCODE experiment [ENCSR392BGY](https://www.encodeproject.org/experiments/ENCSR392BGY/) (LRGASP WTC11 direct RNA, ONT RNA002), BAMs ENCFF281OVX, ENCFF466MIS, ENCFF469VMX | ENCODE data use policy |
+| WTC11 CAGE truth calls | GEO [GSE185917](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE185917), biological replicate 1 (SRA SRR16340036–SRR16340038) | NCBI: "NCBI itself places no restrictions on the use or distribution of the data"; submitters may hold rights (see below) |
 | GENCODE | GENCODE v49 basic annotation (`gencode.v49.basic.annotation.gtf`) | gencodegenes.org: "All the GENCODE project data is open access" (EMBL-EBI terms of use) |
 
 **ENCODE terms** (https://www.encodeproject.org/help/citing-encode/, read 2026-11-09): "External data
@@ -73,6 +81,15 @@ users may freely download, analyze and publish results based on any ENCODE data 
 restrictions." ENCODE asks users to cite the ENCODE Consortium, acknowledge the production labs,
 and give the ENCSR/ENCFF accessions used. Those accessions are listed above. The policy does not
 use the word "redistribute".
+
+**NCBI terms** (https://www.ncbi.nlm.nih.gov/home/about/policies/, read 2026-11-13): "NCBI itself
+places no restrictions on the use or distribution of the data contained therein. Nor do we accept
+data when the submitter has requested restrictions on reuse or redistribution." The same page
+warns that submitters may claim intellectual property rights in their data. The GSE185917 record
+itself could not be read by an automated client.
+
+**The truth calls are derived data.** Each file holds end positions computed from the public
+data, not the reads. All three sets are provisional: they have not passed a final quality gate.
 
 Please cite: the ENCODE Consortium; LRGASP (Pardo-Palacios et al., *Nature Methods* 2024); GENCODE
 (Frankish et al.).

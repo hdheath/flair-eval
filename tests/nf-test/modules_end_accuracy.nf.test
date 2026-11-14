@@ -1,0 +1,124 @@
+nextflow_process {
+
+    name "END_ACCURACY scores isoform ends against truth sets and end references (section 12)"
+    script "modules/end_accuracy/main.nf"
+    process "END_ACCURACY"
+
+    // fake_assemble has one isoform, chr1:[0,20) +, so its 5' end is 0 and the judge's 3' end is 20.
+    // Truth: CAGE calls at 10 (hit) and 500 (no isoform near it); dRNA call at 100 (80 bp: miss).
+    // References: refTSS [0,3) (hit), PolyA_DB at 19, listed twice (hit).
+    test("truth sets + references: precision, recall, pairs, table and judge outputs") {
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', label: 'r', tags: [:]]],
+                    file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"),
+                    [file("\${d}/truth/S.CAGE.truth.bed"), file("\${d}/truth/S.dRNA.truth.bed")],
+                    [truth: [[assay: 'CAGE', end: 'tss', source: "\${d}/truth/S.CAGE.truth.bed", provisional: true],
+                             [assay: 'dRNA', end: 'tes', source: "\${d}/truth/S.dRNA.truth.bed", provisional: false]],
+                     ref_tss: '/refs/tss.bed', ref_pas: '/refs/pas.bed'],
+                    file("\${d}/refs/tss.bed"), file("\${d}/refs/pas.bed"),
+                ]
+                input[1] = []
+                """
+            }
+        }
+        then {
+            assert process.success
+            def out = process.out.dir[0][1]
+            def sec = path("${out}/end_accuracy.json").json
+            assert sec.scorer.script == 'ted_end_precision.py' && sec.scorer.window == 50
+            assert sec.provisional == true
+            assert sec.sets*.id == ['refTSS', 'PolyA_DB', 'CAGE', 'dRNA']
+            assert sec.sets.find { s -> s.id == 'CAGE' }.file == 'S.CAGE.truth.bed'
+            assert sec.sets.find { s -> s.id == 'refTSS' }.path == '/refs/tss.bed'
+            def e = sec.ends.collectEntries { r -> [(r.set): r] }
+            assert e.CAGE.precision == 1.0 && e.CAGE.recall == 0.5 && e.CAGE.sites == 2 && e.CAGE.sites_hit == 1
+            assert e.dRNA.precision == 0.0 && e.dRNA.recall == 0.0
+            assert e.refTSS.precision == 1.0 && e.refTSS.recall == null
+            assert e.PolyA_DB.precision == 1.0 && e.PolyA_DB.recall == null
+            assert sec.pairs*.tss_set == ['refTSS', 'CAGE'] && sec.pairs*.tes_set == ['PolyA_DB', 'dRNA']
+            assert sec.pairs[0].both_hit == 1 && sec.pairs[1].both_hit == 0
+            def tab = path("${out}/tables/end_accuracy.tsv").readLines()
+            assert tab.size() == 7 && tab[0].startsWith('kind\tend\tset')
+            assert path("${out}/judge/CAGE__dRNA/precision_recall_summary.tsv").exists()
+        }
+    }
+
+    test("references only, no regions") {
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', label: 'r', tags: [:]]],
+                    file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"), [],
+                    [truth: [], ref_tss: null, ref_pas: '/refs/pas.bed'],
+                    [], file("\${d}/refs/pas.bed"),
+                ]
+                input[1] = []
+                """
+            }
+        }
+        then {
+            assert process.success
+            def sec = path("${process.out.dir[0][1]}/end_accuracy.json").json
+            assert sec.sets*.id == ['PolyA_DB'] && sec.pairs == [] && sec.provisional == false
+        }
+    }
+
+    test("one truth set with regions") {
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', label: 'r', tags: [:]]],
+                    file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"),
+                    file("\${d}/truth/S.CAGE.truth.bed"),
+                    [truth: [[assay: 'CAGE', end: 'tss', source: "\${d}/truth/S.CAGE.truth.bed", provisional: false]]],
+                    [], [],
+                ]
+                input[1] = file("\${d}/regions.bed")
+                """
+            }
+        }
+        then {
+            assert process.success
+            def sec = path("${process.out.dir[0][1]}/end_accuracy.json").json
+            assert sec.sets*.id == ['CAGE']
+            assert sec.scorer.regions != null
+        }
+    }
+
+    test("stub: section keeps its shape") {
+        options "-stub"
+        when {
+            process {
+                """
+                def d = "${projectDir}/tests/nf-test/inputs"
+                input[0] = [
+                    [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', label: 'r', tags: [:]]],
+                    file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"),
+                    [file("\${d}/truth/S.CAGE.truth.bed"), file("\${d}/truth/S.dRNA.truth.bed")],
+                    [truth: [[assay: 'CAGE', end: 'tss', source: "\${d}/truth/S.CAGE.truth.bed", provisional: true],
+                             [assay: 'dRNA', end: 'tes', source: "\${d}/truth/S.dRNA.truth.bed", provisional: true]],
+                     ref_tss: '/refs/tss.bed', ref_pas: null],
+                    file("\${d}/refs/tss.bed"), [],
+                ]
+                input[1] = []
+                """
+            }
+        }
+        then {
+            assert process.success
+            def out = process.out.dir[0][1]
+            def sec = path("${out}/end_accuracy.json").json
+            assert sec.sets*.id == ['refTSS', 'CAGE', 'dRNA']
+            assert sec.ends.size() == 3 && sec.pairs.size() == 1 && sec.provisional
+            assert path("${out}/tables/end_accuracy.tsv").readLines().size() == 1
+        }
+    }
+}
