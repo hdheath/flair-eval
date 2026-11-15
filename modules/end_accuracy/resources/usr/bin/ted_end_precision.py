@@ -14,17 +14,36 @@ while still rewarding legitimate alternative splicing that shares an end.
 Outputs:
   <outdir>/precision_recall_summary.tsv   — per-mode summary metrics
   <outdir>/per_junction_chain.tsv         — per-JC-group detail
+
+Per-chain columns (flair-eval end-accuracy branch, ted-clustering map tickets 05 and 12).
+The columns above are unchanged; these are appended after them (CHAIN_FIELDS), per axis:
+  {5prime,3prime}_chain_*      one-to-one within each junction chain: a chain's distinct
+                               called ends pair one-to-one with truth calls (50 bp, same
+                               strand). Chains sharing a truth call each get credit; two
+                               calls of one chain near one truth call count once.
+  *_recall_read_supported      recall over read-supported truth calls: those with at least
+                               one corrected spliced read (--read-ends) ending within 50 bp.
+                               *_recall_all_calls divides by every truth call.
+  *_altpair_{51_200,over_200}_ alternative-end pairs. Truth side: two read-supported calls
+                               at least 51 bp apart (summit distance), each the nearest call
+                               (within 50 bp) of a read of the same junction chain; recall =
+                               pairs that chain hits both ends of. Precision = a chain's
+                               non-main called ends that hit, binned by distance to the main
+                               end (most reads by BED score; ties go to the 5'-most end).
 """
 
 import argparse
 import csv
+import gzip
+import io
 import logging
 import math
 import sys
-from bisect import bisect_left
-from collections import defaultdict
+import tarfile
+from bisect import bisect_left, bisect_right
+from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
 try:
     from signal_utils import parse_bed12, tss_tts
@@ -592,6 +611,47 @@ def _many_to_one_match_counts(
     return ends_near, n_calls, peaks_recovered, n_summits
 
 
+def group_isoforms_by_chain(isoforms: List[dict]) -> Dict[Tuple, List[dict]]:
+    """Group isoforms: multi-exon ones by junction chain, keyed (chrom, strand, junctions);
+    single-exon ones by genomic overlap on the same strand, keyed (chrom, strand, "SE", n)."""
+    # Group multi-exon isoforms by junction chain.
+    # Group single-exon isoforms by genomic overlap on the same strand:
+    # overlapping single-exon isoforms are alternative-end variants of the
+    # same locus and must be deduplicated the same way as JC groups.
+    jc_groups: Dict[Tuple, List[dict]] = defaultdict(list)
+    for iso in isoforms:
+        if iso["n_exons"] >= 2 and iso["junctions"]:
+            key = (iso["chrom"], iso["strand"], iso["junctions"])
+            jc_groups[key].append(iso)
+        else:
+            iso["_se"] = True  # mark for sweep-line pass
+
+    # Sweep-line overlap grouping for single-exon isoforms.
+    se_isos = [iso for iso in isoforms if iso.get("_se")]
+    if se_isos:
+        se_isos_sorted = sorted(se_isos, key=lambda x: (x["chrom"], x["strand"], x["start"]))
+        group_id = 0
+        current_end = -1
+        current_chrom = None
+        current_strand = None
+        for iso in se_isos_sorted:
+            chrom, strand = iso["chrom"], iso["strand"]
+            start, end = iso["start"], iso["end"]
+            if chrom != current_chrom or strand != current_strand or start >= current_end:
+                group_id += 1
+                current_chrom = chrom
+                current_strand = strand
+                current_end = end
+            else:
+                current_end = max(current_end, end)
+            jc_groups[(chrom, strand, "SE", group_id)].append(iso)
+
+    # Clean up temporary marker
+    for iso in isoforms:
+        iso.pop("_se", None)
+    return jc_groups
+
+
 def compute_jc_deduplicated_precision_recall(
     isoforms: List[dict],
     annotated_ends: Dict[str, Dict[str, List[int]]],
@@ -628,42 +688,7 @@ def compute_jc_deduplicated_precision_recall(
 
     Returns dict with per-end-type and aggregate metrics, plus per-JC detail.
     """
-    # Group multi-exon isoforms by junction chain.
-    # Group single-exon isoforms by genomic overlap on the same strand:
-    # overlapping single-exon isoforms are alternative-end variants of the
-    # same locus and must be deduplicated the same way as JC groups.
-    jc_groups: Dict[Tuple, List[dict]] = defaultdict(list)
-    for iso in isoforms:
-        if iso["n_exons"] >= 2 and iso["junctions"]:
-            key = (iso["chrom"], iso["strand"], iso["junctions"])
-            jc_groups[key].append(iso)
-        else:
-            iso["_se"] = True  # mark for sweep-line pass
-
-    # Sweep-line overlap grouping for single-exon isoforms.
-    se_isos = [iso for iso in isoforms if iso.get("_se")]
-    if se_isos:
-        se_isos_sorted = sorted(se_isos, key=lambda x: (x["chrom"], x["strand"], x["start"]))
-        group_id = 0
-        current_end = -1
-        current_chrom = None
-        current_strand = None
-        for iso in se_isos_sorted:
-            chrom, strand = iso["chrom"], iso["strand"]
-            start, end = iso["start"], iso["end"]
-            if chrom != current_chrom or strand != current_strand or start >= current_end:
-                group_id += 1
-                current_chrom = chrom
-                current_strand = strand
-                current_end = end
-            else:
-                current_end = max(current_end, end)
-            jc_groups[(chrom, strand, "SE", group_id)].append(iso)
-
-    # Clean up temporary marker
-    for iso in isoforms:
-        iso.pop("_se", None)
-
+    jc_groups = group_isoforms_by_chain(isoforms)
     results = {"per_jc": []}
 
     # GTF-based recall now uses every distinct annotated TSS/TTS as the
@@ -873,24 +898,265 @@ def compute_jc_deduplicated_precision_recall(
     return results
 
 
+# ── Per-chain one-to-one, read-supported recall, alternative-end pairs ──────
+# ted-clustering map tickets 05 (the rules) and 12 (this code). See the module docstring.
+
+# Alternative-end pair distance bins (bp, inclusive): two ends at least ALT_PAIR_MIN apart,
+# split at ALT_PAIR_SPLIT. Ends closer than ALT_PAIR_MIN are in no bin.
+ALT_PAIR_MIN = 51
+ALT_PAIR_SPLIT = 200
+ALT_BINS = ("51_200", "over_200")
+
+# (column prefix, isoform end key, ReadEnd field) per axis
+_AXES = (("5prime", "tss", "five"), ("3prime", "tts", "three"))
+
+# Genome-record dump columns --read-ends needs (ted-clustering map ticket 01's format).
+READ_END_COLUMNS = ("chrom", "strand", "introns", "five_prime", "three_prime")
+
+
+class ReadEnd(NamedTuple):
+    """One corrected spliced read: its junction chain ((intron start, end), ...) and its
+    oriented 5' and 3' ends, in the isoforms' convention (tss_tts: BED start/end)."""
+    chrom: str
+    strand: str
+    junctions: tuple
+    five: int
+    three: int
+
+
+def _axis_fields(p: str) -> List[str]:
+    fields = [f"{p}_chain_ends", f"{p}_chain_tp", f"{p}_chain_precision",
+              f"{p}_chain_sites_hit", f"{p}_chain_recall_all_calls",
+              f"{p}_read_supported_sites", f"{p}_chain_sites_hit_read_supported",
+              f"{p}_chain_recall_read_supported"]
+    for b in ALT_BINS:
+        fields += [f"{p}_altpair_{b}_truth_pairs", f"{p}_altpair_{b}_pairs_hit",
+                   f"{p}_altpair_{b}_recall", f"{p}_altpair_{b}_alt_ends",
+                   f"{p}_altpair_{b}_alt_ends_hit", f"{p}_altpair_{b}_precision"]
+    return fields
+
+
+CHAIN_FIELDS = ["n_read_ends"] + _axis_fields("5prime") + _axis_fields("3prime")
+
+
+def _junctions(text: str) -> tuple:
+    """A dump's junction chain, 'start-end,...', as ((start, end), ...)."""
+    return tuple(tuple(int(x) for x in j.split("-")) for j in text.split(",")) if text else ()
+
+
+def _read_end_rows(fh, source: str) -> List[ReadEnd]:
+    header = fh.readline().rstrip("\n").split("\t")
+    missing = [c for c in READ_END_COLUMNS if c not in header]
+    if missing:
+        raise ValueError(f"{source}: no column(s) {', '.join(missing)}; --read-ends takes a "
+                         f"genome-record dump")
+    ci, si, ji, fi, ti = (header.index(c) for c in READ_END_COLUMNS)
+    rows = []
+    for line in fh:
+        f = line.rstrip("\n").split("\t")
+        if f[si] not in ("+", "-") or not f[fi]:
+            continue           # unknown strand: no oriented ends
+        rows.append(ReadEnd(f[ci], f[si], _junctions(f[ji]), int(f[fi]), int(f[ti])))
+    return rows
+
+
+def read_read_ends(path: str) -> List[ReadEnd]:
+    """The corrected spliced reads of a genome-record dump: a directory of region TSVs, a tar
+    archive of one (.tgz / .tar.gz / .tar), or one TSV (.tsv / .tsv.gz, e.g. the joined
+    *.genome_records.tsv.gz). Reads of unknown strand are skipped."""
+    p = Path(path)
+    reads: List[ReadEnd] = []
+    if p.is_dir():
+        for f in sorted(p.glob("*.tsv")):
+            with open(f) as fh:
+                reads += _read_end_rows(fh, str(f))
+    elif p.name.endswith((".tgz", ".tar.gz", ".tar")):
+        with tarfile.open(p) as tar:
+            for m in sorted((m for m in tar.getmembers() if m.isfile() and m.name.endswith(".tsv")),
+                            key=lambda m: m.name):
+                reads += _read_end_rows(io.TextIOWrapper(tar.extractfile(m)), f"{p}:{m.name}")
+    else:
+        with (gzip.open(p, "rt") if p.name.endswith(".gz") else open(p)) as fh:
+            reads += _read_end_rows(fh, str(p))
+    if not reads:
+        raise ValueError(f"{path}: no reads of known strand; --read-ends takes a genome-record dump")
+    return reads
+
+
+def _alt_bin(distance: int) -> Optional[str]:
+    if distance < ALT_PAIR_MIN:
+        return None
+    return ALT_BINS[0] if distance <= ALT_PAIR_SPLIT else ALT_BINS[1]
+
+
+def _extents(summits) -> Tuple[int, int]:
+    """How far the peak intervals reach left and right of their summits (the widest of each)."""
+    if not summits:
+        return 0, 0
+    return (max(int(p) - _peak_lo(p) for p in summits), max(_peak_hi(p) - int(p) for p in summits))
+
+
+def _reachable(summits, extents: Tuple[int, int], lo: int, hi: int, window: int) -> Tuple[int, int]:
+    """The slice [start, stop) of the sorted summits that a position in [lo, hi] can match."""
+    max_left, max_right = extents
+    return (bisect_left(summits, lo - window - max_right),
+            bisect_right(summits, hi + window + max_left))
+
+
+def _candidates(pos: int, summits, extents: Tuple[int, int], window: int) -> List[Tuple[int, int, int]]:
+    """(match distance, summit distance, index) of every summit within `window` of pos by the
+    judge's interval predicate (_match_distance), nearest first, as the one-to-one matcher orders them."""
+    start, stop = _reachable(summits, extents, pos, pos, window)
+    found = [(_match_distance(pos, summits[j]), abs(pos - int(summits[j])), j) for j in range(start, stop)]
+    return sorted(c for c in found if c[0] <= window)
+
+
+def _peaks_near(positions, summits, extents: Tuple[int, int], window: int) -> Set[int]:
+    """Indices of the summits within `window` of any position: the calls these reads support."""
+    return {j for pos in positions for _, _, j in _candidates(pos, summits, extents, window)}
+
+
+def _nearest_peaks(positions, summits, extents: Tuple[int, int], window: int) -> Set[int]:
+    """Indices of the summits some position ends at: each position's nearest summit within
+    `window` (ties to the lower index). A read ends at one call, so one read cannot make a pair."""
+    out: Set[int] = set()
+    for pos in positions:
+        c = _candidates(pos, summits, extents, window)
+        if c:
+            out.add(c[0][2])
+    return out
+
+
+def _match_chain(positions: List[int], summits, extents: Tuple[int, int], window: int) -> List[int]:
+    """match_positions_one_to_one on the slice of summits the chain's sorted positions can reach,
+    with indices into the whole list: the same assignment, without scanning every summit."""
+    if not positions or not summits:
+        return [-1] * len(positions)
+    start, stop = _reachable(summits, extents, positions[0], positions[-1], window)
+    assign = match_positions_one_to_one(positions, summits[start:stop], window)
+    return [j + start if j >= 0 else -1 for j in assign]
+
+
+def _chain_axis_metrics(groups, summit_index, end_type: str, read_field: str, p: str,
+                        window: int, read_ends: Optional[List[ReadEnd]]) -> dict:
+    out: dict = {}
+    chain_ends = chain_tp = 0
+    sites_hit: Set[Tuple[str, str, int]] = set()
+    chain_hits: Dict[Tuple, Set[int]] = {}
+    alt_ends, alt_hit = Counter(), Counter()
+    extents = {k: _extents(v) for k, v in summit_index.items()}
+    for key, members in groups.items():
+        chrom, strand = key[0], key[1]
+        reads_at: Dict[int, int] = defaultdict(int)
+        for iso in members:
+            reads_at[int(iso[end_type])] += iso.get("score", 1)   # GTF isoforms: 1 each
+        positions = sorted(reads_at)
+        assign = _match_chain(positions, summit_index.get((chrom, strand), []),
+                              extents.get((chrom, strand), (0, 0)), window)
+        matched = {pos: j for pos, j in zip(positions, assign) if j >= 0}
+        chain_ends += len(positions)
+        chain_tp += len(matched)
+        sites_hit.update((chrom, strand, j) for j in matched.values())
+        chain_hits[key] = set(matched.values())
+        # the main end: most reads; ties go to the 5'-most end (lowest on +, highest on -)
+        upstream = 1 if strand == "+" else -1
+        main = max(positions, key=lambda pos: (reads_at[pos], -upstream * pos))
+        for pos in positions:
+            b = None if pos == main else _alt_bin(abs(pos - main))
+            if b is not None:
+                alt_ends[b] += 1
+                alt_hit[b] += pos in matched
+    n_sites = sum(len(v) for v in summit_index.values())
+    out[f"{p}_chain_ends"] = chain_ends
+    out[f"{p}_chain_tp"] = chain_tp
+    out[f"{p}_chain_precision"] = chain_tp / chain_ends if chain_ends else None
+    out[f"{p}_chain_sites_hit"] = len(sites_hit)
+    out[f"{p}_chain_recall_all_calls"] = len(sites_hit) / n_sites if n_sites else None
+    for b in ALT_BINS:
+        out[f"{p}_altpair_{b}_alt_ends"] = alt_ends[b]
+        out[f"{p}_altpair_{b}_alt_ends_hit"] = alt_hit[b]
+        out[f"{p}_altpair_{b}_precision"] = alt_hit[b] / alt_ends[b] if alt_ends[b] else None
+    if read_ends is None:
+        return out
+
+    by_strand: Dict[Tuple[str, str], Set[int]] = defaultdict(set)
+    by_chain: Dict[Tuple, Set[int]] = defaultdict(set)
+    for r in read_ends:
+        e = getattr(r, read_field)
+        by_strand[(r.chrom, r.strand)].add(e)
+        by_chain[(r.chrom, r.strand, r.junctions)].add(e)
+    supported: Set[Tuple[str, str, int]] = set()
+    for key, ends in by_strand.items():
+        supported.update((*key, j) for j in _peaks_near(ends, summit_index.get(key, []),
+                                                        extents.get(key, (0, 0)), window))
+    hit_supported = len(sites_hit & supported)
+    out[f"{p}_read_supported_sites"] = len(supported)
+    out[f"{p}_chain_sites_hit_read_supported"] = hit_supported
+    out[f"{p}_chain_recall_read_supported"] = hit_supported / len(supported) if supported else None
+
+    pairs, pairs_hit = Counter(), Counter()
+    for ckey, ends in by_chain.items():
+        summits = summit_index.get(ckey[:2], [])
+        near = sorted(_nearest_peaks(ends, summits, extents.get(ckey[:2], (0, 0)), window))
+        hits = chain_hits.get(ckey, set())
+        for i, a in enumerate(near):
+            for c in near[i + 1:]:
+                b = _alt_bin(abs(int(summits[c]) - int(summits[a])))
+                if b is not None:
+                    pairs[b] += 1
+                    pairs_hit[b] += a in hits and c in hits
+    for b in ALT_BINS:
+        out[f"{p}_altpair_{b}_truth_pairs"] = pairs[b]
+        out[f"{p}_altpair_{b}_pairs_hit"] = pairs_hit[b]
+        out[f"{p}_altpair_{b}_recall"] = pairs_hit[b] / pairs[b] if pairs[b] else None
+    return out
+
+
+def compute_chain_metrics(
+    isoforms: List[dict],
+    peaks_5prime: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]],
+    peaks_3prime: Optional[Dict[Tuple[str, str], List[Tuple[int, int]]]],
+    window: int = 50,
+    read_ends: Optional[List[ReadEnd]] = None,
+) -> dict:
+    """The CHAIN_FIELDS columns (see the module docstring). An axis without truth peaks gets
+    None in every column; without read_ends the read-supported and pair-recall columns are None.
+
+    A chain is a group_isoforms_by_chain group; its called ends are the distinct end positions
+    of its isoforms, each carrying the summed BED score (read support) of the isoforms there."""
+    out = {f: None for f in CHAIN_FIELDS}
+    out["n_read_ends"] = len(read_ends) if read_ends is not None else None
+    groups = group_isoforms_by_chain(isoforms)
+    for (p, end_type, read_field), peaks in zip(_AXES, (peaks_5prime, peaks_3prime)):
+        if peaks is None:
+            continue
+        out.update(_chain_axis_metrics(groups, _summit_index_from_intervals(peaks), end_type,
+                                       read_field, p, window, read_ends))
+    return out
+
+
 # ── Output ──────────────────────────────────────────────────────────────────
 
+# Column names use the shared vocabulary of precision_recall_plot.py:
+#   transcriptome_mode, 5prime_precision, 3prime_precision, 5prime_recall, 3prime_recall
+# The "dedup" prefix is dropped here since this IS the dedup metric; raw (non-dedup)
+# values are kept under the *_naive_precision names for reference.
+SUMMARY_FIELDS = [
+    "transcriptome_mode", "n_isoforms_total", "n_jc_groups", "n_single_exon",
+    "5prime_n_isoform_ends", "5prime_dedup_tp", "5prime_redundant_calls",
+    "5prime_precision", "5prime_naive_precision", "5prime_recall", "5prime_f1",
+    "5prime_n_annot_matched", "5prime_n_annot_total",
+    "3prime_n_isoform_ends", "3prime_dedup_tp", "3prime_redundant_calls",
+    "3prime_precision", "3prime_naive_precision", "3prime_recall", "3prime_f1",
+    "3prime_n_annot_matched", "3prime_n_annot_total",
+    "paired_n_isoforms", "paired_unique_pairs", "paired_both_hit",
+    "paired_both_hit_raw", "paired_dedup_precision", "paired_naive_precision",
+]
+
+
 def write_summary_tsv(results: dict, outpath: Path, mode_label: str = ""):
-    # Column names use the shared vocabulary of precision_recall_plot.py:
-    #   transcriptome_mode, 5prime_precision, 3prime_precision, 5prime_recall, 3prime_recall
-    # The "dedup" prefix is dropped here since this IS the dedup metric; raw (non-dedup)
-    # values are kept under the *_naive_precision names for reference.
-    fields = [
-        "transcriptome_mode", "n_isoforms_total", "n_jc_groups", "n_single_exon",
-        "5prime_n_isoform_ends", "5prime_dedup_tp", "5prime_redundant_calls",
-        "5prime_precision", "5prime_naive_precision", "5prime_recall", "5prime_f1",
-        "5prime_n_annot_matched", "5prime_n_annot_total",
-        "3prime_n_isoform_ends", "3prime_dedup_tp", "3prime_redundant_calls",
-        "3prime_precision", "3prime_naive_precision", "3prime_recall", "3prime_f1",
-        "3prime_n_annot_matched", "3prime_n_annot_total",
-        "paired_n_isoforms", "paired_unique_pairs", "paired_both_hit",
-        "paired_both_hit_raw", "paired_dedup_precision", "paired_naive_precision",
-    ]
+    # The legacy columns (SUMMARY_FIELDS), then the per-chain columns (CHAIN_FIELDS).
+    fields = SUMMARY_FIELDS + CHAIN_FIELDS
     # Internal results dict still uses _dedup_ names; remap for output
     _remap = {
         "5prime_dedup_precision": "5prime_precision",
@@ -964,6 +1230,10 @@ def main():
                         help="Minimum transcript count retained when --counts is provided")
     parser.add_argument("--outdir", required=True,
                         help="Output directory")
+    parser.add_argument("--read-ends", default=None,
+                        help=("Genome-record dump of the library's corrected spliced reads "
+                              "(region directory, .tgz, or .tsv[.gz]); enables the "
+                              "read-supported recall and alternative-end-pair recall columns"))
     parser.add_argument("--all-contigs", action="store_true",
                         help="Keep peaks/isoforms on ALL contigs (chrM + "
                              "GL*/KI* scaffolds).  Default restricts matching "
@@ -1031,6 +1301,14 @@ def main():
         isoforms, annotated_ends, annot_transcripts, window=args.window,
         peaks_5prime=peaks_5prime, peaks_3prime=peaks_3prime,
     )
+    read_ends = None
+    if args.read_ends:
+        log.info(f"Reading corrected spliced reads: {args.read_ends}")
+        read_ends = read_read_ends(args.read_ends)
+        log.info(f"  {len(read_ends)} read ends")
+    log.info("Computing per-chain one-to-one and alternative-end-pair columns...")
+    results.update(compute_chain_metrics(isoforms, peaks_5prime, peaks_3prime, args.window,
+                                         read_ends))
 
     log.info(f"Results: {results['n_jc_groups']} JC groups, "
              f"{results['n_isoforms_total']} isoforms")

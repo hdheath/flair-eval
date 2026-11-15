@@ -31,11 +31,39 @@ def write(path, lines):
 
 
 # ------------------------------------------------------------------ the vendored judge
-@pytest.mark.parametrize("name", ["ted_end_precision.py", "peak_matching.py", "signal_utils.py"])
-def test_vendored_judge_is_unchanged(name):
-    """The judge is used as written: byte-identical to the legacy copy (= flair4_ted 40fdd21)."""
+@pytest.mark.parametrize("name", ["peak_matching.py", "signal_utils.py"])
+def test_vendored_judge_helpers_are_unchanged(name):
+    """The helpers are used as written: byte-identical to the legacy copy (= flair4_ted 40fdd21)."""
     assert filecmp.cmp(os.path.join(VENDORED, name),
                        os.path.join(ROOT, "legacy", "bin", "evaluation", name), shallow=False)
+
+
+@pytest.mark.parametrize("peaks", [("CAGE", "dRNA"), ("CAGE", None), (None, "dRNA"), (None, None)])
+def test_extended_judge_keeps_the_legacy_columns(case, tmp_path, peaks):
+    """The judge gained per-chain columns (ted-clustering ticket 12). Its legacy columns, in order,
+    and per_junction_chain.tsv are exactly the legacy judge's (flair4_ted 40fdd21)."""
+    files = {"CAGE": os.path.join(case["tmp"], "CAGE.truth.bed"),
+             "dRNA": os.path.join(case["tmp"], "dRNA.truth.bed")}
+    args = ["--isoforms-bed", case["iso"], "--gtf", case["gtf"], "--mode", "m"]
+    for flag, name in zip(("--peaks-5prime", "--peaks-3prime"), peaks):
+        if name:
+            args += [flag, files[name]]
+    outs = {}
+    for label, script in (("legacy", os.path.join(ROOT, "legacy", "bin", "evaluation",
+                                                  "ted_end_precision.py")),
+                          ("vendored", JUDGE)):
+        out = tmp_path / label
+        r = subprocess.run([sys.executable, script, *args, "--outdir", str(out)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        outs[label] = out
+    legacy = (outs["legacy"] / "precision_recall_summary.tsv").read_text().splitlines()
+    new = (outs["vendored"] / "precision_recall_summary.tsv").read_text().splitlines()
+    width = len(legacy[0].split("\t"))
+    assert [line.split("\t")[:width] for line in new] == [line.split("\t") for line in legacy]
+    assert len(new[0].split("\t")) > width
+    assert ((outs["vendored"] / "per_junction_chain.tsv").read_text()
+            == (outs["legacy"] / "per_junction_chain.tsv").read_text())
 
 
 def test_judge_is_executable():

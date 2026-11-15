@@ -7,8 +7,9 @@ An *end set* is a BED6 of stranded sites for one end of the transcript:
                     the databases pool many tissues, so recall against them is not reported.
 
 This module does not score anything itself. Every number comes from flair4_ted's end judge,
-ted_end_precision.py, copied unchanged into modules/end_accuracy/resources/usr/bin/ (with its
-helpers peak_matching.py and signal_utils.py). Here we only plan the judge calls, run them,
+ted_end_precision.py, vendored into modules/end_accuracy/resources/usr/bin/ (with its helpers
+peak_matching.py and signal_utils.py, unchanged). The vendored judge adds per-chain columns after
+the legacy ones (modules/end_accuracy/README.md); the legacy columns read here are unchanged. Here we only plan the judge calls, run them,
 read the one-row precision_recall_summary.tsv each call writes, and shape the bundle section.
 
 The judge's rule (documented, not changed): an isoform end is a hit when it lies on the same
@@ -38,7 +39,7 @@ from .annotation import InputError
 from .ends import md5sum
 
 JUDGE = "ted_end_precision.py"
-JUDGE_SOURCE = "flair4_ted bin/evaluation (commit 40fdd21), copied unchanged"
+JUDGE_SOURCE = "flair4_ted bin/evaluation (commit 40fdd21), extended with per-chain columns"
 WINDOW = 50
 KINDS = ("reference", "truth")
 ENDS = ("tss", "tes")

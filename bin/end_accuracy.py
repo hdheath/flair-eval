@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Score one FLAIR run's isoform ends against its sample's end sets (CONTRACTS section 12).
 
-Runs flair4_ted's end judge, ted_end_precision.py (copied unchanged into
-modules/end_accuracy/resources/usr/bin/), once per planned call, and writes:
+Runs flair4_ted's end judge, ted_end_precision.py (vendored into
+modules/end_accuracy/resources/usr/bin/, legacy columns unchanged), once per planned call,
+and writes:
 
   OUT/end_accuracy.json        sections.end_accuracy, merged into bundle.json by BUNDLE
   OUT/tables/end_accuracy.tsv  one row per end set, then one row per 5' x 3' pair

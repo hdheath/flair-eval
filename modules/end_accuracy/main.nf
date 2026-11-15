@@ -3,9 +3,10 @@
  *
  * End sets = the sample's truth sets from --truth (kind truth) plus the end references
  * --ref_tss / --ref_pas or the genome preset's (kind reference). bin/end_accuracy.py runs
- * flair4_ted's judge, ted_end_precision.py, copied unchanged into resources/usr/bin/ with its
- * helpers (provenance: README.md here), and writes end_accuracy/end_accuracy.json
- * (sections.end_accuracy, merged by BUNDLE) and end_accuracy/tables/end_accuracy.tsv.
+ * flair4_ted's judge, ted_end_precision.py, vendored into resources/usr/bin/ with its helpers and
+ * extended with per-chain columns after the legacy ones (provenance: README.md here), and
+ * writes end_accuracy/end_accuracy.json (sections.end_accuracy, merged by BUNDLE) and
+ * end_accuracy/tables/end_accuracy.tsv.
  *
  * Runs only for jobs whose sample has at least one end set. Pass [] for a missing reference.
  */
