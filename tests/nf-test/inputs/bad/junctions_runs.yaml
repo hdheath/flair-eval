@@ -1,0 +1,7 @@
+runs:
+  - id: missing-file
+    flair: { release: "3.0.1" }
+    junctions: no_such.SJ.out.tab
+  - id: not-text
+    flair: { release: "3.0.1" }
+    junctions: 5

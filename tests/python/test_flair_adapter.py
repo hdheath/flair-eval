@@ -62,10 +62,12 @@ HELP = {
      "  -f GTF, --gtf GTF\n  --generate_map\n  --temp_dir TEMP_DIR\n  -t T, --threads T\n  --stringent\n\n"
      "required named arguments:\n  -q QUERY, --query QUERY\n  -g GENOME, --genome GENOME\n  -r READS, --reads READS\n",
  ("v2", "correct"): "usage: flair correct -q query.bed12 -g genome.fa [options]\n\n  -f GTF, --gtf GTF\n  --nvrna\n"
+     "  -j SHORTREAD, --shortread SHORTREAD\n"
      "  -t T, --threads T\n\nrequired named arguments:\n  -q QUERY, --query QUERY\n  -g GENOME, --genome GENOME\n",
  ("v301", "transcriptome"): "usage: transcriptome [-h] [-b GENOMEALIGNEDBAM] [-g GENOME] [-o OUTPUT]\n"
      "                     [-t THREADS] [-f GTF] [--stringent] [--parallelmode PARALLELMODE]\n\n"
-     "options:\n  -b, --genomealignedbam X\n  --stringent\n  --parallelmode PARALLELMODE\n",
+     "options:\n  -b, --genomealignedbam X\n  --stringent\n  --parallelmode PARALLELMODE\n"
+     "  --junction_tab JUNCTION_TAB\n  --junction_bed JUNCTION_BED\n",
  ("ted", "transcriptome"): "usage: transcriptome [-h] -b GENOME_ALIGNED_BAM -g GENOME --sample_name\n"
      "                     SAMPLE_NAME [-o OUTPUT] [-f ANNOT_GTF] [--parallel_mode PARALLEL_MODE]\n"
      "                     [--generate_map] [--ted]\n\n  --stringent_x\n\nrequired named arguments:\n"
@@ -73,7 +75,9 @@ HELP = {
      "  --sample_name SAMPLE_NAME\n",
  ("dev", "transcriptome"): "usage: flair transcriptome [-h] -b GENOME_ALIGNED_BAM -g GENOME --sample_name\n"
      "                           SAMPLE_NAME [-o OUTPUT] [-f ANNOT_GTF] [--parallel_mode PARALLEL_MODE]\n"
-     "                           [--temp_dir TEMP_DIR] [--generate_map] [--no_stringent] [--directRNA]\n\n"
+     "                           [--temp_dir TEMP_DIR] [--generate_map] [--no_stringent] [--directRNA]\n"
+     "                           [--junction_star JUNCTION_STAR] [--junction_tab JUNCTION_TAB]\n"
+     "                           [--junction_bed JUNCTION_BED]\n\n"
      "required named arguments:\n  -b GENOME_ALIGNED_BAM, --genome_aligned_bam GENOME_ALIGNED_BAM\n"
      "  -g GENOME, --genome GENOME\n  --sample_name SAMPLE_NAME\n",
  ("dev", "quantify"): "usage: flair quantify [-h] --manifest MANIFEST -g GENOME --isoform_bed\n"
@@ -515,6 +519,95 @@ def test_assemble_user_args(fake):
     assert tx.count("--parallelmode") == 1          # the user's choice wins
     log = json.load(open(out / "adapter_log.json"))
     assert any("--no_such_flag" in w for w in log["warnings"])
+
+
+# ---- splice junctions (CONTRACTS A41) --------------------------------------------------------
+STAR_TAB = "chr1\t100\t200\t1\t1\t1\t5\t0\t30\nchr9\t100\t200\t2\t2\t0\t3\t0\t20\n"
+IP_BED = "chr1\t99\t200\tsj1_GT/AG\t4\t+\nchr9\t99\t200\tsj2_GT/AG\t2\t-\n"
+
+
+def write_junctions(run, kind):
+    path = run.inputs / ("juncs.SJ.out.tab" if kind == "star" else "juncs.IPjuncs.bed")
+    path.write_text(STAR_TAB if kind == "star" else IP_BED)
+    return path
+
+
+@pytest.mark.parametrize("gen,kind,cmd,flag", [
+    ("v2", "star", "correct", "--shortread"),
+    ("v2", "bed", "correct", "--shortread"),
+    ("v301", "star", "transcriptome", "--junction_tab"),
+    ("v301", "bed", "transcriptome", "--junction_bed"),
+    ("dev", "star", "transcriptome", "--junction_star"),
+    ("dev", "bed", "transcriptome", "--junction_bed"),
+])
+def test_assemble_junctions_flag_per_version(fake, gen, kind, cmd, flag):
+    run = fake(gen)
+    out = run.tmp / "asm"
+    j = write_junctions(run, kind)
+    assemble(run, out, "--junctions", j, check=0)
+    call = [c for c in run.calls() if c[0] == cmd][0]
+    assert call[call.index(flag) + 1] == str(j)
+    others = [f for f in ("--shortread", "-j", "--junction_star", "--junction_tab", "--junction_bed") if f != flag]
+    assert not any(f in call for f in others)
+    if gen == "v2":
+        col = [c for c in run.calls() if c[0] == "collapse"][0]
+        assert "--shortread" not in col and "-j" not in col
+    log = json.load(open(out / "adapter_log.json"))
+    assert log["junctions"] == {"path": str(j), "format": kind, "command": cmd, "flag": flag}
+
+
+def test_assemble_without_junctions_passes_none(fake):
+    run = fake("v301")
+    out = run.tmp / "asm"
+    assemble(run, out, check=0)
+    tx = [c for c in run.calls() if c[0] == "transcriptome"][0]
+    assert "--junction_bed" not in tx and "--junction_tab" not in tx
+    assert "junctions" not in json.load(open(out / "adapter_log.json"))
+
+
+def test_assemble_junctions_unsupported_version_warns(fake):
+    run = fake("ted")                                # its fake help has no junction option
+    out = run.tmp / "asm"
+    assemble(run, out, "--junctions", write_junctions(run, "bed"), check=0)
+    tx = [c for c in run.calls() if c[0] == "transcriptome"][0]
+    assert not any(t.startswith("--junction") for t in tx)
+    log = json.load(open(out / "adapter_log.json"))
+    assert log["junctions"]["flag"] is None
+    assert any("junctions file was not used" in w for w in log["warnings"])
+
+
+def test_assemble_junctions_conflict_with_user_args(fake):
+    run = fake("v301")
+    out = run.tmp / "asm"
+    i = run.inputs
+    p = run("assemble", "--bam", i / "shared.bam", "--genome", i / "genome.fa", "--gtf", i / "annot.gtf",
+            "--args", "--junction_bed other.bed", "--junctions", write_junctions(run, "bed"), "--out", out)
+    assert p.returncode != 0
+    assert "Give the junctions in one place only" in p.stderr
+    assert not [c for c in run.calls() if c[0] == "transcriptome"]
+
+
+@pytest.mark.parametrize("gen,cmd,flag", [("v2", "correct", "--shortread"),
+                                          ("dev", "transcriptome", "--junction_star")])
+def test_assemble_junctions_restricted_to_regions(fake, gen, cmd, flag):
+    run = fake(gen)
+    out = run.tmp / "asm"
+    assemble(run, out, "--junctions", write_junctions(run, "star"), "--regions", run.inputs / "regions.bed",
+             "--keep-work", check=0)
+    call = [c for c in run.calls() if c[0] == cmd][0]
+    sub = call[call.index(flag) + 1]
+    assert sub.endswith("regions.junctions.tab")
+    assert [l.split("\t")[0] for l in open(sub).read().splitlines()] == ["chr1"]
+    log = json.load(open(out / "adapter_log.json"))
+    assert log["junctions"]["format"] == "star"
+    assert any("1 of 2 lines kept" in n for n in log["notes"])
+
+
+def test_assemble_missing_junctions_file(fake):
+    run = fake("v301")
+    out = run.tmp / "asm"
+    p = assemble(run, out, "--junctions", run.inputs / "nope.bed")
+    assert p.returncode != 0 and "--junctions" in p.stderr
 
 
 def test_assemble_failure_exit_code(fake):

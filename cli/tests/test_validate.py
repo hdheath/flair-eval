@@ -155,3 +155,22 @@ def test_bundle_validation():
     assert codes(V.validate_bundle(bad)) == [(("bundle", "junctions"), "required"),
                                              (("bundle", "schema"), "const"),
                                              (("bundle", "summary", "isoforms"), "minimum")]
+
+
+def test_run_junctions_key(tmp_path, monkeypatch):
+    """A41: runs.yaml `junctions` is a path; a missing file is a warning, looked up next to
+    runs.yaml first."""
+    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / "SJ.out.tab").write_text("")
+    good = {"runs": [{"id": "a", "flair": {"release": "2.2.0"}, "junctions": "SJ.out.tab"}]}
+    assert V.validate_runs(good) == []
+    assert codes(V.validate_runs({"runs": [{"id": "a", "flair": {"release": "2.2.0"}, "junctions": ""}]})) == [
+        (("runs", 0, "junctions"), "min_length")]
+    (cfg / "runs.yaml").write_text("runs:\n  - id: a\n    flair: {release: \"2.2.0\"}\n    junctions: SJ.out.tab\n"
+                                   "  - id: b\n    flair: {release: \"3.0.1\"}\n    junctions: gone.bed\n")
+    issues = V.check_files(None, cfg / "runs.yaml")
+    assert codes(issues) == [(("runs", 1, "junctions"), "missing_file")]
+    assert issues[0].level == "warning" and "looked next to runs.yaml" in issues[0].message
+    assert V.check_files(None, cfg / "runs.yaml", files=False) == []

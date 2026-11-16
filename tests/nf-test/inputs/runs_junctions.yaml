@@ -1,0 +1,6 @@
+runs:
+  - id: flair-3.0.1
+    flair: { release: "3.0.1" }
+  - id: flair-2.2.0
+    flair: { release: "2.2.0" }
+    junctions: junctions.SJ.out.tab

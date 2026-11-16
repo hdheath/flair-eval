@@ -107,6 +107,25 @@ nextflow_pipeline {
         }
     }
 
+    test("A41: a run's junctions file beats the sample's junctions column") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/samples_junctions.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/runs_junctions.yaml"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.success
+            def d = "${projectDir}/tests/nf-test/inputs"
+            def inp = { s, r -> path("$outputDir/bundles/${s}/${r}/bundle.json").json.inputs.junctions }
+            assert inp('sampleA', 'flair-3.0.1') == "${d}/junctions_a.bed"          // the sample's column
+            assert inp('sampleC', 'flair-3.0.1') == null                            // none given
+            assert inp('sampleA', 'flair-2.2.0') == "${d}/junctions.SJ.out.tab"     // the run's own, relative to runs.yaml
+            assert inp('sampleC', 'flair-2.2.0') == "${d}/junctions.SJ.out.tab"
+        }
+    }
+
     test("one-command mode with --bam and --sample skips the shared align") {
         when {
             params {

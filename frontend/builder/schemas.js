@@ -159,6 +159,11 @@
               "type": "string",
               "default": ""
             },
+            "junctions": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Splice junctions (STAR SJ.out.tab or BED) for this run on every sample, instead of each sample's junctions column (CONTRACTS A41)."
+            },
             "quantify": {
               "type": "boolean",
               "default": true

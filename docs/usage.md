@@ -107,8 +107,13 @@ WTC11,,/data/WTC11.bam,hg38,,ont,dRNA
 ```
 - Required: `sample`, `genome`, `gtf`, and `reads` or `bam` (a sorted BAM with its index next to it).
 - `genome` may be a preset (`hg38`); the `gtf` cell may then be left empty.
-- Optional: `platform` (`pacbio`, `ont`) and `library` (`cDNA`, `dRNA`). The columns `cage`, `pas`,
-  `junctions` and `spikein_gtf` are accepted and checked, but no report section uses them yet.
+- Optional: `platform` (`pacbio`, `ont`) and `library` (`cDNA`, `dRNA`).
+- Optional: `junctions`, the sample's splice junctions as a STAR `SJ.out.tab` or a BED (BED6 or
+  more, with the read count in the score column, as intronProspector writes). Every run gets it:
+  FLAIR 2.x through `flair correct -j`, 3.0.1 and dev through their `--junction_*` option for that
+  format ([details](flair_versions.md#2-assemble-transcriptome--collapse)). A run can use a
+  different file with `junctions:` in runs.yaml.
+- The columns `cage`, `pas` and `spikein_gtf` are accepted and checked, but no step uses them yet.
 - A relative path is looked up next to `samples.csv` first, then in the folder you launch from.
   Full paths avoid any doubt. `flair-eval run` on phoenix starts the job in `--outdir`, so it
   refuses a path that only works from your current folder.
@@ -129,7 +134,9 @@ runs:
       setting: "stringent"
 ```
 - Each run gives exactly one of `release`, `git` (with `ref`), `env` or `container`.
-- Optional keys: `transcriptome_args` (default empty), `quantify` and `productivity` (default
+- Optional keys: `transcriptome_args` (default empty), `junctions` (a junctions file for this run
+  on every sample, used instead of the samples' `junctions` column; a relative path is looked up
+  next to runs.yaml first), `quantify` and `productivity` (default
   `true`), `own_align` (default `false`: all runs share one alignment per sample), `label` (the
   name shown in the report) and `tags` (text key/value pairs, used as report filters).
 - Put version numbers in quotes: YAML reads `release: 3.0` as the number 3, not the text "3.0".

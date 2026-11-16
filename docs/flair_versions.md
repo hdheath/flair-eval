@@ -81,6 +81,17 @@ unless a run sets `transcriptome_args`, so these differences are part of what a 
 | MAPQ | `--quality 0` | fixed 0 | `--quality` | `--quality 1` |
 | `--ss_window` | 15 (correct) | 15 | 15 | 10 |
 
+**Splice junctions (A41).** When a job has a junctions file (runs.yaml `junctions:`, else the
+samples.csv `junctions` column), the adapter passes it as:
+
+| | 2.2.0 | 3.0.1 | TED | dev |
+|---|---|---|---|---|
+| STAR `SJ.out.tab` | `flair correct --shortread` (2.x detects the format) | `--junction_tab` | whichever of `--junction_star` / `--junction_tab` its `--help` lists | `--junction_star` (`--junction_tab` is its deprecated name) |
+| BED (BED6+, count in score) | `flair correct --shortread` | `--junction_bed` | `--junction_bed` if listed | `--junction_bed` |
+
+FLAIR's own `--junction_support` default then applies (3.0.1: 1; dev: 2; 2.2.0 `correct` has no
+such option). Pass `--junction_support` in `transcriptome_args` to change it.
+
 ### What the adapter normalises (CONTRACTS §2)
 - `isoforms.bed`: the first 12 columns of FLAIR's BED, one row per name (a repeated name keeps
   its first row and adds a warning), sorted by chrom/start/end/name, score clamped to 0–1000, no

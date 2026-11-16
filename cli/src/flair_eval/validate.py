@@ -100,8 +100,8 @@ def _issues_from_schema(instance, sch: dict, prefix: tuple, kind: str) -> list[I
             for k in sorted(set(inst) - allowed, key=str):
                 msg = f"unknown {kind} '{k}'"
                 if kind == "key" and len(path) == 2 and path[0] == "runs":
-                    msg += ("; allowed keys are id, flair, transcriptome_args, quantify, "
-                            "productivity, own_align, label, tags")
+                    msg += ("; allowed keys are id, flair, transcriptome_args, junctions, "
+                            "quantify, productivity, own_align, label, tags")
                 elif kind == "column":
                     msg += "; allowed columns are " + ", ".join(config.ALL_SAMPLE_COLUMNS)
                 out.append(Issue(path + (k,), "unknown_key", msg))
@@ -258,6 +258,27 @@ def check_paths(rows: list[dict], csv_dir: Path | None = None) -> list[Issue]:
     return out
 
 
+def check_run_paths(doc, runs_dir: Path | None = None) -> list[Issue]:
+    """Warnings for a run's `junctions` file that does not exist (A41). A relative path is
+    looked up next to runs.yaml first, then in the current folder."""
+    out: list[Issue] = []
+    runs = doc.get("runs") if isinstance(doc, dict) else None
+    if not isinstance(runs, list):
+        return out
+    bases = [b for b in (runs_dir, Path.cwd()) if b is not None]
+    for i, r in enumerate(runs):
+        p = r.get("junctions") if isinstance(r, dict) else None
+        if not isinstance(p, str) or not p or re.match(r"^[a-z][a-z0-9+.-]*://", p):
+            continue
+        fp = Path(p).expanduser()
+        found = fp.exists() if fp.is_absolute() else any((b / fp).exists() for b in bases)
+        if not found:
+            where = "" if fp.is_absolute() else " (looked next to runs.yaml and in this folder)"
+            out.append(Issue(("runs", i, "junctions"), "missing_file",
+                             f"file not found: {p}{where}", "warning"))
+    return out
+
+
 def check_files(samples: str | Path | None = None, runs: str | Path | None = None,
                 files: bool = True) -> list[Issue]:
     """Validate config files on disk. Missing local inputs are warnings."""
@@ -277,7 +298,10 @@ def check_files(samples: str | Path | None = None, runs: str | Path | None = Non
             out.append(Issue(("runs",), "missing_file", f"{rp} not found"))
         else:
             try:
-                out += validate_runs(config.read_runs(rp))
+                doc = config.read_runs(rp)
+                out += validate_runs(doc)
+                if files:
+                    out += check_run_paths(doc, rp.resolve().parent)
             except config.YamlError as e:
                 out.append(Issue(("runs",), "yaml", str(e)))
     return out
