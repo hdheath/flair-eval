@@ -302,13 +302,18 @@ def test_cli_regions_and_genome(tmp_path):
     assert j["known"] + j["novel_canonical"] + j["novel_noncanonical"] == j["total"]
 
 
-@pytest.mark.parametrize("bad", ["sample", "run_id_mismatch", "source"])
+def test_cli_records_its_own_run_id_when_the_env_is_shared(tmp_path):
+    # FLAIR_ENV runs once per source, so flair_env.json carries the first run's id (A11)
+    res, out = _run_cli(tmp_path, env={"run_id": "other", "source": "release",
+                                       "requested": "3.0.1", "flair_version": "3.0.1"})
+    assert res.returncode == 0, res.stderr
+    assert json.loads((out / "bundle.json").read_text())["run_id"] == "flair-3.0.1"
+
+
+@pytest.mark.parametrize("bad", ["sample", "source"])
 def test_cli_rejects_bad_input(tmp_path, bad):
     if bad == "sample":
         res, _ = _run_cli(tmp_path, sample="bad sample!")
-    elif bad == "run_id_mismatch":
-        res, _ = _run_cli(tmp_path, env={"run_id": "other", "source": "release",
-                                         "requested": "3.0.1", "flair_version": "3.0.1"})
     else:
         res, _ = _run_cli(tmp_path, env={"run_id": "flair-3.0.1", "source": "pip",
                                          "requested": "3.0.1", "flair_version": "3.0.1"})

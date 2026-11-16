@@ -108,11 +108,11 @@ def build_bundle(args):
         raise InputError(f"--sample {args.sample!r} must match {_ID_RE}")
     run = _load_json(args.run_json, "--run-json")
     env = _load_json(args.env_json, "--env-json")
+    # The env's run_id is the first run that uses that FLAIR source (CONTRACTS A11), so runs
+    # sharing an env record their own id from run-json.
     run_id = run.get("id") or env.get("run_id")
     if not run_id or not re.match(_ID_RE, str(run_id)):
         raise InputError(f"run id {run_id!r} missing or does not match {_ID_RE}")
-    if env.get("run_id") and run.get("id") and env["run_id"] != run["id"]:
-        raise InputError(f"run id mismatch: run-json {run['id']!r} vs env-json {env['run_id']!r}")
     source = env.get("source")
     if source is None and isinstance(run.get("flair"), dict) and run["flair"]:
         source = next(iter(run["flair"]))
