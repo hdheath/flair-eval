@@ -51,6 +51,22 @@ nextflow_pipeline {
         }
     }
 
+    test("A41: runs.yaml junctions must be an existing file given as text") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/samples.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/bad/junctions_runs.yaml"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            def out = (workflow.stdout + workflow.stderr).join('\n')
+            assert out.contains("junctions file 'no_such.SJ.out.tab' does not exist (looked next to the runs file and in the launch directory)")
+            assert out.contains("(id 'not-text'): 'junctions' must be the path to a junctions file")
+        }
+    }
+
     test("runs.yaml without a runs: list") {
         when {
             params {

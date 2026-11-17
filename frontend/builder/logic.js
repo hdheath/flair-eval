@@ -235,6 +235,7 @@
         if (has(r.flair || {}, k)) L.push("      " + k + ": " + q(r.flair[k]));
       });
       L.push("    transcriptome_args: " + q(has(r, "transcriptome_args") ? r.transcriptome_args : ""));
+      if (has(r, "junctions") && r.junctions) L.push("    junctions: " + q(r.junctions));
       ["quantify", "productivity", "own_align"].forEach(function (k) {
         var v = has(r, k) ? r[k] : RUN_DEFAULTS[k];
         L.push("    " + k + ": " + (v ? "true" : "false"));
@@ -355,7 +356,7 @@
         Object.keys(inst).filter(function (k) { return !has(allowed, k); }).sort().forEach(function (k) {
           var msg = "unknown " + kind + " '" + k + "'";
           if (kind === "key" && path.length === 2 && path[0] === "runs") {
-            msg += "; allowed keys are id, flair, transcriptome_args, quantify, productivity, own_align, label, tags";
+            msg += "; allowed keys are id, flair, transcriptome_args, junctions, quantify, productivity, own_align, label, tags";
           } else if (kind === "column") msg += "; allowed columns are " + ALL_SAMPLE_COLUMNS.join(", ");
           out.push(issue(path.concat([k]), "unknown_key", msg));
         });

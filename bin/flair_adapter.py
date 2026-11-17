@@ -764,6 +764,18 @@ def run_transcriptome(a, log, prof, flair, work, bam, genome, gtf, user_toks):
         os.makedirs(tmp, exist_ok=True)
         cmd += ["--temp_dir", tmp]
     cmd += library_flags(a, log, "transcriptome", tp["flags"], user_toks)
+    check_junction_args(a, user_toks)
+    junctions = getattr(a, "junctions_used", None)
+    if junctions:
+        fmt = junction_format(junctions)
+        flag = transcriptome_junction_flag(tp["flags"], fmt)
+        if flag:
+            cmd += [flag, junctions]
+        else:
+            log.warn("--junctions: this FLAIR's transcriptome has no option for %s junctions, so the "
+                     "junctions file was not used" % ("STAR SJ.out.tab" if fmt == "star" else "BED"))
+        log.data["junctions"] = {"path": a.junctions, "format": fmt, "command": "transcriptome",
+                                 "flag": flag}
     cmd += user_toks
     log.run(cmd, cwd=work, label="flair_transcriptome", what="flair transcriptome")
     return prefix
@@ -782,6 +794,14 @@ def run_correct_collapse(a, log, prof, flair, work, bam, reads, genome, gtf, use
            pick(cf, "-g", "--genome"), genome, pick(cf, "-t", "--threads"), str(a.threads),
            pick(cf, "-o", "--output"), corr]
     cmd += library_flags(a, log, "correct", prof["correct"]["flags"])
+    check_junction_args(a, user_toks)
+    junctions = getattr(a, "junctions_used", None)
+    if junctions:
+        # 2.x correct tells STAR SJ.out.tab from BED6 itself (ssUtils.addOtherJuncs).
+        flag = pick(cf, "-j", "--shortread")
+        cmd += [flag, junctions]
+        log.data["junctions"] = {"path": a.junctions, "format": junction_format(junctions),
+                                 "command": "correct", "flag": flag}
     log.run(cmd, cwd=work, label="flair_correct", what="flair correct")
     corrected = first_existing([corr + "_all_corrected.bed"])
     if not corrected:
@@ -803,6 +823,68 @@ def run_correct_collapse(a, log, prof, flair, work, bam, reads, genome, gtf, use
     return prefix
 
 
+# --------------------------------------------------------------------------------------------
+# Splice junctions (CONTRACTS A41)
+# --------------------------------------------------------------------------------------------
+# Every junction option any supported FLAIR offers, so a user's transcriptome_args that already
+# name one are caught before FLAIR sees two.
+JUNCTION_FLAGS = ("--junction_star", "--junction_tab", "--junction_bed", "--shortread", "-j")
+
+
+def junction_format(path):
+    """'star' for a STAR SJ.out.tab (9 tab-separated columns, strand 0/1/2 in column 4), else 'bed'.
+    Only the first data line is read."""
+    with open_text(path) as fh:
+        for line in fh:
+            if not line.strip() or line.startswith(("#", "track", "browser")):
+                continue
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) == 9 and cols[3] in ("0", "1", "2"):
+                return "star"
+            return "bed"
+    raise AdapterError("--junctions %s has no junction lines" % path)
+
+
+def transcriptome_junction_flag(flags, fmt):
+    """The >=3 transcriptome option for this junction format, from this FLAIR's --help."""
+    order = ("--junction_star", "--junction_tab") if fmt == "star" else ("--junction_bed",)
+    for name in order:
+        if name in (flags or ()):
+            return name
+    return None
+
+
+def junctions_to_regions(junctions, regions, work, log):
+    """Keep only junctions on the --regions chromosomes: FLAIR then sees the same chromosomes in
+    the BAM, the genome and the junctions."""
+    chroms = set()
+    with open_text(regions) as fh:
+        for line in fh:
+            if line.strip() and not line.startswith(("#", "track", "browser")):
+                chroms.add(line.split("\t", 1)[0].strip())
+    sub = os.path.join(work, "regions.junctions" + (".tab" if junctions.endswith(".tab") else ".bed"))
+    kept = total = 0
+    with open_text(junctions) as fh, open(sub, "w") as out:
+        for line in fh:
+            if not line.strip():
+                continue
+            total += 1
+            if line.split("\t", 1)[0] in chroms:
+                out.write(line)
+                kept += 1
+    log.note("junctions restricted to the --regions chromosomes: %d of %d lines kept" % (kept, total))
+    return sub
+
+
+def check_junction_args(a, user_toks):
+    if a.junctions and has_flag(user_toks, *JUNCTION_FLAGS):
+        given = [t.split("=", 1)[0] for t in user_toks if t.split("=", 1)[0] in JUNCTION_FLAGS]
+        raise AdapterError(
+            "this run has a junctions file (%s, from runs.yaml `junctions:` or the samples.csv "
+            "`junctions` column) and its transcriptome_args also set %s. Give the junctions in one "
+            "place only." % (a.junctions, " ".join(given)))
+
+
 def step_assemble(a, log, prof, flair, work):
     if prof.get("assemble_cli") is None:
         raise Skip("this FLAIR (%s) has neither `transcriptome` nor `correct`+`collapse`" % prof["flair_version"])
@@ -813,10 +895,14 @@ def step_assemble(a, log, prof, flair, work):
     genome = ensure_fai(genome, work, log, flair)
     if not os.path.exists(bam + ".bai") and not os.path.exists(re.sub(r"\.bam$", ".bai", bam)):
         log.warn("no .bai next to %s; FLAIR needs an indexed BAM" % bam)
+    junctions = require_file(a.junctions, "--junctions") if a.junctions else None
     if a.regions:
         regions = require_file(a.regions, "--regions")
         bam = subset_bam(bam, regions, work, log, flair)
         log.note("BAM restricted to --regions with samtools view -L (reads overlapping the regions)")
+        if junctions:
+            junctions = junctions_to_regions(junctions, regions, work, log)
+    a.junctions_used = junctions
     if prof["assemble_cli"] == "transcriptome":
         user_toks = split_user_args(a.args, prof["transcriptome"]["flags"], log, "transcriptome")
         prefix = run_transcriptome(a, log, prof, flair, work, bam, genome, gtf, user_toks)
@@ -1259,6 +1345,10 @@ def build_parser():
     s.add_argument("--gtf", required=True)
     s.add_argument("--args", default="", help="appended verbatim to transcriptome/collapse")
     s.add_argument("--regions", default=None, help="BED: restrict the BAM to these regions")
+    s.add_argument("--junctions", default=None,
+                   help="optional; splice junctions (STAR SJ.out.tab or BED6 with read counts in the "
+                        "score column), given to 2.x `correct -j` or to the >=3 transcriptome junction "
+                        "option for that format (CONTRACTS A41)")
     s.add_argument("--sample", default="flaireval", help="--sample_name for FLAIR versions that need one")
     common(s)
 

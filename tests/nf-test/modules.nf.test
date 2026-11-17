@@ -14,7 +14,7 @@ nextflow_process {
                 input[0] = [
                     [id: 's/r', sample: 's', run_id: 'r', platform: 'ont', library: 'dRNA', run: [id: 'r', transcriptome_args: "--stringent --note it's here"]],
                     file("\${d}/sampleC.bam"), file("\${d}/sampleC.bam.bai"), file("\${d}/sampleA.fastq"),
-                    file("\${d}/genome.fa"), [], file("\${d}/annotation.gtf"),
+                    file("\${d}/genome.fa"), [], file("\${d}/annotation.gtf"), file("\${d}/junctions_a.bed"),
                     [conda_prefix: "\${d}/fake_flair_prefix", container: null],
                 ]
                 input[1] = file("\${d}/regions.bed")
@@ -30,6 +30,7 @@ nextflow_process {
             assert rec.opts.bam == 'sampleC.bam'
             assert rec.opts.reads == 'sampleA.fastq'
             assert rec.opts.regions == 'regions.bed'
+            assert rec.opts.junctions == 'junctions_a.bed'      // A41
             assert rec.opts.sample == 's'
             assert rec.opts.platform == 'ont'
             assert rec.opts.library == 'dRNA'
@@ -46,7 +47,7 @@ nextflow_process {
                 input[0] = [
                     [id: 's/r', sample: 's', run_id: 'r', platform: null, library: null, run: [id: 'r', transcriptome_args: '']],
                     file("\${d}/sampleC.bam"), file("\${d}/sampleC.bam.bai"), [],
-                    file("\${d}/genome.fa"), [], file("\${d}/annotation.gtf"),
+                    file("\${d}/genome.fa"), [], file("\${d}/annotation.gtf"), [],
                     [conda_prefix: "\${d}/fake_flair_prefix", container: null],
                 ]
                 input[1] = []
@@ -56,7 +57,7 @@ nextflow_process {
         then {
             assert process.success
             def rec = path("${process.out.dir[0][1]}/argv.json").json
-            ['reads', 'regions', 'platform', 'library'].each { k -> assert !rec.opts.containsKey(k) }
+            ['reads', 'regions', 'junctions', 'platform', 'library'].each { k -> assert !rec.opts.containsKey(k) }
             assert rec.opts.args == ''
         }
     }

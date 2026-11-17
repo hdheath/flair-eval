@@ -17,7 +17,7 @@ def ID_PATTERN()        { '^[A-Za-z0-9][A-Za-z0-9._-]*$' }
 def SAMPLE_COLUMNS()    { ['sample', 'reads', 'bam', 'genome', 'gtf', 'platform', 'library', 'cage', 'pas', 'junctions', 'spikein_gtf'] }
 def SAMPLE_FILE_COLUMNS() { ['reads', 'bam', 'genome', 'gtf', 'cage', 'pas', 'junctions', 'spikein_gtf'] }
 def QUICK_SAMPLE_PARAMS() { ['reads', 'bam', 'genome', 'gtf', 'sample', 'platform', 'library'] }
-def RUN_KEYS()          { ['id', 'flair', 'transcriptome_args', 'quantify', 'productivity', 'own_align', 'label', 'tags'] }
+def RUN_KEYS()          { ['id', 'flair', 'transcriptome_args', 'junctions', 'quantify', 'productivity', 'own_align', 'label', 'tags'] }
 def FLAIR_SOURCES()     { ['release', 'git', 'env', 'container'] }
 // A26: end references and TUSCO list, given as params or filled from the genome preset
 def REF_PARAMS()        { ['ref_tss', 'ref_pas', 'tusco'] }
@@ -504,7 +504,7 @@ def loadRunsYaml(String yamlPath, List errors) {
     doc.runs.eachWithIndex { r, i ->
         def where = (r instanceof Map && r.id) ? "runs file entry ${i + 1} (id '${r.id}')" : "runs file entry ${i + 1}"
         def nBefore = errors.size()
-        def run = checkRun(r, where, errors)
+        def run = checkRun(r, where, errors, f.parent)
         if (run && seen.containsKey(run.id)) {
             errors << "runs file entries ${seen[run.id]} and ${i + 1} both use run id '${run.id}'. Run ids must be unique: give each run in runs.yaml its own explicit id."
         }
@@ -521,7 +521,7 @@ def loadRunsYaml(String yamlPath, List errors) {
     return runs
 }
 
-def checkRun(Object r, String where, List errors) {
+def checkRun(Object r, String where, List errors, Object baseDir = null) {
     if (!(r instanceof Map)) {
         errors << "${where}: each run must be a mapping with at least 'id' and 'flair'."
         return null
@@ -553,6 +553,21 @@ def checkRun(Object r, String where, List errors) {
             ok = false
         }
     }
+    // A41: a run's own junctions file, used instead of each sample's junctions column.
+    def junctions = null
+    if (r.containsKey('junctions')) {
+        if (!(r.junctions instanceof String) || !r.junctions) {
+            errors << "${where}: 'junctions' must be the path to a junctions file (STAR SJ.out.tab or BED), as text."
+            ok = false
+        }
+        else {
+            junctions = resolveInputPath(r.junctions, baseDir)
+            if (!junctions.exists()) {
+                errors << "${where}: junctions file '${r.junctions}' does not exist${isRelative(r.junctions) && baseDir ? ' (looked next to the runs file and in the launch directory)' : ''}."
+                ok = false
+            }
+        }
+    }
     ['quantify', 'productivity', 'own_align'].each { k ->
         if (r.containsKey(k) && !(r[k] instanceof Boolean)) {
             errors << "${where}: '${k}' must be true or false, not '${r[k]}'."
@@ -575,7 +590,7 @@ def checkRun(Object r, String where, List errors) {
     if (!ok) {
         return null
     }
-    return normaliseRun(r)
+    return normaliseRun(junctions ? r + [junctions: junctions.toString()] : r)
 }
 
 def checkFlairSource(Object fl, String where, List errors) {
@@ -629,7 +644,7 @@ def checkFlairSource(Object fl, String where, List errors) {
 
 def normaliseRun(Map r) {
     def fl = r.flair.collectEntries { k, v -> [(k): v.toString()] }
-    return [
+    def run = [
         id                : r.id.toString(),
         flair             : fl,
         transcriptome_args: (r.transcriptome_args ?: '').toString(),
@@ -639,6 +654,11 @@ def normaliseRun(Map r) {
         label             : (r.label ?: r.id).toString(),
         tags              : (r.tags ?: [:]).collectEntries { k, v -> [(k.toString()): v.toString()] },
     ]
+    // A41: only present when the run names its own junctions file (the schema wants text).
+    if (r.junctions) {
+        run.junctions = r.junctions.toString()
+    }
+    return run
 }
 
 /*

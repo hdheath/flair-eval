@@ -59,6 +59,14 @@ def test_runs_yaml_parses_back_and_validates(two_runs):
     assert isinstance(doc["runs"][0]["flair"]["release"], str)
 
 
+def test_runs_yaml_writes_junctions_only_when_set(two_runs):
+    runs = [dict(two_runs[0], junctions="/ref/SJ.out.tab"), two_runs[1]]
+    doc = yaml.safe_load(config.runs_yaml(runs))
+    assert validate_runs(doc) == []
+    assert doc["runs"][0]["junctions"] == "/ref/SJ.out.tab"
+    assert "junctions" not in doc["runs"][1]
+
+
 def test_runs_yaml_quotes_number_like_versions():
     doc = yaml.safe_load(config.runs_yaml([{"id": "a", "flair": {"release": "3.0"}}]))
     assert doc["runs"][0]["flair"]["release"] == "3.0"

@@ -1,6 +1,7 @@
 /*
  * ASSEMBLE: flair transcriptome (>=3) or correct+collapse (2.x) through the adapter, inside the
  * run's FLAIR env. Writes the normalised files of CONTRACTS section 2 into assemble/.
+ * `junctions` is the job's junctions file or [] (A41: runs.yaml `junctions:`, else the sample's column).
  */
 include { adapterOptFlags } from '../adapter_opts'
 
@@ -12,7 +13,7 @@ process ASSEMBLE {
     container { flair_env.container ?: null }
 
     input:
-    tuple val(meta), path(bam), path(bai), path(reads), path(genome), path(genome_fai), path(gtf), val(flair_env)
+    tuple val(meta), path(bam), path(bai), path(reads), path(genome), path(genome_fai), path(gtf), path(junctions), val(flair_env)
     path(regions)
 
     output:
@@ -33,6 +34,7 @@ process ASSEMBLE {
         --args='${args.replace("'", "'\\''")}' \\
         --threads ${task.cpus} \\
         ${regions ? "--regions ${regions}" : ''} \\
+        ${junctions ? "--junctions ${junctions}" : ''} \\
         --out assemble \\
         \${OPT[@]+"\${OPT[@]}"}
 
@@ -53,7 +55,7 @@ process ASSEMBLE {
     printf '>iso1_stub\\nACGTACGTAC\\n' > assemble/isoforms.fa
     printf 'read1\\tiso1_stub\\n' > assemble/read_map.tsv
     cat > assemble/adapter_log.json <<'JSON'
-${groovy.json.JsonOutput.toJson([step: 'assemble', stub: true, commands: [], args: meta.run.transcriptome_args])}
+${groovy.json.JsonOutput.toJson([step: 'assemble', stub: true, commands: [], args: meta.run.transcriptome_args, junctions: junctions ? junctions.toString() : null])}
 JSON
     """
 }

@@ -101,6 +101,8 @@ def runs_yaml(runs: list[dict]) -> str:
             if k in r.get("flair", {}):
                 lines.append(f"      {k}: {_q(r['flair'][k])}")
         lines.append(f"    transcriptome_args: {_q(r.get('transcriptome_args', ''))}")
+        if r.get("junctions"):
+            lines.append(f"    junctions: {_q(r['junctions'])}")
         for k in ("quantify", "productivity", "own_align"):
             v = r.get(k, RUN_DEFAULTS[k])
             lines.append(f"    {k}: {'true' if v else 'false'}")

@@ -7,7 +7,7 @@ Machine-readable parts are in `assets/schema/*.json`. Architecture: [DESIGN.md](
 User guide: [usage.md](usage.md); outputs: [output.md](output.md).
 
 Change an interface here and in the schemas together, in the same commit. Rules carry tags
-`A1`–`A40`, `A42`–`A44` from the rounds in which they were agreed; code comments cite them, and
+`A1`–`A44` from the rounds in which they were agreed; code comments cite them, and
 [section 7](#7-rule-index) lists where each one now lives.
 
 `legacy/` holds the old multi-assembler pipeline. Read it and port from it; never edit it.
@@ -24,7 +24,7 @@ Change an interface here and in the schemas together, in the same commit. Rules 
 | `gtf` | yes, unless `genome` is a preset | reference annotation |
 | `platform` | no | `pacbio` \| `ont` |
 | `library` | no | `cDNA` \| `dRNA` |
-| `junctions` | no | splice junctions for this sample: STAR `SJ.out.tab` or BED (BED6+, read count in the score column). EVALUATE_STRUCTURE scores every run's junctions against it (section 13, A42) |
+| `junctions` | no | splice junctions for this sample: STAR `SJ.out.tab` or BED (BED6+, read count in the score column). Given to FLAIR's assembly step (A41), and EVALUATE_STRUCTURE scores every run's junctions against it (section 13, A42) |
 | `cage`, `pas`, `spikein_gtf` | no | reserved: parsed, checked and passed through; no step uses them yet. Truth sets for end accuracy come from `--truth` (section 12), not from `cage`/`pas` |
 
 Relative paths are resolved against the CSV's directory first, then the launch directory (A3).
@@ -39,6 +39,8 @@ runs:
       # env: "/abs/path/to/conda/env"
       # container: "docker://..." | "/abs/path/image.sif"
     transcriptome_args: ""         # optional, appended verbatim to flair transcriptome / 2.x collapse
+    junctions: /ref/SJ.out.tab     # optional (A41): this run's junctions on every sample, instead of
+                                   # each sample's junctions column; relative = next to runs.yaml, then launch dir
     quantify: true                 # optional, default true
     productivity: true             # optional, default true
     own_align: false               # optional, default false (true = this run aligns its own BAM)
@@ -122,7 +124,7 @@ Runs *inside* the FLAIR env (stdlib only) and is the only thing that calls `flai
 patches FLAIR.
 ```
 flair_adapter.py align        --reads R --genome G [--gtf A] --threads N --out DIR
-flair_adapter.py assemble     --bam B [--reads R] --genome G --gtf A --args "…" --threads N --out DIR [--regions BED] [--sample S]
+flair_adapter.py assemble     --bam B [--reads R] --genome G --gtf A --args "…" --threads N --out DIR [--regions BED] [--junctions J] [--sample S]
 flair_adapter.py quantify     --isoforms-fa F [--reads R] --sample S [--bam B --genome G --isoforms-bed I --flair-bed FB] --threads N --out DIR
 flair_adapter.py productivity --isoforms-bed B --genome G --gtf A [--flair-bed FB] --out DIR
 flair_adapter.py detect       [--json]
@@ -141,6 +143,14 @@ The four step commands also take `--flair-bin` and `--keep-work`, and all of the
 - `--platform` and `--library` are recorded in `adapter_log.json` and mapped to version flags
   only where FLAIR's own help ties a flag to the library type (A9); each mapping is in
   [flair_versions.md](flair_versions.md#5---platform-and---library-a9).
+- `assemble --junctions` (A41). The job's junctions file is the run's `junctions:` if set, else the
+  sample's `junctions` column, else none; the bundle records it as `inputs.junctions`. The adapter
+  gives it to 2.x `flair correct -j`/`--shortread` (2.x tells STAR from BED itself), or to the ≥3
+  transcriptome option for its format, read from `--help`: STAR `SJ.out.tab` (9 columns, strand
+  0/1/2 in column 4) → `--junction_star`, else `--junction_tab`; anything else → `--junction_bed`.
+  A version with no matching option gets a warning and no junctions. With `--regions` the file is
+  cut to the regions' chromosomes. A junction flag in `transcriptome_args` as well is an error.
+  `adapter_log.json` records `junctions: {path, format, command, flag}`.
 - `assemble` and BAM-based `quantify` run `samtools faidx` first when the genome has no `.fai`
   (second guard for A23).
 - An unsupported step writes `skipped.json` and exits 0.
@@ -291,6 +301,7 @@ Where each tagged rule lives now.
 | A12–A15, A17, A18, A24 (bundle contents, provenance, run order, launch id) | 3 (A17, A24 also 4) |
 | A16, A19, A21 (sections, one implementation, reads vs BAM counts) | 8 |
 | A20, A23 (adapter flags, genome `.fai`) | 2 |
+| A41 (splice junctions: samples.csv column, runs.yaml key, adapter flag) | 1, 2 |
 | A22 (baseline across launches) | 4 |
 | A25 (phoenix defaults) | 9 |
 | A26–A32, A35 (end references, TUSCO, priming, variation; as built) | 10 |

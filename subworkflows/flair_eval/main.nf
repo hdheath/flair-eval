@@ -139,7 +139,7 @@ workflow FLAIR_EVAL {
             .join(ch_job_ref)
             .map { id, bam, bai, _json, env, g, fai, a ->
                 def j = J[id]
-                [j, bam, bai, S[j.sample].reads ?: [], g, fai, a, env]
+                [j, bam, bai, S[j.sample].reads ?: [], g, fai, a, jobJunctions(j, S[j.sample]) ?: [], env]
             },
         regions
     )
@@ -244,6 +244,7 @@ def bundleInfo(Map j, Map s, List parts) {
             gtf     : s.gtf?.toString(),
             reads   : s.reads?.toString(),
             bam     : s.bam?.toString(),
+            junctions: jobJunctions(j, s)?.toString(),
             regions : params.regions ? file(params.regions).toString() : null,
             platform: s.platform,
             library : s.library,
@@ -305,6 +306,15 @@ def readTaskTrace(Object stepDir) {
 def traceNum(Map raw, String k) {
     def v = raw[k]
     return v != null && v.isNumber() ? v.toBigDecimal() : null
+}
+
+// A41: the job's junctions file: the run's own (runs.yaml `junctions:`), else the sample's
+// `junctions` column, else null.
+def jobJunctions(Map j, Map s) {
+    if (j.run.junctions) {
+        return file(j.run.junctions)
+    }
+    return s.junctions ?: null
 }
 
 // <genome>.fai next to the genome, or [] (nothing to stage).
