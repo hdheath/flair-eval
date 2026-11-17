@@ -738,8 +738,10 @@ def find_native_outputs(prefix):
         "gtf": first_existing([prefix + ".isoforms.gtf"]),
         "fa": first_existing([prefix + ".isoforms.fa"]),
         "map": first_existing([prefix + ".isoform.read.map.txt", prefix + ".isoform.read.map.tsv",
-                               prefix + ".isoforms.read.map.txt"]),
-        "counts": first_existing([prefix + ".isoform.counts.txt", prefix + ".isoform.counts.tsv"]),
+                               prefix + ".isoforms.read.map.txt",
+                               prefix + ".isoforms.read.map.tsv"]),   # dev b7a311c (plural names)
+        "counts": first_existing([prefix + ".isoform.counts.txt", prefix + ".isoform.counts.tsv",
+                                  prefix + ".isoforms.counts.tsv"]),  # dev b7a311c
     }
 
 

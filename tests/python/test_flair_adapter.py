@@ -1014,3 +1014,18 @@ def test_no_samtools_warns_and_continues(fake, tmp_path):
     log = json.load(open(out / "adapter_log.json"))
     assert log["genome_index"]["action"] == "missing"
     assert any("no samtools" in w for w in log["warnings"])
+
+
+def test_native_outputs_found_under_dev_b7a311c_plural_names(tmp_path):
+    # FLAIR dev b7a311c names the read map and counts isoforms.read.map.tsv / isoforms.counts.tsv (plural);
+    # older FLAIRs use isoform.* and must still be found.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("flair_adapter", ADAPTER)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    prefix = str(tmp_path / "flair")
+    for suffix in (".isoforms.bed", ".isoforms.read.map.tsv", ".isoforms.counts.tsv"):
+        (tmp_path / ("flair" + suffix)).write_text("x\n")
+    nat = mod.find_native_outputs(prefix)
+    assert nat["map"] == prefix + ".isoforms.read.map.tsv"
+    assert nat["counts"] == prefix + ".isoforms.counts.tsv"
