@@ -445,6 +445,525 @@
    "ends_only": 0,
    "splice_only": 34,
    "both": 0
+  },
+  "structure_qc": {
+   "subcategories": {
+    "ISM": {
+     "3prime_fragment": 17,
+     "5prime_fragment": 11,
+     "internal_fragment": 2,
+     "intron_retention": 6,
+     "mono-exon": 1
+    },
+    "NIC": {
+     "combination_of_known_junctions": 3,
+     "combination_of_known_splicesites": 8,
+     "intron_retention": 7,
+     "mono-exon_by_intron_retention": 0
+    },
+    "NNC": {
+     "at_least_one_novel_splicesite": 13,
+     "intron_retention": 1
+    }
+   },
+   "redundancy": {
+    "fsm_isoforms": 60,
+    "fsm_refs": 60,
+    "fsm_refs_multi": 0,
+    "fsm_ism_isoforms": 97,
+    "fsm_ism_refs": 89,
+    "fsm_ism_refs_multi": 7,
+    "fsm_hist": {
+     "edges": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8,
+      11
+     ],
+     "counts": [
+      60,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "fsm_ism_hist": {
+     "edges": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8,
+      11
+     ],
+     "counts": [
+      82,
+      6,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    }
+   },
+   "by_category": {
+    "length": {
+     "edges": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1500,
+      2000,
+      3000,
+      4000,
+      6000,
+      10000
+     ],
+     "counts": {
+      "FSM": [
+       0,
+       3,
+       9,
+       8,
+       13,
+       8,
+       15,
+       2,
+       1,
+       1,
+       0
+      ],
+      "ISM": [
+       0,
+       2,
+       1,
+       2,
+       10,
+       8,
+       12,
+       2,
+       0,
+       0,
+       0
+      ],
+      "NIC": [
+       0,
+       0,
+       1,
+       2,
+       4,
+       3,
+       5,
+       1,
+       2,
+       0,
+       0
+      ],
+      "NNC": [
+       0,
+       1,
+       2,
+       0,
+       3,
+       1,
+       4,
+       2,
+       1,
+       0,
+       0
+      ],
+      "genic": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "genic_intron": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "antisense": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "intergenic": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "fusion": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     }
+    },
+    "exons": {
+     "edges": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8,
+      11,
+      16,
+      21,
+      31
+     ],
+     "counts": {
+      "FSM": [
+       0,
+       11,
+       9,
+       9,
+       10,
+       6,
+       7,
+       5,
+       1,
+       2,
+       0
+      ],
+      "ISM": [
+       1,
+       7,
+       7,
+       4,
+       0,
+       2,
+       6,
+       6,
+       4,
+       0,
+       0
+      ],
+      "NIC": [
+       0,
+       0,
+       0,
+       0,
+       1,
+       8,
+       5,
+       2,
+       2,
+       0,
+       0
+      ],
+      "NNC": [
+       0,
+       3,
+       1,
+       2,
+       1,
+       0,
+       2,
+       2,
+       0,
+       3,
+       0
+      ],
+      "genic": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "genic_intron": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "antisense": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "intergenic": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "fusion": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     }
+    }
+   },
+   "ref_recovery": {
+    "length": {
+     "edges": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1500,
+      2000,
+      3000,
+      4000,
+      6000,
+      10000
+     ],
+     "all": [
+      13,
+      31,
+      60,
+      69,
+      87,
+      56,
+      91,
+      48,
+      50,
+      50,
+      3
+     ],
+     "fsm": [
+      0,
+      1,
+      8,
+      10,
+      10,
+      8,
+      16,
+      3,
+      1,
+      2,
+      1
+     ]
+    },
+    "exons": {
+     "edges": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8,
+      11,
+      16,
+      21,
+      31
+     ],
+     "all": [
+      37,
+      48,
+      48,
+      78,
+      45,
+      57,
+      79,
+      57,
+      34,
+      35,
+      40
+     ],
+     "fsm": [
+      0,
+      11,
+      9,
+      9,
+      10,
+      6,
+      7,
+      5,
+      1,
+      2,
+      0
+     ]
+    }
+   },
+   "canonical": {
+    "multi_exon": 128,
+    "all_canonical": 127,
+    "by_category": {
+     "FSM": {
+      "n": 60,
+      "all_canonical": 59
+     },
+     "ISM": {
+      "n": 36,
+      "all_canonical": 36
+     },
+     "NIC": {
+      "n": 18,
+      "all_canonical": 18
+     },
+     "NNC": {
+      "n": 14,
+      "all_canonical": 14
+     }
+    }
+   },
+   "rts": {
+    "junctions": 407,
+    "rts": 14,
+    "by_type": {
+     "known_canonical": {
+      "n": 386,
+      "rts": 13
+     },
+     "known_noncanonical": {
+      "n": 1,
+      "rts": 1
+     },
+     "novel_canonical": {
+      "n": 20,
+      "rts": 0
+     },
+     "novel_noncanonical": {
+      "n": 0,
+      "rts": 0
+     }
+    },
+    "isoforms": 128,
+    "isoforms_with_rts": 24,
+    "params": {
+     "pattern": 10,
+     "wiggle": 1,
+     "min_match": 8,
+     "mismatches": 1
+    }
+   },
+   "priming": {
+    "by_category": {
+     "FSM": {
+      "n": 60,
+      "risk": 0
+     },
+     "ISM": {
+      "n": 37,
+      "risk": 0
+     },
+     "NIC": {
+      "n": 18,
+      "risk": 0
+     },
+     "NNC": {
+      "n": 14,
+      "risk": 0
+     }
+    },
+    "by_exons": {
+     "mono": {
+      "n": 1,
+      "risk": 0
+     },
+     "multi": {
+      "n": 128,
+      "risk": 0
+     }
+    },
+    "by_coding": {
+     "coding": {
+      "n": 88,
+      "risk": 0
+     },
+     "noncoding": {
+      "n": 41,
+      "risk": 0
+     }
+    }
+   }
   }
  }
 }

@@ -20,6 +20,7 @@ import sys
 from typing import Dict, Optional
 
 from .concordance import read_header_tsv
+from .structure_qc import coding_priming
 
 # Fixed CPM bins so runs compare bin by bin; the last bin is open-ended.
 CPM_EDGES = [0, 1, 3, 10, 30, 100, 300, 1000, 3000, 10000, 30000]
@@ -97,6 +98,13 @@ def add_sections(bundle_dir: str, quant_input: Optional[str] = None) -> dict:
             sec["quant"]["input"] = qi
     if os.path.exists(os.path.join(bundle_dir, "productivity.tsv")):
         sec["productivity"] = productivity_section(os.path.join(bundle_dir, "productivity.tsv"), ids)
+    # Section 13: internal-priming risk of coding vs non-coding isoforms, once both tables exist.
+    priming = (sec.get("structure_qc") or {}).get("priming")
+    if priming is not None:
+        coding = coding_priming(os.path.join(bundle_dir, "tables", "ends.tsv"),
+                                os.path.join(bundle_dir, "productivity.tsv"))
+        if coding is not None:
+            priming["by_coding"] = coding
     with open(path, "w") as fh:
         json.dump(bundle, fh, indent=1)
         fh.write("\n")

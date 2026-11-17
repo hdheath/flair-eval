@@ -107,8 +107,14 @@ WTC11,,/data/WTC11.bam,hg38,,ont,dRNA
 ```
 - Required: `sample`, `genome`, `gtf`, and `reads` or `bam` (a sorted BAM with its index next to it).
 - `genome` may be a preset (`hg38`); the `gtf` cell may then be left empty.
-- Optional: `platform` (`pacbio`, `ont`) and `library` (`cDNA`, `dRNA`). The columns `cage`, `pas`,
-  `junctions` and `spikein_gtf` are accepted and checked, but no report section uses them yet.
+- Optional: `platform` (`pacbio`, `ont`) and `library` (`cDNA`, `dRNA`).
+- Optional: `junctions`, the sample's splice junctions as a STAR `SJ.out.tab` or a BED with the
+  read count in the score column. The report then shows how many of each run's junctions are in
+  that file. This is independent evidence only when the file comes from short reads (STAR on
+  Illumina); junctions taken from the same long reads (for example intronProspector on the BAM)
+  support the runs by construction.
+- The columns `cage`, `pas` and `spikein_gtf` are accepted and checked, but no report section
+  uses them yet.
 - A relative path is looked up next to `samples.csv` first, then in the folder you launch from.
   Full paths avoid any doubt. `flair-eval run` on phoenix starts the job in `--outdir`, so it
   refuses a path that only works from your current folder.

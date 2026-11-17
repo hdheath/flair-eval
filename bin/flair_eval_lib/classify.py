@@ -41,10 +41,29 @@ best-matching reference transcript with the same chain:
   FSM5  5' end novel, 3' end matches  (SQANTI3 alternative_5end)
   FSM3  3' end novel, 5' end matches  (SQANTI3 alternative_3end)
   FSMTE both ends novel               (SQANTI3 alternative_3end5end)
+
+Call.detail holds the SQANTI3 subcategory of the other spliced classes, with SQANTI3's names
+(src/classification_utils.py and classification_classifiers.py, read 2026-11-16; written anew
+here, no code copied). The isoform is compared with the reference transcript in ref_transcript
+(ISM) or with the gene in ref_gene (NIC/NNC):
+  ISM  intron_retention      an isoform exon overlaps two or more exons of that transcript
+       5prime_fragment       shares its 5'-most junction, not its 3'-most (lacks 3' exons)
+       3prime_fragment       shares its 3'-most junction, not its 5'-most (lacks 5' exons,
+                             the 5'-truncation signal)
+       internal_fragment     shares neither end junction
+       mono-exon             a mono-exon ISM
+  NIC  combination_of_known_junctions    every junction is one of the gene's
+       combination_of_known_splicesites  every site is known, not every junction
+       mono-exon_by_intron_retention     a mono-exon NIC
+  NNC  at_least_one_novel_splicesite
+  NIC/NNC intron_retention   overrides the above when an isoform exon contains a same-strand
+                             reference intron (as SQANTI3 does)
+Other classes have no detail.
 """
 
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -60,6 +79,7 @@ class Call:
     subcategory: str = ""
     ref_transcript: str = ""
     ref_gene: str = ""
+    detail: str = ""
 
 
 def _strands(strand: str) -> Tuple[str, ...]:
@@ -85,6 +105,7 @@ class Reference:
         self.left_sites: Dict[Tuple[str, str, int], Set[str]] = {}
         self.right_sites: Dict[Tuple[str, str, int], Set[str]] = {}
         self.gene_span: Dict[str, Tuple[str, int, int]] = {}
+        self.gene_introns: Dict[str, Set[Tuple[int, int]]] = {}
         self._intron_pos: List[Dict[Tuple[int, int], int]] = []
         for i, t in enumerate(self.tx):
             bins = self._bins.setdefault(t.chrom, {})
@@ -97,8 +118,14 @@ class Reference:
                 self.introns.add((t.chrom, t.strand, a, b))
                 self.left_sites.setdefault((t.chrom, t.strand, a), set()).add(t.gene)
                 self.right_sites.setdefault((t.chrom, t.strand, b), set()).add(t.gene)
+                self.gene_introns.setdefault(t.gene, set()).add((a, b))
             c, s, e = self.gene_span.get(t.gene, (t.chrom, t.start, t.end))
             self.gene_span[t.gene] = (c, min(s, t.start), max(e, t.end))
+        # (chrom, strand) -> introns sorted by start, for the intron-retention test.
+        by_cs: Dict[Tuple[str, str], Set[Tuple[int, int]]] = {}
+        for chrom, strand, a, b in self.introns:
+            by_cs.setdefault((chrom, strand), set()).add((a, b))
+        self._sorted_introns = {k: sorted(v) for k, v in by_cs.items()}
 
     def overlapping(self, chrom: str, start: int, end: int) -> List[int]:
         """Indices of reference transcripts whose span overlaps [start, end)."""
@@ -123,6 +150,22 @@ class Reference:
             return False
         ref = self.tx[i].introns
         return ref[k:k + len(introns)] == introns
+
+    def exon_contains_intron(self, chrom: str, strand: str,
+                             exons: Sequence[Tuple[int, int]]) -> bool:
+        """True when an exon [s, e) holds a whole same-strand reference intron [a, b) with
+        exon sequence on both sides (s < a, b < e): SQANTI3's intron-retention test."""
+        for st in _strands(strand):
+            introns = self._sorted_introns.get((chrom, st))
+            if not introns:
+                continue
+            for s, e in exons:
+                k = bisect.bisect_right(introns, (s, float("inf")))
+                while k < len(introns) and introns[k][0] < e:
+                    if introns[k][1] < e:
+                        return True
+                    k += 1
+        return False
 
 
 def fsm_subcategory(start: int, end: int, strand: str,
@@ -166,6 +209,21 @@ def _exon_overlap(a: Sequence[Tuple[int, int]], b: Sequence[Tuple[int, int]]) ->
     return tot
 
 
+def ism_detail(iso: Transcript, ref: Transcript) -> str:
+    """SQANTI3 ISM subcategory of a multi-exon isoform against the transcript it matches."""
+    for s, e in iso.exons:
+        if sum(1 for rs, re_ in ref.exons if rs < e and s < re_) > 1:
+            return "intron_retention"
+    first = iso.introns[0] == ref.introns[0]
+    last = iso.introns[-1] == ref.introns[-1]
+    minus = (iso.strand if iso.strand in ("+", "-") else ref.strand) == "-"
+    if first and not last:
+        return "3prime_fragment" if minus else "5prime_fragment"
+    if last and not first:
+        return "5prime_fragment" if minus else "3prime_fragment"
+    return "internal_fragment"
+
+
 def _pick(cands: Iterable[Transcript], iso: Transcript) -> Transcript:
     """Deterministic choice among candidate references: closest length, then id."""
     return min(cands, key=lambda t: (abs(t.length - iso.length), t.tid))
@@ -203,7 +261,7 @@ class Classifier:
                and ref.is_sub_chain(i, iso.introns)]
         if ism:
             best = _pick(ism, iso)
-            return Call("ISM", "", best.tid, best.gene)
+            return Call("ISM", "", best.tid, best.gene, ism_detail(iso, best))
 
         genes: Dict[str, int] = {}
         all_known = True
@@ -225,7 +283,19 @@ class Classifier:
             names = sorted(max(locus, key=lambda g: (genes[g], g)) for locus in loci)
             return Call("fusion", "", "", ",".join(names))
         gene = max(genes, key=lambda g: (genes[g], g))
-        return Call("NIC" if all_known else "NNC", "", "", gene)
+        if not all_known:
+            detail = "at_least_one_novel_splicesite"
+        elif all(iv in ref.gene_introns.get(gene, ()) for iv in iso.introns):
+            detail = "combination_of_known_junctions"
+        else:
+            detail = "combination_of_known_splicesites"
+        return Call("NIC" if all_known else "NNC", "", "", gene, self._ir(iso, detail))
+
+    def _ir(self, iso: Transcript, detail: str) -> str:
+        """SQANTI3 lets intron retention override a NIC/NNC subcategory."""
+        if self.ref.exon_contains_intron(iso.chrom, iso.strand, iso.exons):
+            return "intron_retention"
+        return detail
 
     def _separate_loci(self, genes: Dict[str, int]) -> List[List[str]]:
         spans = sorted((self.ref.gene_span[g][0], self.ref.gene_span[g][1],
@@ -252,16 +322,15 @@ class Classifier:
         inside = [t for t in multi if any(es <= s and e <= ee for es, ee in t.exons)]
         if inside:
             best = _pick(inside, iso)
-            return Call("ISM", "", best.tid, best.gene)
+            return Call("ISM", "", best.tid, best.gene, "mono-exon")
         retained = [t for t in multi if any(s <= a and b <= e for a, b in t.introns)]
         if retained:
             best = _pick(retained, iso)
-            return Call("NIC", "", "", best.gene)
+            return Call("NIC", "", "", best.gene, "mono-exon_by_intron_retention")
         return None
 
     # -- shared fallback -------------------------------------------------------------
-    @staticmethod
-    def _no_shared_site(iso: Transcript, same: List[Transcript],
+    def _no_shared_site(self, iso: Transcript, same: List[Transcript],
                         opp: List[Transcript]) -> Call:
         def best_by_overlap(cands):
             scored = [(_exon_overlap(iso.exons, t.exons), t) for t in cands]
@@ -274,7 +343,8 @@ class Classifier:
         if iso.n_exons > 1:
             spliced = best_by_overlap([t for t in same if t.n_exons > 1])
             if spliced is not None:
-                return Call("NNC", "", "", spliced.gene)
+                return Call("NNC", "", "", spliced.gene,
+                            self._ir(iso, "at_least_one_novel_splicesite"))
         hit = best_by_overlap(same)
         if hit is not None:
             return Call("genic", "", "", hit.gene)

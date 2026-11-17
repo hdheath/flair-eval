@@ -465,6 +465,541 @@
    "ends_only": 3,
    "splice_only": 20,
    "both": 1
+  },
+  "structure_qc": {
+   "subcategories": {
+    "ISM": {
+     "3prime_fragment": 0,
+     "5prime_fragment": 4,
+     "internal_fragment": 0,
+     "intron_retention": 1,
+     "mono-exon": 7
+    },
+    "NIC": {
+     "combination_of_known_junctions": 9,
+     "combination_of_known_splicesites": 17,
+     "intron_retention": 8,
+     "mono-exon_by_intron_retention": 6
+    },
+    "NNC": {
+     "at_least_one_novel_splicesite": 14,
+     "intron_retention": 1
+    }
+   },
+   "redundancy": {
+    "fsm_isoforms": 110,
+    "fsm_refs": 107,
+    "fsm_refs_multi": 3,
+    "fsm_ism_isoforms": 122,
+    "fsm_ism_refs": 118,
+    "fsm_ism_refs_multi": 4,
+    "fsm_hist": {
+     "edges": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8,
+      11
+     ],
+     "counts": [
+      104,
+      3,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    },
+    "fsm_ism_hist": {
+     "edges": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8,
+      11
+     ],
+     "counts": [
+      114,
+      4,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+     ]
+    }
+   },
+   "by_category": {
+    "length": {
+     "edges": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1500,
+      2000,
+      3000,
+      4000,
+      6000,
+      10000
+     ],
+     "counts": {
+      "FSM": [
+       5,
+       5,
+       18,
+       23,
+       24,
+       12,
+       15,
+       4,
+       2,
+       2,
+       0
+      ],
+      "ISM": [
+       4,
+       1,
+       1,
+       1,
+       2,
+       1,
+       1,
+       0,
+       1,
+       0,
+       0
+      ],
+      "NIC": [
+       1,
+       2,
+       5,
+       10,
+       13,
+       6,
+       1,
+       0,
+       2,
+       0,
+       0
+      ],
+      "NNC": [
+       0,
+       1,
+       3,
+       3,
+       5,
+       2,
+       1,
+       0,
+       0,
+       0,
+       0
+      ],
+      "genic": [
+       1,
+       0,
+       0,
+       0,
+       2,
+       0,
+       3,
+       1,
+       0,
+       0,
+       0
+      ],
+      "genic_intron": [
+       1,
+       6,
+       0,
+       0,
+       0,
+       1,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "antisense": [
+       4,
+       1,
+       1,
+       0,
+       1,
+       4,
+       2,
+       0,
+       0,
+       0,
+       0
+      ],
+      "intergenic": [
+       1,
+       13,
+       1,
+       1,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "fusion": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     }
+    },
+    "exons": {
+     "edges": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8,
+      11,
+      16,
+      21,
+      31
+     ],
+     "counts": {
+      "FSM": [
+       15,
+       12,
+       9,
+       21,
+       15,
+       8,
+       16,
+       13,
+       0,
+       1,
+       0
+      ],
+      "ISM": [
+       7,
+       2,
+       0,
+       1,
+       0,
+       0,
+       0,
+       0,
+       1,
+       1,
+       0
+      ],
+      "NIC": [
+       6,
+       1,
+       0,
+       6,
+       5,
+       6,
+       15,
+       1,
+       0,
+       0,
+       0
+      ],
+      "NNC": [
+       0,
+       1,
+       0,
+       4,
+       3,
+       2,
+       2,
+       3,
+       0,
+       0,
+       0
+      ],
+      "genic": [
+       7,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "genic_intron": [
+       8,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "antisense": [
+       13,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "intergenic": [
+       16,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "fusion": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ]
+     }
+    }
+   },
+   "ref_recovery": {
+    "length": {
+     "edges": [
+      0,
+      250,
+      500,
+      750,
+      1000,
+      1500,
+      2000,
+      3000,
+      4000,
+      6000,
+      10000
+     ],
+     "all": [
+      13,
+      31,
+      60,
+      69,
+      87,
+      56,
+      91,
+      48,
+      50,
+      50,
+      3
+     ],
+     "fsm": [
+      5,
+      4,
+      18,
+      22,
+      22,
+      14,
+      14,
+      4,
+      2,
+      2,
+      0
+     ]
+    },
+    "exons": {
+     "edges": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8,
+      11,
+      16,
+      21,
+      31
+     ],
+     "all": [
+      37,
+      48,
+      48,
+      78,
+      45,
+      57,
+      79,
+      57,
+      34,
+      35,
+      40
+     ],
+     "fsm": [
+      15,
+      11,
+      9,
+      21,
+      15,
+      7,
+      16,
+      12,
+      0,
+      1,
+      0
+     ]
+    }
+   },
+   "canonical": {
+    "multi_exon": 149,
+    "all_canonical": 148,
+    "by_category": {
+     "FSM": {
+      "n": 95,
+      "all_canonical": 95
+     },
+     "ISM": {
+      "n": 5,
+      "all_canonical": 5
+     },
+     "NIC": {
+      "n": 34,
+      "all_canonical": 34
+     },
+     "NNC": {
+      "n": 15,
+      "all_canonical": 14
+     }
+    }
+   },
+   "rts": {
+    "junctions": 284,
+    "rts": 10,
+    "by_type": {
+     "known_canonical": {
+      "n": 259,
+      "rts": 10
+     },
+     "known_noncanonical": {
+      "n": 0,
+      "rts": 0
+     },
+     "novel_canonical": {
+      "n": 24,
+      "rts": 0
+     },
+     "novel_noncanonical": {
+      "n": 1,
+      "rts": 0
+     }
+    },
+    "isoforms": 149,
+    "isoforms_with_rts": 34,
+    "params": {
+     "pattern": 10,
+     "wiggle": 1,
+     "min_match": 8,
+     "mismatches": 1
+    }
+   },
+   "priming": {
+    "by_category": {
+     "FSM": {
+      "n": 110,
+      "risk": 1
+     },
+     "ISM": {
+      "n": 12,
+      "risk": 0
+     },
+     "NIC": {
+      "n": 40,
+      "risk": 0
+     },
+     "NNC": {
+      "n": 15,
+      "risk": 0
+     },
+     "antisense": {
+      "n": 13,
+      "risk": 0
+     },
+     "genic": {
+      "n": 7,
+      "risk": 1
+     },
+     "genic_intron": {
+      "n": 8,
+      "risk": 0
+     },
+     "intergenic": {
+      "n": 16,
+      "risk": 2
+     }
+    },
+    "by_exons": {
+     "mono": {
+      "n": 72,
+      "risk": 3
+     },
+     "multi": {
+      "n": 149,
+      "risk": 1
+     }
+    },
+    "by_coding": {
+     "coding": {
+      "n": 142,
+      "risk": 1
+     },
+     "noncoding": {
+      "n": 79,
+      "risk": 3
+     }
+    }
+   }
   }
  }
 }

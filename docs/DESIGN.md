@@ -72,8 +72,8 @@ All map onto the same params and schemas:
 5. **`nextflow_schema.json`:** `--help` and validation (it also enables `nf-core pipelines launch`).
 
 ## Not done yet
-- Report sections that use a sample's own `cage`, `pas`, `junctions` or `spikein_gtf` (the
-  columns are parsed but unused). End accuracy against a sample's own end calls uses `--truth`
+- Report sections that use a sample's own `cage`, `pas` or `spikein_gtf` (the columns are
+  parsed but unused). End accuracy against a sample's own end calls uses `--truth`
   instead (CONTRACTS section 12).
 - `--truth` in the CLI and the builder. Metric-registry rows for truth sets.
 - A Loci tab and a read 5′-end heatmap (need read alignments in the bundle).

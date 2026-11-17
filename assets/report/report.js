@@ -34,7 +34,7 @@
   function trunc(t, n) { return t.length > n ? t.slice(0, Math.max(1, n - 1)) + '…' : t; }
 
   var VIEW_IDS = ['diff', 'structure', 'recovery', 'diversity', 'agreement', 'ends', 'reads', 'compute'];
-  var state = { tab: 'diff', sample: SAMPLES[0], base: DATA.baseline, hidden: {}, layout: 'overlay', printing: false };
+  var state = { tab: 'diff', sample: SAMPLES[0], base: DATA.baseline, hidden: {}, layout: 'overlay', printing: false, qcCat: 'ISM' };
 
   function sampleRuns() { var m = BY[state.sample] || {}; return RUN_ORDER.filter(function (r) { return m[r]; }); }
   function baseId() { var rs = sampleRuns(); return rs.indexOf(state.base) >= 0 ? state.base : rs[0]; }
@@ -474,6 +474,9 @@
   function prodShare(r, k) { var cc = prodCounts(r); if (!cc) return null; var t = sum(Object.keys(cc).map(function (x) { return cc[x]; })); return pc(cc[k] || 0, t); }
   function variation(r) { var v = sec(r, 'variation'); return v && isNum(v.genes_multi) ? v : null; }
   function priming(r) { var p = sec(r, 'priming'); return p && isNum(p.n) ? p : null; }
+  // Section 13 (A42-A44): one key of sections.structure_qc, or null.
+  function sqc(r, k) { var q = sec(r, 'structure_qc'); return q && q[k] ? q[k] : null; }
+  function jsup(r) { var j = sqc(r, 'junction_support'); return j && isNum(j.junctions) ? j : null; }
   function quant(r) { var q = sec(r, 'quant'); return q && isNum(q.reads_assigned) ? q : null; }
   function compute(r, k) { var c = (B(r) || {}).compute; return c && isNum(c[k]) ? c[k] : null; }
   // End accuracy (A40): sections.end_accuracy, every number from ted_end_precision.py. Fractions
@@ -523,6 +526,8 @@
     lostDec: 'needs the isoform files, and read counts for the baseline',
     compute: 'no run-time record (the Nextflow trace was not found)',
     hist: OLDER,
+    structureQc: OLDER,
+    junctionFile: 'needs a junctions file for this sample (the junctions column of samples.csv)',
     others: 'needs a second run on this sample'
   };
 
@@ -556,6 +561,14 @@
   // ------------------------------------------------------------------ metric registry (A34)
   // Each family registers its own rows. lowerIsWorse: true = higher is better, false = lower is
   // better, null = no direction. vsBase rows compare a run with the baseline (none for the baseline).
+  // Share of reference transcripts at least minLen long that have an FSM (structure_qc.ref_recovery).
+  function longRecovery(r, minLen) {
+    var h = get(sqc(r, 'ref_recovery'), 'length');
+    if (!h) return null;
+    var a = 0, f = 0;
+    h.edges.forEach(function (e, i) { if (e >= minLen) { a += h.all[i]; f += h.fsm[i]; } });
+    return pc(f, a);
+  }
   var METRICS = [];
   var FAMS = [];
   function family(fam, tab, rows) { FAMS.push({ fam: fam, tab: tab }); rows.forEach(function (m) { m.fam = fam; m.tab = tab; METRICS.push(m); }); }
@@ -565,7 +578,12 @@
     { name: 'Mono-exon isoforms', k: 'p', lowerIsWorse: null, get: function (r) { var x = B(r).summary; return pc(x.mono_exon, x.isoforms); } },
     { name: 'FSM isoforms', top: true, k: 'p', lowerIsWorse: null, get: function (r) { var x = B(r); return pc(x.categories.FSM, x.summary.isoforms); } },
     { name: 'Novel-junction isoforms (NIC + NNC)', top: true, k: 'p', lowerIsWorse: null, get: function (r) { var x = B(r); return pc((x.categories.NIC || 0) + (x.categories.NNC || 0), x.summary.isoforms); } },
-    { name: 'Known splice junctions', top: true, k: 'p', lowerIsWorse: true, get: function (r) { var j = B(r).junctions; return j ? pc(j.known, j.total) : null; } }
+    { name: 'Known splice junctions', top: true, k: 'p', lowerIsWorse: true, get: function (r) { var j = B(r).junctions; return j ? pc(j.known, j.total) : null; } },
+    { name: 'ISM missing 5′ exons (3′ fragment)', k: 'p', lowerIsWorse: false, needs: 'structureQc', get: function (r) { var q = sqc(r, 'subcategories'); return q ? pc(q.ISM['3prime_fragment'], B(r).categories.ISM) : null; } },
+    { name: 'Multi-exon isoforms with only canonical junctions', k: 'p', lowerIsWorse: true, needs: 'structureQc', get: function (r) { var c = sqc(r, 'canonical'); return c ? pc(c.all_canonical, c.multi_exon) : null; } },
+    { name: 'RT-switching junctions', k: 'p', lowerIsWorse: false, needs: 'structureQc', get: function (r) { var t = sqc(r, 'rts'); return t ? pc(t.rts, t.junctions) : null; } },
+    { name: 'Junctions in the sample’s junctions file', top: true, k: 'p', lowerIsWorse: true, needs: 'junctionFile', get: function (r) { var j = jsup(r); return j ? pc(j.supported, j.junctions) : null; } },
+    { name: 'Multi-exon isoforms with every junction in the junctions file', k: 'p', lowerIsWorse: true, needs: 'junctionFile', get: function (r) { var j = jsup(r); return j ? pc(j.all_supported, j.multi_exon) : null; } }
   ]);
   // noRank: listed, but kept out of "Biggest differences" (it repeats the exact-ends row on Ends).
   // sameQuant: ranked only when the run and the baseline counted reads the same way (A21).
@@ -577,7 +595,8 @@
     { name: 'TUSCO precision (isoforms)', top: true, k: 'p', lowerIsWorse: true, needs: 'tusco', get: function (r) { var t = tusco(r); return t ? asPct(t.precision) : null; } },
     { name: 'TUSCO genes missed', k: 'n', lowerIsWorse: false, needs: 'tusco', get: function (r) { var t = tusco(r); return t ? t.FN : null; } },
     { name: 'Genes lost vs baseline', k: 'n', lowerIsWorse: false, vsBase: true, needs: 'conc', get: function (r) { var g = genesVs(r); return g ? g.lost.length : null; } },
-    { name: 'Genes gained vs baseline', k: 'n', lowerIsWorse: null, vsBase: true, needs: 'conc', get: function (r) { var g = genesVs(r); return g ? g.gained.length : null; } }
+    { name: 'Genes gained vs baseline', k: 'n', lowerIsWorse: null, vsBase: true, needs: 'conc', get: function (r) { var g = genesVs(r); return g ? g.gained.length : null; } },
+    { name: 'Reference transcripts of 3 kb or more with an FSM', k: 'p', lowerIsWorse: true, needs: 'structureQc', get: function (r) { return longRecovery(r, 3000); } }
   ]);
   family('Diversity', 'diversity', [
     { name: 'Isoforms per gene (mean)', k: 'f2', lowerIsWorse: null, get: function (r) { var x = B(r).summary; return x.genes ? x.isoforms / x.genes : null; } },
@@ -585,7 +604,8 @@
     { name: 'Productive (PRO)', k: 'p', lowerIsWorse: null, needs: 'productivity', get: function (r) { return prodShare(r, 'PRO'); } },
     { name: 'Premature stop, NMD candidate (PTC)', k: 'p', lowerIsWorse: null, needs: 'productivity', get: function (r) { return prodShare(r, 'PTC'); } },
     { name: 'Genes differing by ends only', k: 'p', lowerIsWorse: null, needs: 'variation', get: function (r) { var v = variation(r); return v ? pc(v.ends_only, v.genes_multi) : null; } },
-    { name: 'Genes differing by splicing only', k: 'p', lowerIsWorse: null, needs: 'variation', get: function (r) { var v = variation(r); return v ? pc(v.splice_only, v.genes_multi) : null; } }
+    { name: 'Genes differing by splicing only', k: 'p', lowerIsWorse: null, needs: 'variation', get: function (r) { var v = variation(r); return v ? pc(v.splice_only, v.genes_multi) : null; } },
+    { name: 'Reference transcripts with more than one FSM', k: 'p', lowerIsWorse: false, needs: 'structureQc', get: function (r) { var d = sqc(r, 'redundancy'); return d ? pc(d.fsm_refs_multi, d.fsm_refs) : null; } }
   ]);
   family('Agreement', 'agreement', [
     { name: 'Isoforms shared with baseline (Jaccard)', k: 'f2', lowerIsWorse: null, vsBase: true, needs: 'conc', get: function (r) { var p = concPair(r); return p ? p.jaccard : null; } },
@@ -599,7 +619,8 @@
     { name: '3′ end within 50 bp of PolyA_DB', top: true, k: 'p', lowerIsWorse: true, needs: 'tes', get: function (r) { return within(r, 'tes', 50); } },
     { name: 'PolyA motif before the 3′ end', k: 'p', lowerIsWorse: true, needs: 'motif', get: function (r) { var m = get(B(r), 'sections.ends.polya_motif'); return m ? pc(m.n_with_motif, m.n) : null; } },
     { name: 'FSM isoforms with exact ends', k: 'p', lowerIsWorse: true, get: function (r) { var x = B(r); return pc(x.fsm_subcategories.CIM, x.categories.FSM); } },
-    { name: 'Internal-priming risk', top: true, k: 'p', lowerIsWorse: false, needs: 'priming', get: function (r) { var p = priming(r); return p ? pc(p.risk, p.n) : null; } }
+    { name: 'Internal-priming risk', top: true, k: 'p', lowerIsWorse: false, needs: 'priming', get: function (r) { var p = priming(r); return p ? pc(p.risk, p.n) : null; } },
+    { name: 'Internal-priming risk, multi-exon isoforms', k: 'p', lowerIsWorse: false, needs: 'structureQc', get: function (r) { var p = sqc(r, 'priming'); return p ? pc(p.by_exons.multi.risk, p.by_exons.multi.n) : null; } }
   ]);
   family('Quantification', 'reads', [
     { name: 'Reads assigned', top: true, sameQuant: true, k: 'n', lowerIsWorse: null, needs: 'quant', get: function (r) { var q = quant(r); return q ? q.reads_assigned : null; } },
@@ -718,7 +739,9 @@
     ['refTSS, PolyA_DB', 'databases of known transcription start sites and poly(A) cleavage sites'],
     ['Jaccard', 'shared ÷ all, from 0 (nothing shared) to 1 (identical)'],
     ['CPM', 'counts per million assigned reads'],
-    ['PTC, NMD', 'premature stop codon; such isoforms are candidates for nonsense-mediated decay']
+    ['PTC, NMD', 'premature stop codon; such isoforms are candidates for nonsense-mediated decay'],
+    ['3′ fragment', 'an ISM isoform that matches the 3′ junctions of a reference transcript but lacks its 5′ exons (SQANTI3 3prime_fragment), the usual sign of a 5′-truncated read'],
+    ['RT switching', 'a junction whose donor and acceptor sides share a short repeat, so the reverse transcriptase may have jumped across it and made a false intron (SQANTI3 definition)']
   ];
   function terms(root) {
     var body = card(root, { title: 'Terms', wide: true });
@@ -842,6 +865,66 @@
         vhist(body, { runs: ok, bins: nm, ticks: h[3] ? nm : e.edges.slice(0, e.counts.length).map(function (x, i) { return i === e.edges.length - 1 ? '≥' + kfmt(x) : kfmt(x); }), counts: byRun(ok, function (r) { return histOf(r, h[0]).counts; }), xlab: h[2], xname: h[2] });
       });
     });
+    structureQc(g);
+  }
+
+  // Section 13 (A44): SQANTI3-style checks on the Structure tab.
+  var SUB_LABEL = {
+    '3prime_fragment': '3′ fragment (missing 5′ exons)', '5prime_fragment': '5′ fragment (missing 3′ exons)',
+    internal_fragment: 'Internal fragment', intron_retention: 'Intron retention', 'mono-exon': 'Mono-exon',
+    combination_of_known_junctions: 'Known junctions, new combination', combination_of_known_splicesites: 'Known splice sites, new junction',
+    'mono-exon_by_intron_retention': 'Mono-exon, retains an intron', at_least_one_novel_splicesite: 'At least one new splice site'
+  };
+  function structureQc(g) {
+    var subs = [];
+    ['ISM', 'NIC', 'NNC'].forEach(function (c) {
+      var ks = {};
+      sel().forEach(function (r) { var q = sqc(r, 'subcategories'); if (q && q[c]) Object.keys(q[c]).forEach(function (k) { if (q[c][k] > 0) ks[k] = 1; }); });
+      Object.keys(ks).forEach(function (k) { subs.push([c, k]); });
+    });
+    panel(g, { title: 'ISM, NIC and NNC subcategories', wide: true, dek: 'SQANTI3 subcategories, as shares of each class’s isoforms. Many ISM 3′ fragments point to 5′-truncated reads. Intron retention: an exon spans a reference intron.' },
+      function (r) { return sqc(r, 'subcategories'); }, NEEDS.structureQc, function (body, ok) {
+        if (!subs.length) { note(body, 'No run has ISM, NIC or NNC isoforms.'); return; }
+        hbars(body, { runs: ok, cats: subs.map(function (x) { return x[0] + ' · ' + (SUB_LABEL[x[1]] || x[1]); }), labelW: 250, fmt: function (v) { return pct(v); },
+          vals: byRun(ok, function (r) { var q = sqc(r, 'subcategories'), cs = B(r).categories; return subs.map(function (x) { return pc(q[x[0]][x[1]], cs[x[0]]); }); }),
+          tip: function (r, i) { var x = subs[i], n = sqc(r, 'subcategories')[x[0]][x[1]], d = B(r).categories[x[0]]; return N(n) + ' of ' + N(d) + ' ' + x[0] + ' (' + pct(pc(n, d)) + ')'; } });
+      });
+    var rows = [
+      ['Multi-exon isoforms, only canonical junctions', function (r) { var c = sqc(r, 'canonical'); return c ? [c.all_canonical, c.multi_exon, 'multi-exon isoforms'] : null; }],
+      ['Junctions with an RT-switching repeat', function (r) { var t = sqc(r, 'rts'); return t ? [t.rts, t.junctions, 'junctions'] : null; }],
+      ['Isoforms with an RT-switching junction', function (r) { var t = sqc(r, 'rts'); return t ? [t.isoforms_with_rts, t.isoforms, 'multi-exon isoforms'] : null; }],
+      ['Junctions in the junctions file', function (r) { var j = jsup(r); return j ? [j.supported, j.junctions, 'junctions'] : null; }],
+      ['Known junctions in the junctions file', function (r) { var j = jsup(r); return j ? [j.known.supported, j.known.n, 'known junctions'] : null; }],
+      ['Novel junctions in the junctions file', function (r) { var j = jsup(r); return j ? [j.novel.supported, j.novel.n, 'novel junctions'] : null; }],
+      ['Multi-exon isoforms, every junction in the file', function (r) { var j = jsup(r); return j ? [j.all_supported, j.multi_exon, 'multi-exon isoforms'] : null; }]
+    ];
+    var anySr = sel().some(function (r) { return jsup(r); });
+    if (!anySr) rows = rows.slice(0, 3);
+    panel(g, { title: 'Junction quality', wide: true, dek: 'Canonical: GT-AG, GC-AG or AT-AC. RT switching: the two sides of the junction share an 8-nt repeat (one mismatch allowed), so it may be a reverse-transcription artefact. Junctions file: the junction is in the sample’s junctions file (samples.csv) with at least one read.' },
+      function (r) { return sqc(r, 'canonical') || jsup(r); }, NEEDS.structureQc, function (body, ok) {
+        hbars(body, { runs: ok, cats: rows.map(function (x) { return x[0]; }), max: 100, labelW: 270, fmt: function (v) { return pct(v); },
+          vals: byRun(ok, function (r) { return rows.map(function (x) { var v = x[1](r); return v ? pc(v[0], v[1]) : null; }); }),
+          tip: function (r, i) { var v = rows[i][1](r); return v ? N(v[0]) + ' of ' + N(v[1]) + ' ' + v[2] + ' (' + pct(pc(v[0], v[1])) + ')' : 'not measured'; } });
+        if (anySr) {
+          var f = jsup(ok.filter(jsup)[0]);
+          note(body, 'Junctions file: ' + (f.file || 'the sample’s junctions file') + ', ' + N(f.file_junctions) + ' junctions. This is independent evidence only if the file comes from short reads. If FLAIR was given the same file, or the file was made from the same long reads, support is partly built in.');
+        } else note(body, 'Junctions-file support: hidden, ' + NEEDS.junctionFile + '.');
+      });
+    var cats = CATS.filter(function (c) { return sel().some(function (r) { return B(r).categories[c] > 0; }); });
+    if (cats.indexOf(state.qcCat) < 0) state.qcCat = cats.indexOf('ISM') >= 0 ? 'ISM' : cats[0];
+    panel(g, { title: 'Length and exons by category', wide: true, dek: 'Isoform length and exon count for one structural category at a time. Pick the category below.' },
+      function (r) { return sqc(r, 'by_category'); }, NEEDS.structureQc, function (body, ok) {
+        body.appendChild(el('div', { class: 'no-print', style: 'margin:0 0 8px' }, [segment('Category', cats.map(function (c) { return [c, CAT_LABEL[c]]; }), state.qcCat, function (v) { state.qcCat = v; render(); })]));
+        var two = el('div', { class: 'grid sub' });
+        body.appendChild(two);
+        [['length', 'Isoform length (nt)', false], ['exons', 'Exons', true]].forEach(function (h) {
+          var e = sqc(ok[0], 'by_category')[h[0]], n = e.edges.length, nm = binNames(e.edges, n, h[2]);
+          var box = el('div', {}, [el('p', { class: 'eyebrow', style: 'margin:0 0 6px', text: CAT_LABEL[state.qcCat] + ' · ' + h[1] })]);
+          two.appendChild(box);
+          vhist(box, { runs: ok, bins: nm, ticks: h[2] ? nm : e.edges.map(function (x, i) { return i === n - 1 ? '≥' + kfmt(x) : kfmt(x); }), xlab: h[1], xname: h[1],
+            counts: byRun(ok, function (r) { return sqc(r, 'by_category')[h[0]].counts[state.qcCat] || e.edges.map(function () { return 0; }); }) });
+        });
+      });
   }
 
   // Ends by structural category (Ends tab): do novel classes have less supported ends?
@@ -901,6 +984,16 @@
     var b5 = card(g, { title: 'FSM isoforms with exact ends', dek: 'FSM isoforms, and those with both ends within 50 bp of the matched reference transcript. A recall check: the runs were built with this annotation.' });
     hbars(b5, { cats: ['FSM', 'Both ends within 50 bp'], vals: byRun(runs, function (r) { var x = B(r); return [x.categories.FSM, x.fsm_subcategories.CIM]; }), fmt: N, labelW: 150,
       tip: function (r, i) { var x = B(r); return i ? N(x.fsm_subcategories.CIM) + ' of ' + N(x.categories.FSM) + ' FSM (' + pct(pc(x.fsm_subcategories.CIM, x.categories.FSM)) + ')' : N(x.categories.FSM) + ' isoforms'; } });
+    panel(g, { title: 'Reference transcripts found, by length', dek: 'Share of the reference transcripts in each length bin that have an FSM isoform. Shows whether long transcripts are recovered as often as short ones.' },
+      function (r) { return get(sqc(r, 'ref_recovery'), 'length'); }, NEEDS.structureQc, function (body, ok) {
+        var h0 = sqc(ok[0], 'ref_recovery').length, e = h0.edges, n = e.length;
+        var ticks = e.map(function (x, i) { return i === n - 1 ? '≥' + kfmt(x) : kfmt(x); });
+        var bins = binNames(e, n, false).map(function (nm, i) { return nm + ' nt (' + N(h0.all[i]) + ' reference transcripts)'; });
+        vbars(body, { runs: ok, cap: 100, bins: bins, ticks: ticks, xname: 'Length', xlab: 'Reference transcript length (nt)',
+          vals: byRun(ok, function (r) { var h = sqc(r, 'ref_recovery').length; return h.fsm.map(function (f, i) { return pc(f, h.all[i]); }); }),
+          fmt: function (v) { return pct(v, 0); }, yfmt: tickPct,
+          tip: function (r, i) { var h = sqc(r, 'ref_recovery').length; return N(h.fsm[i]) + ' of ' + N(h.all[i]) + ' reference transcripts (' + pct(pc(h.fsm[i], h.all[i])) + ')'; } });
+      });
     var ld = XS().lost_deciles, lb = ld && ld.by_base ? ld.by_base[b] : null;
     if (!others().length) off(g, 'Who are the lost genes?', NEEDS.others);
     else if (!lb) off(g, 'Who are the lost genes?', NEEDS.lostDec);
@@ -933,6 +1026,12 @@
         fmt: function (v) { return pct(v); }, labelW: 200,
         tip: function (r, i) { var cc = prodCounts(r); return N(cc[ks[i]] || 0) + ' isoforms (' + pct(prodShare(r, ks[i])) + ')'; } });
     });
+    panel(g, { title: 'FSM isoforms per reference transcript', dek: 'Reference transcripts with an FSM, by how many FSM isoforms match them. More than one means redundant isoforms that differ only in their ends.' },
+      function (r) { return sqc(r, 'redundancy'); }, NEEDS.structureQc, function (body, ok) {
+        var e = sqc(ok[0], 'redundancy').fsm_hist.edges;
+        vhist(body, { runs: ok, bins: binNames(e, e.length, true), counts: byRun(ok, function (r) { return sqc(r, 'redundancy').fsm_hist.counts; }), xlab: 'FSM isoforms per reference transcript', xname: 'FSM isoforms' });
+        note(body, ok.map(function (r) { var d = sqc(r, 'redundancy'); return lab(r) + ': ' + N(d.fsm_isoforms) + ' FSM on ' + N(d.fsm_refs) + ' transcripts'; }).join(' · ') + '.');
+      });
     // genes_multi = ends_only + splice_only + both + neither (A35); older bundles have no `neither`.
     panel(g, { title: 'How genes vary', wide: true, dek: 'Genes with two or more isoforms, by what makes the isoforms differ: only their ends (same splicing, ends more than 50 bp apart), only their splicing, or both.' },
       variation, NEEDS.variation, function (body, ok) {
@@ -1212,6 +1311,16 @@
         val: function (r) { var p = priming(r); return pc(p.risk, p.n); },
         tip: function (r) { var p = priming(r); return N(p.risk) + ' of ' + N(p.n) + ' isoforms (' + pct(pc(p.risk, p.n)) + ')'; } });
     });
+    panel(g2, { title: 'Internal-priming risk by group', wide: true, dek: 'The same risk (at least 60% A after the 3′ end) for mono- and multi-exon isoforms, each structural category, and coding vs non-coding isoforms when productivity ran (coding: PRO, PTC, NST; non-coding: NGO).' },
+      function (r) { return sqc(r, 'priming'); }, NEEDS.structureQc, function (body, ok) {
+        var groups = [['by_exons', 'mono', 'Mono-exon'], ['by_exons', 'multi', 'Multi-exon']];
+        CATS.forEach(function (c) { if (ok.some(function (r) { var x = sqc(r, 'priming').by_category[c]; return x && x.n; })) groups.push(['by_category', c, CAT_LABEL[c]]); });
+        if (ok.some(function (r) { return sqc(r, 'priming').by_coding; })) groups.push(['by_coding', 'coding', 'Coding'], ['by_coding', 'noncoding', 'Non-coding']);
+        var at = function (r, i) { var x = sqc(r, 'priming')[groups[i][0]]; return x ? x[groups[i][1]] : null; };
+        hbars(body, { runs: ok, cats: groups.map(function (x) { return x[2]; }), labelW: 110, fmt: function (v) { return pct(v); },
+          vals: byRun(ok, function (r) { return groups.map(function (_x, i) { var v = at(r, i); return v && v.n ? pc(v.risk, v.n) : null; }); }),
+          tip: function (r, i) { var v = at(r, i); return v ? N(v.risk) + ' of ' + N(v.n) + ' isoforms (' + pct(pc(v.risk, v.n)) + ')' : 'not measured'; } });
+      });
   }
 
   function viewReads(root) {

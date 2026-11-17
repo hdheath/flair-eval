@@ -201,7 +201,7 @@ def test_cli_without_new_inputs_writes_only_variation(tmp_path):
     res, out = _cli(tmp_path, [])
     assert res.returncode == 0, res.stderr
     b = json.loads((out / "bundle.json").read_text())
-    assert set(b["sections"]) == {"variation"}
+    assert set(b["sections"]) == {"variation", "structure_qc"}          # section 13 is always written
     lines = (out / "tables" / "ends.tsv").read_text().splitlines()
     assert lines[0].split("\t") == ENDS_COLUMNS and len(lines) == 1 + 6     # chrM dropped
 
@@ -220,7 +220,7 @@ def test_cli_with_refs_genome_and_tusco(tmp_path):
     b = json.loads((out / "bundle.json").read_text())
     assert validate(b, load_schema()) == []
     sec = b["sections"]
-    assert set(sec) == {"ends", "tusco", "priming", "variation"}
+    assert set(sec) == {"ends", "tusco", "priming", "variation", "structure_qc"}
     assert sec["ends"]["refs"]["tss"]["sites"] == 2 and sec["ends"]["refs"]["pas"]["sites"] == 1
     assert sec["ends"]["tss"]["n"] == 6 and sec["ends"]["tes"]["n"] == 6
     assert sec["ends"]["polya_motif"]["n"] == 6

@@ -7,7 +7,7 @@ Machine-readable parts are in `assets/schema/*.json`. Architecture: [DESIGN.md](
 User guide: [usage.md](usage.md); outputs: [output.md](output.md).
 
 Change an interface here and in the schemas together, in the same commit. Rules carry tags
-`A1`–`A40` from the rounds in which they were agreed; code comments cite them, and
+`A1`–`A40`, `A42`–`A44` from the rounds in which they were agreed; code comments cite them, and
 [section 7](#7-rule-index) lists where each one now lives.
 
 `legacy/` holds the old multi-assembler pipeline. Read it and port from it; never edit it.
@@ -24,7 +24,8 @@ Change an interface here and in the schemas together, in the same commit. Rules 
 | `gtf` | yes, unless `genome` is a preset | reference annotation |
 | `platform` | no | `pacbio` \| `ont` |
 | `library` | no | `cDNA` \| `dRNA` |
-| `cage`, `pas`, `junctions`, `spikein_gtf` | no | reserved: parsed, checked and passed through; no step uses them yet. Truth sets for end accuracy come from `--truth` (section 12), not from `cage`/`pas` |
+| `junctions` | no | splice junctions for this sample: STAR `SJ.out.tab` or BED (BED6+, read count in the score column). EVALUATE_STRUCTURE scores every run's junctions against it (section 13, A42) |
+| `cage`, `pas`, `spikein_gtf` | no | reserved: parsed, checked and passed through; no step uses them yet. Truth sets for end accuracy come from `--truth` (section 12), not from `cage`/`pas` |
 
 Relative paths are resolved against the CSV's directory first, then the launch directory (A3).
 
@@ -183,11 +184,12 @@ provenance/end_accuracy/<call>/{precision_recall_summary.tsv, judge.log}   secti
 ```
 structure_metrics.py --isoforms-bed B --isoforms-gtf T --gtf A --sample S --run-json RUN.json \
   --env-json flair_env.json --out BUNDLE_DIR [--regions BED] [--genome G] [--reads R] [--bam B] \
-  [--ref-tss BED] [--ref-pas BED] [--tusco TSV]
+  [--ref-tss BED] [--ref-pas BED] [--tusco TSV] [--junction-file SJ]
 ```
 Writes `bundle.json` and `tables/*`. RUN.json is the run map as JSON. The pipeline always passes
 the genome (A13); without it `junctions.motif_checked = false` and novel junctions are reported
 only as `junctions.novel`. `--ref-tss/--ref-pas/--tusco` add the section 10 output (A27).
+`sections.structure_qc` is always written; `--junction-file` adds its `junction_support` key (section 13).
 
 `tables/isoforms.tsv` columns, in order:
 `isoform_id gene_id chrom start end strand n_exons length category subcategory ref_transcript ref_gene`
@@ -294,6 +296,7 @@ Where each tagged rule lives now.
 | A26–A32, A35 (end references, TUSCO, priming, variation; as built) | 10 |
 | A33, A34 (cross-run data, report rules) | 11 |
 | A36–A40 (truth sheet, end judge, end accuracy section, table, report) | 12 |
+| A42–A44 (structure QC section, junction-file support, report) | 13 |
 
 ## 8. Sections from counts and productivity; run concordance
 Each section is optional, computed only when its inputs exist, and the report keeps working
@@ -533,3 +536,66 @@ On the Ends tab, when any shown run has `sections.end_accuracy`:
   sets** card then names `--truth`.
 - Metric registry rows are not added for truth sets, because their names differ from sample to
   sample.
+
+## 13. Structure QC (SQANTI3-style checks)
+`sections.structure_qc`, written by `structure_metrics.py` for every run
+(`bin/flair_eval_lib/structure_qc.py`). Each key follows a figure or column of SQANTI3's QC
+report. The rules are taken from SQANTI3's definitions and written anew: no SQANTI3 code is
+copied (SQANTI3 is GPL-3).
+
+### Subcategories (A42)
+`subcategories` = `{"ISM": {...}, "NIC": {...}, "NNC": {...}}`, counts of SQANTI3's names:
+- ISM: `3prime_fragment` (lacks the 5′ exons; the 5′-truncation signal), `5prime_fragment`,
+  `internal_fragment`, `intron_retention` (an exon spans more than one reference exon),
+  `mono-exon`. Multi-exon ISMs compare their first and last junction with the matched
+  reference transcript, on the transcript strand.
+- NIC: `combination_of_known_junctions`, `combination_of_known_splicesites`,
+  `intron_retention` (an exon contains a reference intron), `mono-exon_by_intron_retention`.
+- NNC: `at_least_one_novel_splicesite`, `intron_retention`.
+
+### The other keys (A42)
+- `redundancy`: FSM and FSM+ISM isoforms per matched reference transcript.
+  `fsm_isoforms`, `fsm_refs`, `fsm_refs_multi` (references with more than one FSM), the same for
+  FSM+ISM, and `fsm_hist` / `fsm_ism_hist` over edges `[1,2,3,4,5,6,8,11]`.
+- `by_category`: `length` and `exons` histograms per category, with the edges of
+  `histograms.transcript_length` and `histograms.exons_per_isoform`.
+- `ref_recovery`: the same two histograms for reference transcripts in scope (`all`) and for
+  those with an FSM (`fsm`).
+- With the genome (the pipeline always passes it):
+  - `canonical`: `multi_exon`, `all_canonical` (every junction GT-AG, GC-AG or AT-AC), and the
+    same per category.
+  - `rts`: distinct stranded junctions with an RT-switching repeat. The two windows are the 12 nt
+    ending one base into the intron at the donor and the 12 nt ending one base into the
+    downstream exon at the acceptor, read on the transcript strand. A junction is RT-switching
+    when the windows share an 8-nt stretch with at most one mismatch (SQANTI3's
+    `rt_switching.py` defaults). `by_type` splits known/novel × canonical/non-canonical;
+    `isoforms_with_rts` counts multi-exon isoforms with at least one. `params` records the values.
+  - `priming`: the internal-priming risk of section 10 (`down_a_frac` ≥ 0.6) by category
+    (`by_category`) and by `mono`/`multi` exon (`by_exons`), each `{"n", "risk"}`. When
+    productivity ran, `sections.add_sections` adds `by_coding` (`coding` = PRO/PTC/NST,
+    `noncoding` = NGO).
+
+### Support in the sample's junctions file (A43)
+The sample's `junctions` column (section 1), staged as `refs/sj/*` and passed as
+`--junction-file`. It is the same file for every run of the sample, so runs compare against the
+same evidence. A run's own runs.yaml junctions are not used here.
+- STAR `SJ.out.tab` (9 columns; 1-based first and last intron base; unique reads, column 7) or
+  BED (intron `[start, end)`, reads in the score column). Strand is ignored.
+- `junction_support` = `{"file", "md5", "file_junctions" (distinct junctions in the file),
+  "junctions", "supported", "known": {"n", "supported"}, "novel": {"n", "supported"},
+  "multi_exon", "all_supported", "by_category"}`. Supported = at least one read.
+- It is independent evidence only when the file comes from short reads (STAR on Illumina).
+  A file made from the same long reads (intronProspector on the sample's BAM), or one FLAIR was
+  given to correct junctions, supports the runs partly by construction. The report says so and
+  names the file.
+
+### Report (A44)
+- Structure tab:
+  - an ISM/NIC/NNC subcategory chart;
+  - a junction QC panel: all-canonical, RT-switching and junction-file support.
+- Recovery tab: reference recovery by transcript length.
+- Diversity tab: FSM redundancy.
+- Ends tab: priming risk by group.
+- Metric-registry rows, each needing its key: ISM 3′ fragments (share of ISM), isoforms with all
+  junctions canonical, RT-switching junctions, junctions in the junctions file, multi-exon
+  isoforms fully supported, references with more than one FSM.

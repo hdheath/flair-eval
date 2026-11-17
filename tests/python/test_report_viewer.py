@@ -339,6 +339,17 @@ def test_viewer_renders_every_view(tmp_path):
     assert "TUSCO genes vs baseline" in s["wtc11_pacbio"]["agreement"]["cards"]
     hidden = dict(s["wtc11_ont"]["recovery"]["hidden"])
     assert hidden["TUSCO"] == "Hidden: needs the TUSCO gene list (--genome hg38, or --tusco)."  # one-line reason (A34)
+    # Section 13 (A44): structure QC panels on four tabs; the junctions file only on PacBio.
+    for sample, tabs in s.items():
+        assert {"ISM, NIC and NNC subcategories", "Junction quality", "Length and exons by category"} <= set(tabs["structure"]["cards"])
+        assert "Reference transcripts found, by length" in tabs["recovery"]["cards"]
+        assert "FSM isoforms per reference transcript" in tabs["diversity"]["cards"]
+        assert "Internal-priming risk by group" in tabs["ends"]["cards"]
+        assert "3′ fragment (missing 5′ exons)" in tabs["structure"]["text"]
+        assert "Non-coding" in tabs["ends"]["text"]
+    assert "lrgasp-WTC11-illumina-all-STARSJ.out.tab" in s["wtc11_pacbio"]["structure"]["text"]
+    assert "Junctions in the junctions file" in s["wtc11_pacbio"]["structure"]["text"]
+    assert "Junctions-file support: hidden, needs a junctions file for this sample" in s["wtc11_ont"]["structure"]["text"]
 
 
 @needs_node
@@ -346,7 +357,7 @@ def test_old_bundles_still_render(tmp_path):
     """Bundles from before round 3 (no ends/tusco/priming/variation, no isoforms.bed beside them)."""
     for sample, rid, d in fixture_dirs():
         b = json.load(open(os.path.join(d, "bundle.json")))
-        for k in ("ends", "tusco", "priming", "variation"):
+        for k in ("ends", "tusco", "priming", "variation", "structure_qc"):
             b["sections"].pop(k, None)
         dst = tmp_path / "old" / sample / rid
         os.makedirs(dst)
@@ -365,6 +376,9 @@ def test_old_bundles_still_render(tmp_path):
     ont = dict(s["wtc11_ont"]["agreement"]["hidden"])                                # no isoforms.bed
     assert "Isoforms shared between runs (Jaccard)" in ont and "5′ and 3′ end agreement" in ont
     assert "Isoforms by structural category" in s["wtc11_ont"]["structure"]["cards"]
+    st = dict(s["wtc11_ont"]["structure"]["hidden"])
+    assert st["Junction quality"].startswith("Hidden: not in these results")
+    assert "Hidden: not in these results" in dict(s["wtc11_ont"]["diversity"]["hidden"])["FSM isoforms per reference transcript"]
 
 
 @needs_node

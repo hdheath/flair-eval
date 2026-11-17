@@ -707,6 +707,741 @@
               }
             }
           }
+        },
+        "structure_qc": {
+          "type": "object",
+          "description": "CONTRACTS section 13: SQANTI3-style structure QC (bin/flair_eval_lib/structure_qc.py); canonical/rts/priming need the genome, junction_support the sample's junctions file, priming.by_coding productivity",
+          "additionalProperties": false,
+          "required": [
+            "subcategories",
+            "redundancy",
+            "by_category",
+            "ref_recovery"
+          ],
+          "properties": {
+            "subcategories": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ISM",
+                "NIC",
+                "NNC"
+              ],
+              "properties": {
+                "ISM": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "3prime_fragment",
+                    "5prime_fragment",
+                    "internal_fragment",
+                    "intron_retention",
+                    "mono-exon"
+                  ],
+                  "properties": {
+                    "3prime_fragment": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "5prime_fragment": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "internal_fragment": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "intron_retention": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "mono-exon": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "NIC": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "combination_of_known_junctions",
+                    "combination_of_known_splicesites",
+                    "intron_retention",
+                    "mono-exon_by_intron_retention"
+                  ],
+                  "properties": {
+                    "combination_of_known_junctions": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "combination_of_known_splicesites": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "intron_retention": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "mono-exon_by_intron_retention": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "NNC": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "at_least_one_novel_splicesite",
+                    "intron_retention"
+                  ],
+                  "properties": {
+                    "at_least_one_novel_splicesite": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "intron_retention": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            },
+            "redundancy": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "fsm_isoforms",
+                "fsm_refs",
+                "fsm_refs_multi",
+                "fsm_ism_isoforms",
+                "fsm_ism_refs",
+                "fsm_ism_refs_multi",
+                "fsm_hist",
+                "fsm_ism_hist"
+              ],
+              "properties": {
+                "fsm_isoforms": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "fsm_refs": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "fsm_refs_multi": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "fsm_ism_isoforms": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "fsm_ism_refs": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "fsm_ism_refs_multi": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "fsm_hist": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "edges",
+                    "counts"
+                  ],
+                  "properties": {
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "counts": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                },
+                "fsm_ism_hist": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "edges",
+                    "counts"
+                  ],
+                  "properties": {
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "counts": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "by_category": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "length",
+                "exons"
+              ],
+              "properties": {
+                "length": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "edges",
+                    "counts"
+                  ],
+                  "properties": {
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "counts": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  }
+                },
+                "exons": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "edges",
+                    "counts"
+                  ],
+                  "properties": {
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "counts": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "ref_recovery": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "length",
+                "exons"
+              ],
+              "properties": {
+                "length": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "edges",
+                    "all",
+                    "fsm"
+                  ],
+                  "properties": {
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "all": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "fsm": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                },
+                "exons": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "edges",
+                    "all",
+                    "fsm"
+                  ],
+                  "properties": {
+                    "edges": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      }
+                    },
+                    "all": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    },
+                    "fsm": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "canonical": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "multi_exon",
+                "all_canonical",
+                "by_category"
+              ],
+              "properties": {
+                "multi_exon": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "all_canonical": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "by_category": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "n",
+                      "all_canonical"
+                    ],
+                    "properties": {
+                      "n": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "all_canonical": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "rts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "junctions",
+                "rts",
+                "by_type",
+                "isoforms",
+                "isoforms_with_rts",
+                "params"
+              ],
+              "properties": {
+                "junctions": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "rts": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "by_type": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "known_canonical",
+                    "known_noncanonical",
+                    "novel_canonical",
+                    "novel_noncanonical"
+                  ],
+                  "properties": {
+                    "known_canonical": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "n",
+                        "rts"
+                      ],
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "rts": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "known_noncanonical": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "n",
+                        "rts"
+                      ],
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "rts": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "novel_canonical": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "n",
+                        "rts"
+                      ],
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "rts": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "novel_noncanonical": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "n",
+                        "rts"
+                      ],
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "rts": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  }
+                },
+                "isoforms": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "isoforms_with_rts": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "pattern",
+                    "wiggle",
+                    "min_match",
+                    "mismatches"
+                  ],
+                  "properties": {
+                    "pattern": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "wiggle": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "min_match": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "mismatches": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            },
+            "priming": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "by_category",
+                "by_exons"
+              ],
+              "properties": {
+                "by_category": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "n",
+                      "risk"
+                    ],
+                    "properties": {
+                      "n": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "risk": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                },
+                "by_exons": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mono",
+                    "multi"
+                  ],
+                  "properties": {
+                    "mono": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "n",
+                        "risk"
+                      ],
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "risk": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "multi": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "n",
+                        "risk"
+                      ],
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "risk": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  }
+                },
+                "by_coding": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "coding",
+                    "noncoding"
+                  ],
+                  "properties": {
+                    "coding": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "n",
+                        "risk"
+                      ],
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "risk": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "noncoding": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "n",
+                        "risk"
+                      ],
+                      "properties": {
+                        "n": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "risk": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "junction_support": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "file",
+                "md5",
+                "file_junctions",
+                "junctions",
+                "supported",
+                "known",
+                "novel",
+                "multi_exon",
+                "all_supported",
+                "by_category"
+              ],
+              "properties": {
+                "file": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "md5": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "file_junctions": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "junctions": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supported": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "known": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "n",
+                    "supported"
+                  ],
+                  "properties": {
+                    "n": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "supported": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "novel": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "n",
+                    "supported"
+                  ],
+                  "properties": {
+                    "n": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "supported": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "multi_exon": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "all_supported": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "by_category": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "n",
+                      "all_supported"
+                    ],
+                    "properties": {
+                      "n": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "all_supported": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },

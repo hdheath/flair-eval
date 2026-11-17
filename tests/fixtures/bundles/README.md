@@ -85,3 +85,13 @@ flair_adapter.py productivity --isoforms-bed <slice>.bed --genome GRCh38.primary
 python3 -m flair_eval_lib.sections <sample>/<run_id>
 ```
 with `regions.bed` = `chr17  7400000  9400000`.
+
+## Section 13: `sections.structure_qc` (CONTRACTS A42-A43)
+
+Added on 2026-11-16 with `bin/flair_eval_lib/structure_qc.py` from each bundle's `isoforms.bed`
+and `tables/isoforms.tsv` (the categories it recomputes match `categories` in every bundle),
+GENCODE v49 basic chr17, and the GRCh38 genome. `priming.by_coding` comes from the bundle's
+`tables/ends.tsv` and `productivity.tsv`.
+- `wtc11_pacbio` runs carry `junction_support` against the LRGASP WTC11 Illumina STAR
+  `SJ.out.tab` (ENCODE short reads; only the file name and md5 are recorded, the file is not in
+  the repo). `wtc11_ont` has none, which tests the hidden-panel path.

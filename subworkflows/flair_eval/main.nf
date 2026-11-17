@@ -166,11 +166,12 @@ workflow FLAIR_EVAL {
     // ---- evaluate and bundle ------------------------------------------------------------------
     // A13: always the genome (junction motifs); reads/BAM paths are recorded in bundle inputs.
     // A26: the sample's end references and TUSCO list (explicit params or the genome preset);
-    // a missing one is passed as [] and only turns its section off.
+    // a missing one is passed as [] and only turns its section off. Section 13: the sample's
+    // `junctions` file, if any, adds sections.structure_qc.junction_support.
     EVALUATE_STRUCTURE(
         ch_asm.map { id, d, json, _env, _bam, _bai, g, fai, a ->
             def s = S[J[id].sample]
-            [J[id], d, a, g, fai, json, s.ref_tss ?: [], s.ref_pas ?: [], s.tusco ?: [],
+            [J[id], d, a, g, fai, json, s.ref_tss ?: [], s.ref_pas ?: [], s.tusco ?: [], s.junctions ?: [],
              [reads: s.reads?.toString(), bam: s.bam?.toString()]]
         },
         regions

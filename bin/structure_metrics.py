@@ -24,6 +24,11 @@ Round 3 (CONTRACTS A27-A32), main chromosomes only:
   sections.tusco        with --tusco (SQANTI3 tusco_human.tsv; bin/flair_eval_lib/tusco.py)
   sections.priming      with --genome: downstream-A internal-priming risk
   sections.variation    always: genes that vary by ends, splicing or both (variation.py)
+
+Section 13: sections.structure_qc, always (SQANTI3-style checks: ISM/NIC/NNC subcategories,
+redundancy, length and exons by category, reference recovery by length; with --genome also
+canonical junctions, RT switching and priming by group; with --junction-file, support in the sample's junctions file).
+See bin/flair_eval_lib/structure_qc.py.
 """
 
 from __future__ import annotations
@@ -44,8 +49,9 @@ from flair_eval_lib.annotation import (  # noqa: E402
     read_gtf_transcripts)
 from flair_eval_lib.classify import FSM_END_WINDOW, Classifier, Reference  # noqa: E402
 from flair_eval_lib.ends import (  # noqa: E402
-    SiteIndex, end_rows, ends_section, priming_section, write_ends_table)
+    SiteIndex, end_rows, ends_section, md5sum, priming_section, write_ends_table)
 from flair_eval_lib.fasta import Fasta  # noqa: E402
+from flair_eval_lib.structure_qc import read_junction_file, structure_qc_section  # noqa: E402
 from flair_eval_lib.tusco import read_tusco, tusco_section  # noqa: E402
 from flair_eval_lib.variation import variation_section  # noqa: E402
 from flair_eval_lib.metrics import (  # noqa: E402
@@ -74,6 +80,9 @@ def parse_args(argv=None):
     p.add_argument("--ref-pas", help="PolyA_DB-style BED6 of cleavage sites, [pos-1,pos) "
                                      "(enables sections.ends.tes)")
     p.add_argument("--tusco", help="SQANTI3 tusco_human.tsv (enables sections.tusco)")
+    p.add_argument("--junction-file", help="the sample's junctions file, STAR SJ.out.tab or BED with reads "
+                                          "in the score column (enables "
+                                          "sections.structure_qc.junction_support)")
     p.add_argument("--end-window", type=int, default=FSM_END_WINDOW,
                    help="bp window for FSM end matching (default %(default)s)")
     return p.parse_args(argv)
@@ -134,14 +143,19 @@ def build_bundle(args):
     tss_sites = SiteIndex(args.ref_tss) if args.ref_tss else None
     pas_sites = SiteIndex(args.ref_pas) if args.ref_pas else None
     tusco = read_tusco(args.tusco) if args.tusco else None
+    jf_path = getattr(args, "junction_file", None)
+    jf = read_junction_file(jf_path) if jf_path else None
+    jf_meta = {"file": os.path.basename(jf_path), "md5": md5sum(jf_path)} if jf_path else None
 
     ref = Reference(ref_tx)
     clf = Classifier(ref, args.end_window)
     calls = [clf.classify(t) for t in isoforms]
     fasta = Fasta(args.genome) if args.genome else None
+    scope = ref_in_scope(ref_tx, regions)
     try:
-        metrics = summarise(isoforms, calls, ref_in_scope(ref_tx, regions), ref, fasta)
+        metrics = summarise(isoforms, calls, scope, ref, fasta)
         rows = end_rows(isoforms, calls, {t.tid: t for t in ref_tx}, tss_sites, pas_sites, fasta)
+        qc = structure_qc_section(isoforms, calls, ref, scope, fasta, rows, jf, jf_meta)
     finally:
         if fasta is not None:
             fasta.close()
@@ -153,6 +167,7 @@ def build_bundle(args):
     if fasta is not None:
         sections["priming"] = priming_section(rows)
     sections["variation"] = variation_section(isoforms)
+    sections["structure_qc"] = qc
 
     tags = run.get("tags") or {}
     bundle = {
@@ -176,6 +191,7 @@ def build_bundle(args):
             "genome": args.genome, "gtf": args.gtf, "reads": args.reads, "bam": args.bam,
             "regions": args.regions,
             "ref_tss": args.ref_tss, "ref_pas": args.ref_pas, "tusco": args.tusco,
+            "junction_file": jf_path,
             "regions_intervals": regions.as_list() if regions else None,
             "isoforms_in_file": n_read,
             "isoforms_dropped_contigs": n_contig,
