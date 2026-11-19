@@ -477,6 +477,16 @@
   // Section 13 (A42-A44): one key of sections.structure_qc, or null.
   function sqc(r, k) { var q = sec(r, 'structure_qc'); return q && q[k] ? q[k] : null; }
   function jsup(r) { var j = sqc(r, 'junction_support'); return j && isNum(j.junctions) ? j : null; }
+  // A45: support in the sample's sr_junctions file (short reads, scoring only).
+  function srsup(r) { var j = sqc(r, 'sr_junction_support'); return j && isNum(j.junctions) ? j : null; }
+  // False when FLAIR may have seen the short-read file: it is also the sample's junctions file
+  // (same md5) or the run's own junctions file (same name).
+  function srIndependent(r) {
+    var s = srsup(r), j = jsup(r), inj = ((B(r) || {}).inputs || {}).junctions;
+    if (!s) return false;
+    if (j && j.md5 && s.md5 && j.md5 === s.md5) return false;
+    return !(inj && s.file && String(inj).split('/').pop() === s.file);
+  }
   function quant(r) { var q = sec(r, 'quant'); return q && isNum(q.reads_assigned) ? q : null; }
   function compute(r, k) { var c = (B(r) || {}).compute; return c && isNum(c[k]) ? c[k] : null; }
   // End accuracy (A40): sections.end_accuracy, every number from ted_end_precision.py. Fractions
@@ -528,6 +538,7 @@
     hist: OLDER,
     structureQc: OLDER,
     junctionFile: 'needs a junctions file for this sample (the junctions column of samples.csv)',
+    srJunctionFile: 'needs short-read junctions for this sample (the sr_junctions column of samples.csv)',
     others: 'needs a second run on this sample'
   };
 
@@ -583,7 +594,9 @@
     { name: 'Multi-exon isoforms with only canonical junctions', k: 'p', lowerIsWorse: true, needs: 'structureQc', get: function (r) { var c = sqc(r, 'canonical'); return c ? pc(c.all_canonical, c.multi_exon) : null; } },
     { name: 'RT-switching junctions', k: 'p', lowerIsWorse: false, needs: 'structureQc', get: function (r) { var t = sqc(r, 'rts'); return t ? pc(t.rts, t.junctions) : null; } },
     { name: 'Junctions in the sample’s junctions file', top: true, k: 'p', lowerIsWorse: true, needs: 'junctionFile', get: function (r) { var j = jsup(r); return j ? pc(j.supported, j.junctions) : null; } },
-    { name: 'Multi-exon isoforms with every junction in the junctions file', k: 'p', lowerIsWorse: true, needs: 'junctionFile', get: function (r) { var j = jsup(r); return j ? pc(j.all_supported, j.multi_exon) : null; } }
+    { name: 'Multi-exon isoforms with every junction in the junctions file', k: 'p', lowerIsWorse: true, needs: 'junctionFile', get: function (r) { var j = jsup(r); return j ? pc(j.all_supported, j.multi_exon) : null; } },
+    { name: 'Junctions supported by short reads', top: true, k: 'p', lowerIsWorse: true, needs: 'srJunctionFile', get: function (r) { var j = srsup(r); return j ? pc(j.supported, j.junctions) : null; } },
+    { name: 'Multi-exon isoforms with every junction supported by short reads', k: 'p', lowerIsWorse: true, needs: 'srJunctionFile', get: function (r) { var j = srsup(r); return j ? pc(j.all_supported, j.multi_exon) : null; } }
   ]);
   // noRank: listed, but kept out of "Biggest differences" (it repeats the exact-ends row on Ends).
   // sameQuant: ranked only when the run and the baseline counted reads the same way (A21).
@@ -898,17 +911,31 @@
       ['Novel junctions in the junctions file', function (r) { var j = jsup(r); return j ? [j.novel.supported, j.novel.n, 'novel junctions'] : null; }],
       ['Multi-exon isoforms, every junction in the file', function (r) { var j = jsup(r); return j ? [j.all_supported, j.multi_exon, 'multi-exon isoforms'] : null; }]
     ];
-    var anySr = sel().some(function (r) { return jsup(r); });
-    if (!anySr) rows = rows.slice(0, 3);
-    panel(g, { title: 'Junction quality', wide: true, dek: 'Canonical: GT-AG, GC-AG or AT-AC. RT switching: the two sides of the junction share an 8-nt repeat (one mismatch allowed), so it may be a reverse-transcription artefact. Junctions file: the junction is in the sample’s junctions file (samples.csv) with at least one read.' },
-      function (r) { return sqc(r, 'canonical') || jsup(r); }, NEEDS.structureQc, function (body, ok) {
+    // A45: short-read support, its own rows after the junctions-file rows.
+    var srRows = [
+      ['Junctions supported by short reads', function (r) { var j = srsup(r); return j ? [j.supported, j.junctions, 'junctions'] : null; }],
+      ['Known junctions supported by short reads', function (r) { var j = srsup(r); return j ? [j.known.supported, j.known.n, 'known junctions'] : null; }],
+      ['Novel junctions supported by short reads', function (r) { var j = srsup(r); return j ? [j.novel.supported, j.novel.n, 'novel junctions'] : null; }],
+      ['Multi-exon isoforms, every junction in short reads', function (r) { var j = srsup(r); return j ? [j.all_supported, j.multi_exon, 'multi-exon isoforms'] : null; }]
+    ];
+    var anyJf = sel().some(function (r) { return jsup(r); });
+    var anySr = sel().some(function (r) { return srsup(r); });
+    rows = rows.slice(0, 3).concat(anyJf ? rows.slice(3) : [], anySr ? srRows : []);
+    panel(g, { title: 'Junction quality', wide: true, dek: 'Canonical: GT-AG, GC-AG or AT-AC. RT switching: the two sides of the junction share an 8-nt repeat (one mismatch allowed), so it may be a reverse-transcription artefact. Junctions file: the junction is in the sample’s junctions file (samples.csv) with at least one read. Short reads: the same check against the sample’s sr_junctions file, which is used only for scoring.' },
+      function (r) { return sqc(r, 'canonical') || jsup(r) || srsup(r); }, NEEDS.structureQc, function (body, ok) {
         hbars(body, { runs: ok, cats: rows.map(function (x) { return x[0]; }), max: 100, labelW: 270, fmt: function (v) { return pct(v); },
           vals: byRun(ok, function (r) { return rows.map(function (x) { var v = x[1](r); return v ? pc(v[0], v[1]) : null; }); }),
           tip: function (r, i) { var v = rows[i][1](r); return v ? N(v[0]) + ' of ' + N(v[1]) + ' ' + v[2] + ' (' + pct(pc(v[0], v[1])) + ')' : 'not measured'; } });
-        if (anySr) {
+        if (anyJf) {
           var f = jsup(ok.filter(jsup)[0]);
           note(body, 'Junctions file: ' + (f.file || 'the sample’s junctions file') + ', ' + N(f.file_junctions) + ' junctions. This is independent evidence only if the file comes from short reads. If FLAIR was given the same file, or the file was made from the same long reads, support is partly built in.');
         } else note(body, 'Junctions-file support: hidden, ' + NEEDS.junctionFile + '.');
+        if (anySr) {
+          var sr0 = ok.filter(srsup)[0], sf = srsup(sr0);
+          var dep = ok.filter(function (r) { return srsup(r) && !srIndependent(r); });
+          note(body, 'Short-read junctions: ' + (sf.file || 'the sample’s sr_junctions file') + ', ' + N(sf.file_junctions) + ' junctions in the file (sr_junctions column of samples.csv). A junction counts as supported with at least one read (STAR SJ.out.tab: uniquely mapped reads). ' +
+            (dep.length ? 'FLAIR was also given this file in ' + dep.map(function (r) { return lab(r); }).join(', ') + ', so support there is partly built in.' : 'FLAIR was not given this file, so this is independent support.'));
+        } else note(body, 'Short-read support: hidden, ' + NEEDS.srJunctionFile + '.');
       });
     var cats = CATS.filter(function (c) { return sel().some(function (r) { return B(r).categories[c] > 0; }); });
     if (cats.indexOf(state.qcCat) < 0) state.qcCat = cats.indexOf('ISM') >= 0 ? 'ISM' : cats[0];

@@ -353,6 +353,56 @@ def test_viewer_renders_every_view(tmp_path):
 
 
 @needs_node
+def test_short_read_junction_rows(tmp_path):
+    """A45: sr_junction_support gets its own rows and note, beside the junctions-file rows."""
+    root = tmp_path / "b"
+    shutil.copytree(FIXTURES, root)
+    for sample, rid, _d in fixture_dirs():
+        f = root / sample / rid / "bundle.json"
+        b = json.load(open(f))
+        qc = b["sections"]["structure_qc"]
+        if sample == "wtc11_pacbio":       # same file as the junctions column: not independent
+            qc["sr_junction_support"] = copy.deepcopy(qc["junction_support"])
+        else:
+            n = b["junctions"]["total"]
+            qc["sr_junction_support"] = {
+                "file": "sr.SJ.out.tab", "md5": "0" * 32, "file_junctions": 357172, "junctions": n,
+                "supported": n // 2, "known": {"n": n, "supported": n // 2}, "novel": {"n": 0, "supported": 0},
+                "multi_exon": 10, "all_supported": 4, "by_category": {}}
+        json.dump(b, open(f, "w"))
+    out = tmp_path / "r.html"
+    assert build("--bundles", root, "--out", out).returncode == 0
+    s = drive(tmp_path, out)["summary"]
+    ont, pb = s["wtc11_ont"]["structure"]["text"], s["wtc11_pacbio"]["structure"]["text"]
+    for t in (ont, pb):
+        assert "Junctions supported by short reads" in t
+        assert "Novel junctions supported by short reads" in t
+        assert "Multi-exon isoforms, every junction in short reads" in t
+        assert "Short-read support: hidden" not in t
+    # ONT has no junctions column: only the short-read rows, and they are independent
+    assert "sr.SJ.out.tab, 357,172 junctions in the file" in ont
+    assert "FLAIR was not given this file, so this is independent support." in ont
+    assert "Junctions-file support: hidden, needs a junctions file" in ont
+    assert "Junctions in the junctions file" not in ont
+    # PacBio: the short-read file is the junctions file itself, so the note says so
+    assert "Junctions in the junctions file" in pb
+    assert "FLAIR was also given this file in" in pb and "partly built in" in pb
+    for sample in s:
+        assert "Junctions supported by short reads" in s[sample]["diff"]["text"]   # metric row
+
+
+@needs_node
+def test_short_read_rows_hidden_without_file(tmp_path):
+    out = tmp_path / "r.html"
+    assert build("--bundles", FIXTURES, "--out", out).returncode == 0
+    s = drive(tmp_path, out)["summary"]
+    for sample in s:
+        t = s[sample]["structure"]["text"]
+        assert "Short-read support: hidden, needs short-read junctions for this sample (the sr_junctions column of samples.csv)." in t
+        assert "Novel junctions supported by short reads" not in t
+
+
+@needs_node
 def test_old_bundles_still_render(tmp_path):
     """Bundles from before round 3 (no ends/tusco/priming/variation, no isoforms.bed beside them)."""
     for sample, rid, d in fixture_dirs():

@@ -6,14 +6,15 @@
  * pass [] for a missing one and only its section is left out. Writes tables/ends.tsv and
  * sections.ends / tusco / priming / variation.
  * Section 13: sections.structure_qc always; the sample's `junctions` file (STAR
- * SJ.out.tab or BED) is optional and adds structure_qc.junction_support.
+ * SJ.out.tab or BED) is optional and adds structure_qc.junction_support. A45: the sample's
+ * `sr_junctions` file (short reads, scoring only) is optional and adds sr_junction_support.
  */
 process EVALUATE_STRUCTURE {
     tag "${meta.id}"
     label 'process_single'
 
     input:
-    tuple val(meta), path(assemble), path(gtf), path(genome), path(genome_fai), path(env_json), path(ref_tss, stageAs: 'refs/tss/*'), path(ref_pas, stageAs: 'refs/pas/*'), path(tusco, stageAs: 'refs/tusco/*'), path(junction_file, stageAs: 'refs/sj/*'), val(inputs)
+    tuple val(meta), path(assemble), path(gtf), path(genome), path(genome_fai), path(env_json), path(ref_tss, stageAs: 'refs/tss/*'), path(ref_pas, stageAs: 'refs/pas/*'), path(tusco, stageAs: 'refs/tusco/*'), path(junction_file, stageAs: 'refs/sj/*'), path(sr_junction_file, stageAs: 'refs/srsj/*'), val(inputs)
     path(regions)
 
     output:
@@ -39,6 +40,7 @@ JSON
         ${ref_pas ? "--ref-pas ${ref_pas}" : ''} \\
         ${tusco ? "--tusco ${tusco}" : ''} \\
         ${junction_file ? "--junction-file ${junction_file}" : ''} \\
+        ${sr_junction_file ? "--sr-junction-file ${sr_junction_file}" : ''} \\
         --out eval
     """
 
@@ -60,7 +62,7 @@ JSON
             exon_length      : stubHist([0, 50, 100, 150, 200, 300, 500, 1000, 2000, 5000]),
             exons_per_isoform: stubHist([1, 2, 3, 4, 5, 6, 8, 11, 16, 21, 31]),
         ],
-        sections         : stubSections(ref_tss, ref_pas, tusco, junction_file),
+        sections         : stubSections(ref_tss, ref_pas, tusco, junction_file, sr_junction_file),
     ]
     """
     structure_metrics.py --help > /dev/null
@@ -103,7 +105,7 @@ def stubRefMeta(Object f) {
     return [file: f.toString().tokenize('/')[-1], md5: null, sites: 0]
 }
 
-def stubSections(Object refTss, Object refPas, Object tusco, Object junctionFile) {
+def stubSections(Object refTss, Object refPas, Object tusco, Object junctionFile, Object srJunctionFile) {
     def cats = ['FSM', 'ISM', 'NIC', 'NNC', 'genic', 'genic_intron', 'antisense', 'intergenic', 'fusion']
     def sec = [:]
     if (refTss || refPas) {
@@ -125,17 +127,18 @@ def stubSections(Object refTss, Object refPas, Object tusco, Object junctionFile
     }
     sec.priming = [n: 0, risk: 0, down_a_hist: [edges: (0..10).collect { i -> i / 10 }, counts: (0..10).collect { _i -> 0 }]]
     sec.variation = [genes_multi: 0, ends_only: 0, splice_only: 0, both: 0, neither: 0]
-    sec.structure_qc = stubStructureQc(cats, junctionFile)
+    sec.structure_qc = stubStructureQc(cats, junctionFile, srJunctionFile)
     return sec
 }
 
 // Section 13 with zeros (bin/flair_eval_lib/structure_qc.py); the genome is always staged, so
-// canonical, rts and priming are always there; junction_support only with the sample's file.
+// canonical, rts and priming are always there; junction_support only with the sample's file,
+// sr_junction_support only with its sr_junctions file (A45).
 def stubZeroList(List edges) {
     return edges.collect { _e -> 0 }
 }
 
-def stubStructureQc(List cats, Object junctionFile) {
+def stubStructureQc(List cats, Object junctionFile, Object srJunctionFile) {
     def lenEdges = [0, 250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 10000]
     def exEdges = [1, 2, 3, 4, 5, 6, 8, 11, 16, 21, 31]
     def redEdges = [1, 2, 3, 4, 5, 6, 8, 11]
@@ -158,8 +161,15 @@ def stubStructureQc(List cats, Object junctionFile) {
         priming      : [by_category: [:], by_exons: [mono: [n: 0, risk: 0], multi: [n: 0, risk: 0]]],
     ]
     if (junctionFile) {
-        qc.junction_support = [file: junctionFile.toString().tokenize('/')[-1], md5: null, file_junctions: 0, junctions: 0, supported: 0,
-                           known: [n: 0, supported: 0], novel: [n: 0, supported: 0], multi_exon: 0, all_supported: 0, by_category: [:]]
+        qc.junction_support = stubJunctionSupport(junctionFile)
+    }
+    if (srJunctionFile) {
+        qc.sr_junction_support = stubJunctionSupport(srJunctionFile)
     }
     return qc
+}
+
+def stubJunctionSupport(Object f) {
+    return [file: f.toString().tokenize('/')[-1], md5: null, file_junctions: 0, junctions: 0, supported: 0,
+            known: [n: 0, supported: 0], novel: [n: 0, supported: 0], multi_exon: 0, all_supported: 0, by_category: [:]]
 }

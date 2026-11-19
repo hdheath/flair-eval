@@ -7,7 +7,7 @@ Machine-readable parts are in `assets/schema/*.json`. Architecture: [DESIGN.md](
 User guide: [usage.md](usage.md); outputs: [output.md](output.md).
 
 Change an interface here and in the schemas together, in the same commit. Rules carry tags
-`A1`–`A44` from the rounds in which they were agreed; code comments cite them, and
+`A1`–`A45` from the rounds in which they were agreed; code comments cite them, and
 [section 7](#7-rule-index) lists where each one now lives.
 
 `legacy/` holds the old multi-assembler pipeline. Read it and port from it; never edit it.
@@ -25,6 +25,7 @@ Change an interface here and in the schemas together, in the same commit. Rules 
 | `platform` | no | `pacbio` \| `ont` |
 | `library` | no | `cDNA` \| `dRNA` |
 | `junctions` | no | splice junctions for this sample: STAR `SJ.out.tab` or BED (BED6+, read count in the score column). Given to FLAIR's assembly step (A41), and EVALUATE_STRUCTURE scores every run's junctions against it (section 13, A42) |
+| `sr_junctions` | no | short-read splice junctions for this sample: STAR `SJ.out.tab` or BED, as for `junctions`. Scoring only: EVALUATE_STRUCTURE scores every run against it as `structure_qc.sr_junction_support` (section 13, A45). Never given to FLAIR, the adapter or ALIGN |
 | `cage`, `pas`, `spikein_gtf` | no | reserved: parsed, checked and passed through; no step uses them yet. Truth sets for end accuracy come from `--truth` (section 12), not from `cage`/`pas` |
 
 Relative paths are resolved against the CSV's directory first, then the launch directory (A3).
@@ -194,12 +195,14 @@ provenance/end_accuracy/<call>/{precision_recall_summary.tsv, judge.log}   secti
 ```
 structure_metrics.py --isoforms-bed B --isoforms-gtf T --gtf A --sample S --run-json RUN.json \
   --env-json flair_env.json --out BUNDLE_DIR [--regions BED] [--genome G] [--reads R] [--bam B] \
-  [--ref-tss BED] [--ref-pas BED] [--tusco TSV] [--junction-file SJ]
+  [--ref-tss BED] [--ref-pas BED] [--tusco TSV] [--junction-file SJ] [--sr-junction-file SJ]
 ```
 Writes `bundle.json` and `tables/*`. RUN.json is the run map as JSON. The pipeline always passes
 the genome (A13); without it `junctions.motif_checked = false` and novel junctions are reported
 only as `junctions.novel`. `--ref-tss/--ref-pas/--tusco` add the section 10 output (A27).
-`sections.structure_qc` is always written; `--junction-file` adds its `junction_support` key (section 13).
+`sections.structure_qc` is always written; `--junction-file` adds its `junction_support` key and
+`--sr-junction-file` its `sr_junction_support` key (section 13, A45). `inputs.sr_junction_file`
+records the second path.
 
 `tables/isoforms.tsv` columns, in order:
 `isoform_id gene_id chrom start end strand n_exons length category subcategory ref_transcript ref_gene`
@@ -308,6 +311,7 @@ Where each tagged rule lives now.
 | A33, A34 (cross-run data, report rules) | 11 |
 | A36–A40 (truth sheet, end judge, end accuracy section, table, report) | 12 |
 | A42–A44 (structure QC section, junction-file support, report) | 13 |
+| A45 (short-read junctions: samples.csv `sr_junctions`, scoring only) | 1, 13 |
 
 ## 8. Sections from counts and productivity; run concordance
 Each section is optional, computed only when its inputs exist, and the report keeps working
@@ -600,13 +604,33 @@ same evidence. A run's own runs.yaml junctions are not used here.
   given to correct junctions, supports the runs partly by construction. The report says so and
   names the file.
 
+### Short-read junction support (A45)
+The sample's `sr_junctions` column (section 1), staged as `refs/srsj/*` and passed as
+`--sr-junction-file`. It is an independent check scored next to A43, not instead of it.
+- It is used only for scoring. It never reaches FLAIR: not the adapter's `assemble --junctions`,
+  not `jobJunctions()`, not any FLAIR task's inputs. The `junctions` column stays FLAIR's
+  assembly input (A41) and keeps its own `junction_support` block (A43).
+- FLAIR task inputs carry only the sample name, platform and library, so adding the column does
+  not change their task hashes, and `-resume` re-runs only EVALUATE_STRUCTURE and later steps (when launched from the same checkout, since
+  Nextflow hashes `bin/` scripts by path and mtime).
+- Same parsing and scoring as A43 (STAR or BED, strand ignored, supported = at least one read;
+  for STAR, unique reads in column 7). `sr_junction_support` has the shape of
+  `junction_support`.
+- Report: its own rows in the junction QC panel (junctions, known, novel, multi-exon isoforms
+  with every junction supported), a note naming the file, and the metric rows "Junctions
+  supported by short reads" (top-level) and "Multi-exon isoforms with every junction supported
+  by short reads". The note says the support is independent, unless the file has the md5 of the
+  sample's `junctions` file or the name of the job's `inputs.junctions`; then it names those
+  runs as partly self-supported.
+
 ### Report (A44)
 - Structure tab:
   - an ISM/NIC/NNC subcategory chart;
-  - a junction QC panel: all-canonical, RT-switching and junction-file support.
+  - a junction QC panel: all-canonical, RT-switching, junction-file support and short-read
+    support (A45).
 - Recovery tab: reference recovery by transcript length.
 - Diversity tab: FSM redundancy.
 - Ends tab: priming risk by group.
 - Metric-registry rows, each needing its key: ISM 3′ fragments (share of ISM), isoforms with all
   junctions canonical, RT-switching junctions, junctions in the junctions file, multi-exon
-  isoforms fully supported, references with more than one FSM.
+  isoforms fully supported, the two short-read rows (A45), references with more than one FSM.

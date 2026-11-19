@@ -167,12 +167,14 @@ workflow FLAIR_EVAL {
     // A13: always the genome (junction motifs); reads/BAM paths are recorded in bundle inputs.
     // A26: the sample's end references and TUSCO list (explicit params or the genome preset);
     // a missing one is passed as [] and only turns its section off. Section 13: the sample's
-    // `junctions` file, if any, adds sections.structure_qc.junction_support.
+    // `junctions` file, if any, adds sections.structure_qc.junction_support. A45: the sample's
+    // `sr_junctions` file (short reads, scoring only) adds sr_junction_support. It reaches no
+    // FLAIR step: jobJunctions() and ASSEMBLE never see it.
     EVALUATE_STRUCTURE(
         ch_asm.map { id, d, json, _env, _bam, _bai, g, fai, a ->
             def s = S[J[id].sample]
             [J[id], d, a, g, fai, json, s.ref_tss ?: [], s.ref_pas ?: [], s.tusco ?: [], s.junctions ?: [],
-             [reads: s.reads?.toString(), bam: s.bam?.toString()]]
+             s.sr_junctions ?: [], [reads: s.reads?.toString(), bam: s.bam?.toString()]]
         },
         regions
     )
@@ -245,6 +247,8 @@ def bundleInfo(Map j, Map s, List parts) {
             reads   : s.reads?.toString(),
             bam     : s.bam?.toString(),
             junctions: jobJunctions(j, s)?.toString(),
+            // A45: original path of the sample's short-read junctions (scoring only)
+            sr_junction_file: s.sr_junctions?.toString(),
             regions : params.regions ? file(params.regions).toString() : null,
             platform: s.platform,
             library : s.library,

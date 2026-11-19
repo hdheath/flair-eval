@@ -14,7 +14,7 @@ nextflow_process {
                     file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"), file("\${d}/genome.fa"), [],
                     file("\${d}/refs/flair_env.json"),
                     file("\${d}/refs/tss.bed"), file("\${d}/refs/pas.bed"), file("\${d}/refs/tusco.tsv"),
-                    file("\${d}/refs/SJ.out.tab"),
+                    file("\${d}/refs/SJ.out.tab"), file("\${d}/junctions_a.bed"),
                     [reads: null, bam: null],
                 ]
                 input[1] = []
@@ -37,6 +37,11 @@ nextflow_process {
             assert sec.variation.genes_multi == 0
             assert sec.structure_qc.junction_support.file == 'SJ.out.tab'
             assert sec.structure_qc.junction_support.junctions == sec.structure_qc.rts.junctions
+            // A45: the short-read file is scored on its own, staged under refs/srsj/
+            def sr = sec.structure_qc.sr_junction_support
+            assert sr.file == 'junctions_a.bed' && sr.junctions == sec.structure_qc.junction_support.junctions
+            assert sr.md5 != sec.structure_qc.junction_support.md5
+            assert path("${ev}/bundle.json").json.inputs.sr_junction_file == 'refs/srsj/junctions_a.bed'
             def ends = path("${ev}/tables/ends.tsv").readLines()
             assert ends[0].split('\t')[6] == 'd_reftss'
             assert ends.size() == 2
@@ -51,7 +56,7 @@ nextflow_process {
                 input[0] = [
                     [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', label: 'r', tags: [:]]],
                     file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"), file("\${d}/genome.fa"), [],
-                    file("\${d}/refs/flair_env.json"), [], [], [], [],
+                    file("\${d}/refs/flair_env.json"), [], [], [], [], [],
                     [reads: null, bam: null],
                 ]
                 input[1] = []
@@ -63,6 +68,7 @@ nextflow_process {
             def sec = path("${process.out.dir[0][1]}/bundle.json").json.sections
             assert sec.keySet() == ['priming', 'variation', 'structure_qc'] as Set
             assert !sec.structure_qc.containsKey('junction_support')
+            assert !sec.structure_qc.containsKey('sr_junction_support')
         }
     }
 
@@ -75,7 +81,7 @@ nextflow_process {
                 input[0] = [
                     [id: 's/r', sample: 's', run_id: 'r', run: [id: 'r', label: 'r', tags: [:]]],
                     file("\${d}/fake_assemble"), file("\${d}/annotation.gtf"), file("\${d}/genome.fa"), [],
-                    file("\${d}/refs/flair_env.json"), file("\${d}/refs/tss.bed"), [], [], [],
+                    file("\${d}/refs/flair_env.json"), file("\${d}/refs/tss.bed"), [], [], [], file("\${d}/junctions_a.bed"),
                     [reads: null, bam: null],
                 ]
                 input[1] = []
@@ -88,6 +94,8 @@ nextflow_process {
             def sec = path("${ev}/bundle.json").json.sections
             assert sec.keySet() == ['ends', 'priming', 'variation', 'structure_qc'] as Set
             assert sec.structure_qc.subcategories.ISM['3prime_fragment'] == 0 && !sec.structure_qc.containsKey('junction_support')
+            assert sec.structure_qc.sr_junction_support.file == 'junctions_a.bed'      // A45 stub shape
+            assert sec.structure_qc.sr_junction_support.known == [n: 0, supported: 0]
             assert sec.ends.tes == null && sec.ends.refs.pas == null
             assert sec.ends.refs.tss.file == 'tss.bed'
             assert sec.ends.tss.dist_hist.counts.size() == 10

@@ -14,8 +14,8 @@ include { safeId                  } from './keys'
 
 def DEFAULT_FLAIR_GIT() { 'https://github.com/BrooksLabUCSC/flair' }
 def ID_PATTERN()        { '^[A-Za-z0-9][A-Za-z0-9._-]*$' }
-def SAMPLE_COLUMNS()    { ['sample', 'reads', 'bam', 'genome', 'gtf', 'platform', 'library', 'cage', 'pas', 'junctions', 'spikein_gtf'] }
-def SAMPLE_FILE_COLUMNS() { ['reads', 'bam', 'genome', 'gtf', 'cage', 'pas', 'junctions', 'spikein_gtf'] }
+def SAMPLE_COLUMNS()    { ['sample', 'reads', 'bam', 'genome', 'gtf', 'platform', 'library', 'cage', 'pas', 'junctions', 'sr_junctions', 'spikein_gtf'] }
+def SAMPLE_FILE_COLUMNS() { ['reads', 'bam', 'genome', 'gtf', 'cage', 'pas', 'junctions', 'sr_junctions', 'spikein_gtf'] }
 def QUICK_SAMPLE_PARAMS() { ['reads', 'bam', 'genome', 'gtf', 'sample', 'platform', 'library'] }
 def RUN_KEYS()          { ['id', 'flair', 'transcriptome_args', 'junctions', 'quantify', 'productivity', 'own_align', 'label', 'tags'] }
 def FLAIR_SOURCES()     { ['release', 'git', 'env', 'container'] }
@@ -311,6 +311,8 @@ def checkSample(Map row, String where, Object baseDir, List errors) {
         cage       : files.cage,
         pas        : files.pas,
         junctions  : files.junctions,
+        // A45: scoring only (structure_qc.sr_junction_support); never passed to FLAIR.
+        sr_junctions: files.sr_junctions,
         spikein_gtf: files.spikein_gtf,
     ] + sampleRefs(presetKey)
 }

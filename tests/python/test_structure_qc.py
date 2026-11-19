@@ -205,6 +205,27 @@ def test_section_counts(tmp_path, ref_tx, clf):
     assert j["by_category"]["FSM"] == {"n": 2, "all_supported": 0}
 
 
+def test_section_short_read_support_is_its_own_key(ref_tx, clf):
+    """A45: sr_junction_support is scored like junction_support, from its own file."""
+    isoforms = [iso([(100, 200), (300, 400), (500, 600)], name="fsm_a"),
+                iso([(100, 200), (320, 400), (500, 600)], name="nnc")]
+    calls = [clf.classify(t) for t in isoforms]
+    jf = {("chr1", 200, 300): 4}
+    sr = {("chr1", 200, 300): 2, ("chr1", 400, 500): 1, ("chr2", 1, 2): 9}
+    q = structure_qc_section(isoforms, calls, Reference(ref_tx), ref_tx, None, None, jf,
+                             {"file": "ip.bed", "md5": "a"}, sr, {"file": "SJ.out.tab", "md5": "b"})
+    j, s = q["junction_support"], q["sr_junction_support"]
+    assert set(j) == set(s)
+    assert (j["file"], s["file"]) == ("ip.bed", "SJ.out.tab")
+    assert (j["supported"], j["all_supported"]) == (1, 0)
+    assert (s["junctions"], s["supported"], s["file_junctions"]) == (3, 2, 3)
+    assert s["known"] == {"n": 2, "supported": 2} and s["novel"] == {"n": 1, "supported": 0}
+    assert (s["multi_exon"], s["all_supported"]) == (2, 1)
+    only_sr = structure_qc_section(isoforms, calls, Reference(ref_tx), ref_tx, None, None, None,
+                                   None, sr, {"file": "SJ.out.tab", "md5": "b"})
+    assert "junction_support" not in only_sr and only_sr["sr_junction_support"] == s
+
+
 def test_section_with_genome(tmp_path):
     seq = _planted_genome()
     f = _genome(tmp_path, seq)
@@ -297,7 +318,28 @@ def test_cli_junction_file(tmp_path):
     assert j["file"] == "SJ.out.tab" and len(j["md5"]) == 32
     assert (j["junctions"], j["supported"], j["all_supported"], j["multi_exon"]) == (2, 1, 1, 2)
     assert b["inputs"]["junction_file"] == str(sj)
+    assert b["inputs"]["sr_junction_file"] is None and "sr_junction_support" not in q
     assert q["subcategories"]["ISM"]["5prime_fragment"] == 1
+
+    # A45: --sr-junction-file adds sr_junction_support beside junction_support
+    sr = tmp_path / "sr.bed"
+    sr.write_text("chr1\t40\t100\tj\t3\t+\nchr1\t120\t180\tj\t2\t+\n")
+    out2 = tmp_path / "b2"
+    res = subprocess.run([sys.executable, os.path.join(BIN, "structure_metrics.py"),
+                          "--isoforms-bed", str(bed), "--isoforms-gtf", str(igtf), "--gtf", str(gtf),
+                          "--sample", "s", "--run-json", str(rj), "--env-json", str(ej),
+                          "--genome", str(fa), "--junction-file", str(sj),
+                          "--sr-junction-file", str(sr), "--out", str(out2)],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr
+    b2 = json.loads((out2 / "bundle.json").read_text())
+    assert validate(b2, load_schema()) == []
+    q2 = b2["sections"]["structure_qc"]
+    assert q2["junction_support"] == j
+    s = q2["sr_junction_support"]
+    assert s["file"] == "sr.bed" and s["md5"] != j["md5"]
+    assert (s["junctions"], s["supported"], s["all_supported"], s["multi_exon"]) == (2, 2, 2, 2)
+    assert b2["inputs"]["sr_junction_file"] == str(sr)
 
 
 def test_schema_rejects_unknown_structure_qc_key():

@@ -1,0 +1,2 @@
+sample,reads,genome,gtf,sr_junctions
+sampleA,../sampleA.fastq,../genome.fa,../annotation.gtf,no_such_sr.SJ.out.tab

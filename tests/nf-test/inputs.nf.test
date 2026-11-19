@@ -51,6 +51,21 @@ nextflow_pipeline {
         }
     }
 
+    test("A45: a missing sr_junctions file stops the run") {
+        when {
+            params {
+                input  = "${projectDir}/tests/nf-test/inputs/bad/sr_junctions.csv"
+                runs   = "${projectDir}/tests/nf-test/inputs/runs.yaml"
+                outdir = "$outputDir"
+            }
+        }
+        then {
+            assert workflow.failed
+            assert (workflow.stdout + workflow.stderr).join('\n').contains("sr_junctions file 'no_such_sr.SJ.out.tab' does not exist")
+            assert workflow.trace.tasks().size() == 0
+        }
+    }
+
     test("A41: runs.yaml junctions must be an existing file given as text") {
         when {
             params {

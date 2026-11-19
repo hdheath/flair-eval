@@ -27,7 +27,8 @@ Round 3 (CONTRACTS A27-A32), main chromosomes only:
 
 Section 13: sections.structure_qc, always (SQANTI3-style checks: ISM/NIC/NNC subcategories,
 redundancy, length and exons by category, reference recovery by length; with --genome also
-canonical junctions, RT switching and priming by group; with --junction-file, support in the sample's junctions file).
+canonical junctions, RT switching and priming by group; with --junction-file, support in the
+sample's junctions file; with --sr-junction-file, support in its short-read junctions, A45).
 See bin/flair_eval_lib/structure_qc.py.
 """
 
@@ -83,6 +84,9 @@ def parse_args(argv=None):
     p.add_argument("--junction-file", help="the sample's junctions file, STAR SJ.out.tab or BED with reads "
                                           "in the score column (enables "
                                           "sections.structure_qc.junction_support)")
+    p.add_argument("--sr-junction-file", help="the sample's short-read junctions (sr_junctions column), "
+                                             "STAR SJ.out.tab or BED; scoring only (enables "
+                                             "sections.structure_qc.sr_junction_support, A45)")
     p.add_argument("--end-window", type=int, default=FSM_END_WINDOW,
                    help="bp window for FSM end matching (default %(default)s)")
     return p.parse_args(argv)
@@ -146,6 +150,9 @@ def build_bundle(args):
     jf_path = getattr(args, "junction_file", None)
     jf = read_junction_file(jf_path) if jf_path else None
     jf_meta = {"file": os.path.basename(jf_path), "md5": md5sum(jf_path)} if jf_path else None
+    sr_path = getattr(args, "sr_junction_file", None)
+    srjf = read_junction_file(sr_path) if sr_path else None
+    sr_meta = {"file": os.path.basename(sr_path), "md5": md5sum(sr_path)} if sr_path else None
 
     ref = Reference(ref_tx)
     clf = Classifier(ref, args.end_window)
@@ -155,7 +162,8 @@ def build_bundle(args):
     try:
         metrics = summarise(isoforms, calls, scope, ref, fasta)
         rows = end_rows(isoforms, calls, {t.tid: t for t in ref_tx}, tss_sites, pas_sites, fasta)
-        qc = structure_qc_section(isoforms, calls, ref, scope, fasta, rows, jf, jf_meta)
+        qc = structure_qc_section(isoforms, calls, ref, scope, fasta, rows, jf, jf_meta,
+                                  srjf, sr_meta)
     finally:
         if fasta is not None:
             fasta.close()
@@ -192,6 +200,7 @@ def build_bundle(args):
             "regions": args.regions,
             "ref_tss": args.ref_tss, "ref_pas": args.ref_pas, "tusco": args.tusco,
             "junction_file": jf_path,
+            "sr_junction_file": sr_path,
             "regions_intervals": regions.as_list() if regions else None,
             "isoforms_in_file": n_read,
             "isoforms_dropped_contigs": n_contig,

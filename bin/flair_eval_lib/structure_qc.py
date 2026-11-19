@@ -13,6 +13,8 @@ is copied; SQANTI3 is GPL-3):
                    coding/non-coding is added by sections.add_sections when productivity ran
   junction_support support of junctions in the sample's `junctions` file (short reads when
                    that file comes from short reads; see CONTRACTS section 13)
+  sr_junction_support  the same, against the sample's `sr_junctions` file: short reads given
+                   for scoring only and never to FLAIR, so independent evidence (A45)
 
 RT switching (SQANTI3 utilities/rt_switching.py, defaults as sqanti3_qc runs it): for a
 junction, take the 12 nt ending one base into the intron at the donor and the 12 nt ending one
@@ -120,7 +122,9 @@ def structure_qc_section(isoforms: Sequence[Transcript], calls: Sequence[Call],
                          ref: Reference, ref_scope: Sequence[Transcript],
                          fasta: Optional[Fasta], rows=None,
                          jf: Optional[Dict[Tuple[str, int, int], int]] = None,
-                         jf_meta: Optional[Dict] = None) -> Dict:
+                         jf_meta: Optional[Dict] = None,
+                         srjf: Optional[Dict[Tuple[str, int, int], int]] = None,
+                         srjf_meta: Optional[Dict] = None) -> Dict:
     sec: Dict = {
         "subcategories": _subcategories(calls),
         "redundancy": _redundancy(calls),
@@ -135,6 +139,8 @@ def structure_qc_section(isoforms: Sequence[Transcript], calls: Sequence[Call],
             sec["priming"] = _priming(isoforms, rows)
     if jf is not None:
         sec["junction_support"] = _junction_support(isoforms, calls, ref, jf, jf_meta or {})
+    if srjf is not None:
+        sec["sr_junction_support"] = _junction_support(isoforms, calls, ref, srjf, srjf_meta or {})
     return sec
 
 

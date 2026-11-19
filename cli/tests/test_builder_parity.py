@@ -48,7 +48,7 @@ SAMPLE_SETS = [
     {"rows": [dict(S1, extra="1")], "header": ["sample", "reads", "genome", "gtf", "extra"]},
     {"rows": [{"sample": "s", "bam": "x.bam", "genome": "g", "gtf": "a", "platform": "ont",
                "library": "dRNA", "cage": "c", "pas": "p", "junctions": "j",
-               "spikein_gtf": "sirv.gtf"}]},
+               "sr_junctions": "sr.SJ.out.tab", "spikein_gtf": "sirv.gtf"}]},
     {"rows": [{"sample": "s", "reads": "r", "genome": "hg38"}]},             # preset: gtf optional
     {"rows": [{"sample": "s", "reads": "r", "genome": "hg38", "gtf": "own.gtf"}]},
     {"rows": [{"sample": "s", "reads": "r", "genome": "HG38"}]},             # not a preset
@@ -83,6 +83,7 @@ COMMANDS = [
           "library": "cDNA"}], [R1]),
     cmd([S1, dict(S1, sample="s2", reads='/d/a,"b".fq')], [R1, R2]),
     cmd([dict(S1, cage="c.bed", junctions="SJ.out.tab")], [R1]),
+    cmd([dict(S1, junctions="ip.bed", sr_junctions="SJ.out.tab")], [R1]),      # A45
     cmd([dict(S1, bam="x.bam")], [R1]),
     cmd([S1], [dict(R1, id="mine"), R2]),
     cmd([S1], [dict(R1, label="FLAIR 3"), dict(R2, label="flair-dev")]),

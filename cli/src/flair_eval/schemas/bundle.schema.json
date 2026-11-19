@@ -710,7 +710,7 @@
         },
         "structure_qc": {
           "type": "object",
-          "description": "CONTRACTS section 13: SQANTI3-style structure QC (bin/flair_eval_lib/structure_qc.py); canonical/rts/priming need the genome, junction_support the sample's junctions file, priming.by_coding productivity",
+          "description": "CONTRACTS section 13: SQANTI3-style structure QC (bin/flair_eval_lib/structure_qc.py); canonical/rts/priming need the genome, junction_support the sample's junctions file, sr_junction_support the sample's sr_junctions file (A45), priming.by_coding productivity",
           "additionalProperties": false,
           "required": [
             "subcategories",
@@ -1335,6 +1335,113 @@
               }
             },
             "junction_support": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "file",
+                "md5",
+                "file_junctions",
+                "junctions",
+                "supported",
+                "known",
+                "novel",
+                "multi_exon",
+                "all_supported",
+                "by_category"
+              ],
+              "properties": {
+                "file": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "md5": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "file_junctions": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "junctions": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "supported": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "known": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "n",
+                    "supported"
+                  ],
+                  "properties": {
+                    "n": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "supported": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "novel": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "n",
+                    "supported"
+                  ],
+                  "properties": {
+                    "n": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "supported": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "multi_exon": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "all_supported": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "by_category": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "n",
+                      "all_supported"
+                    ],
+                    "properties": {
+                      "n": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "all_supported": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "sr_junction_support": {
               "type": "object",
               "additionalProperties": false,
               "required": [

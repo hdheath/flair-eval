@@ -6,7 +6,7 @@
   var RELEASES = ["3.0.1", "2.2.0"];
   var SOURCES = [["release", "Release"], ["git", "Git branch"], ["env", "Conda env"], ["container", "Container"]];
   var SAMPLE_LABELS = { sample: "sample name", reads: "reads or BAM file", bam: "BAM file", genome: "genome FASTA",
-    gtf: "annotation GTF", platform: "platform", library: "library", cage: "CAGE", pas: "PAS", junctions: "junctions",
+    gtf: "annotation GTF", platform: "platform", library: "library", cage: "CAGE", pas: "PAS", junctions: "junctions", sr_junctions: "short-read junctions",
     spikein_gtf: "spike-in GTF", outdir: "output folder" };
   var GENOME_KINDS = Object.keys(FE.GENOME_PRESETS).map(function (k) { return [k, k + " (lab preset)"]; })
     .concat([["custom", "Custom FASTA"]]);
@@ -19,7 +19,7 @@
     return { uid: uid(), sample: "", nameAuto: true, kind: "reads", path: "",
       genomeKind: prev.genomeKind || "hg38", genome: prev.genome || "", gtf: prev.gtf || "",
       platform: prev.platform || "", library: prev.library || "",
-      cage: "", pas: "", junctions: "", spikein_gtf: "" };
+      cage: "", pas: "", junctions: "", sr_junctions: "", spikein_gtf: "" };
   }
   function blankRun(source) {
     return { uid: uid(), id: "", idAuto: true, source: source || "release", release: source === "release" || !source ? "3.0.1" : "",
@@ -71,7 +71,7 @@
   }
   function toSample(s) {
     var row = { sample: sampleName(s), genome: s.genomeKind === "custom" ? s.genome : s.genomeKind, gtf: s.gtf, platform: s.platform, library: s.library,
-      cage: s.cage, pas: s.pas, junctions: s.junctions, spikein_gtf: s.spikein_gtf };
+      cage: s.cage, pas: s.pas, junctions: s.junctions, sr_junctions: s.sr_junctions, spikein_gtf: s.spikein_gtf };
     row[s.kind] = s.path;
     var clean = FE.cleanSample(row), out = {};
     FE.ALL_SAMPLE_COLUMNS.forEach(function (c) { if (c in clean) out[c] = clean[c]; });
@@ -350,12 +350,13 @@
             options: [["", "Not set"], ["cDNA", "cDNA"], ["dRNA", "Direct RNA"]],
             hint: "Direct RNA aligns with --nvrna.", set: function (v) { s.library = v; } })
         ]),
-        h("details", { class: "more", open: (s.cage || s.pas || s.junctions || s.spikein_gtf) ? "open" : null }, [
+        h("details", { class: "more", open: (s.cage || s.pas || s.junctions || s.sr_junctions || s.spikein_gtf) ? "open" : null }, [
           h("summary", { text: "Extra tracks (optional; not used in the report yet)" }),
           h("div", { class: "grid two" }, [
             textField({ key: k + "cage", label: "CAGE peaks (TSS)", mono: true, value: s.cage, placeholder: "optional", set: function (v) { s.cage = v; } }),
             textField({ key: k + "pas", label: "PAS / 3′-seq peaks (TES)", mono: true, value: s.pas, placeholder: "optional", set: function (v) { s.pas = v; } }),
-            textField({ key: k + "junctions", label: "Short-read junctions (STAR SJ.out.tab)", mono: true, value: s.junctions, placeholder: "optional", set: function (v) { s.junctions = v; } }),
+            textField({ key: k + "junctions", label: "Junctions for FLAIR (STAR SJ.out.tab or BED)", mono: true, value: s.junctions, placeholder: "optional", set: function (v) { s.junctions = v; } }),
+            textField({ key: k + "sr_junctions", label: "Short-read junctions, scoring only", mono: true, value: s.sr_junctions, placeholder: "optional", set: function (v) { s.sr_junctions = v; } }),
             textField({ key: k + "spikein_gtf", label: "Spike-in GTF (e.g. SIRVs)", mono: true, value: s.spikein_gtf, placeholder: "optional", set: function (v) { s.spikein_gtf = v; } })
           ])
         ])

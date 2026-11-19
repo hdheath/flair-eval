@@ -21,7 +21,7 @@
   var FLAIR_KEYS = ["release", "git", "env", "container"];
 
   var SAMPLE_COLUMNS = ["sample", "reads", "bam", "genome", "gtf", "platform", "library"];
-  var TRACK_COLUMNS = ["cage", "pas", "junctions", "spikein_gtf"];
+  var TRACK_COLUMNS = ["cage", "pas", "junctions", "sr_junctions", "spikein_gtf"];
   var ALL_SAMPLE_COLUMNS = SAMPLE_COLUMNS.concat(TRACK_COLUMNS);
   var RUN_DEFAULTS = { transcriptome_args: "", quantify: true, productivity: true, own_align: false };
 

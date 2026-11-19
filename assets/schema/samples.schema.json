@@ -46,7 +46,12 @@
       "type": "string"
     },
     "junctions": {
-      "type": "string"
+      "type": "string",
+      "description": "splice junctions (STAR SJ.out.tab or BED) given to FLAIR assemble (A41) and scored as structure_qc.junction_support"
+    },
+    "sr_junctions": {
+      "type": "string",
+      "description": "short-read splice junctions (STAR SJ.out.tab or BED), scoring only: structure_qc.sr_junction_support (A45); never given to FLAIR"
     },
     "spikein_gtf": {
       "type": "string"

@@ -118,6 +118,12 @@ WTC11,,/data/WTC11.bam,hg38,,ont,dRNA
   evidence only when the file comes from short reads and FLAIR was not given it: junctions taken
   from the same long reads (for example intronProspector on the BAM), or a file FLAIR used to
   correct its reads, support the runs by construction.
+- Optional: `sr_junctions`, short-read splice junctions (STAR `SJ.out.tab` or BED, as above),
+  for scoring only. FLAIR never sees this file. The report shows it as its own rows ("Junctions
+  supported by short reads") next to the `junctions` file support. Use it when `junctions` holds
+  long-read junctions for FLAIR (for example intronProspector) and you want an independent check.
+  Adding it to an existing run and relaunching from the same checkout with `-resume` re-runs
+  only the evaluation.
 - The columns `cage`, `pas` and `spikein_gtf` are accepted and checked, but no step uses them yet.
 - A relative path is looked up next to `samples.csv` first, then in the folder you launch from.
   Full paths avoid any doubt. `flair-eval run` on phoenix starts the job in `--outdir`, so it

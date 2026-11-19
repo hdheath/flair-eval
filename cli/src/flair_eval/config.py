@@ -17,7 +17,7 @@ import yaml
 #: Columns written to every samples.csv, in this order.
 SAMPLE_COLUMNS = ["sample", "reads", "bam", "genome", "gtf", "platform", "library"]
 #: Optional track columns, written only when some sample uses them.
-TRACK_COLUMNS = ["cage", "pas", "junctions", "spikein_gtf"]
+TRACK_COLUMNS = ["cage", "pas", "junctions", "sr_junctions", "spikein_gtf"]
 ALL_SAMPLE_COLUMNS = SAMPLE_COLUMNS + TRACK_COLUMNS
 
 RUN_DEFAULTS = {"transcriptome_args": "", "quantify": True, "productivity": True,

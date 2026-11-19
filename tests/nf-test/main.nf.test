@@ -123,6 +123,18 @@ nextflow_pipeline {
             assert inp('sampleC', 'flair-3.0.1') == null                            // none given
             assert inp('sampleA', 'flair-2.2.0') == "${d}/junctions.SJ.out.tab"     // the run's own, relative to runs.yaml
             assert inp('sampleC', 'flair-2.2.0') == "${d}/junctions.SJ.out.tab"
+            // A45: sr_junctions is scored, never given to FLAIR (sampleC has no junctions column)
+            def bj = { s, r -> path("$outputDir/bundles/${s}/${r}/bundle.json").json }
+            def asm = { s, r -> path("$outputDir/bundles/${s}/${r}/provenance/adapter_assemble.json").json }
+            assert asm('sampleC', 'flair-3.0.1').junctions == null
+            assert asm('sampleA', 'flair-3.0.1').junctions == 'junctions_a.bed'
+            ['sampleA', 'sampleC'].each { s ->
+                ['flair-3.0.1', 'flair-2.2.0'].each { r ->
+                    assert bj(s, r).inputs.sr_junction_file == "${d}/refs/SJ.out.tab"
+                    assert bj(s, r).sections.structure_qc.sr_junction_support.file == 'SJ.out.tab'
+                }
+            }
+            assert bj('sampleC', 'flair-3.0.1').sections.structure_qc.junction_support == null
         }
     }
 
