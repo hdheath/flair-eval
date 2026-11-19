@@ -339,7 +339,8 @@ def test_viewer_renders_every_view(tmp_path):
     assert "TUSCO genes vs baseline" in s["wtc11_pacbio"]["agreement"]["cards"]
     hidden = dict(s["wtc11_ont"]["recovery"]["hidden"])
     assert hidden["TUSCO"] == "Hidden: needs the TUSCO gene list (--genome hg38, or --tusco)."  # one-line reason (A34)
-    # Section 13 (A44): structure QC panels on four tabs; the junctions file only on PacBio.
+    # Section 13 (A44): structure QC panels on four tabs. Junctions-file support (A43) is not
+    # shown (A45): only short-read support, and these fixtures have none.
     for sample, tabs in s.items():
         assert {"ISM, NIC and NNC subcategories", "Junction quality", "Length and exons by category"} <= set(tabs["structure"]["cards"])
         assert "Reference transcripts found, by length" in tabs["recovery"]["cards"]
@@ -347,14 +348,15 @@ def test_viewer_renders_every_view(tmp_path):
         assert "Internal-priming risk by group" in tabs["ends"]["cards"]
         assert "3′ fragment (missing 5′ exons)" in tabs["structure"]["text"]
         assert "Non-coding" in tabs["ends"]["text"]
-    assert "lrgasp-WTC11-illumina-all-STARSJ.out.tab" in s["wtc11_pacbio"]["structure"]["text"]
-    assert "Junctions in the junctions file" in s["wtc11_pacbio"]["structure"]["text"]
-    assert "Junctions-file support: hidden, needs a junctions file for this sample" in s["wtc11_ont"]["structure"]["text"]
+    for sample, tabs in s.items():
+        assert "in the junctions file" not in tabs["structure"]["text"]
+        assert "Junctions-file support" not in tabs["structure"]["text"]
+        assert "Junctions in the sample’s junctions file" not in tabs["diff"]["text"]
 
 
 @needs_node
 def test_short_read_junction_rows(tmp_path):
-    """A45: sr_junction_support gets its own rows and note, beside the junctions-file rows."""
+    """A45: sr_junction_support gets its own rows and note; junctions-file support is not shown."""
     root = tmp_path / "b"
     shutil.copytree(FIXTURES, root)
     for sample, rid, _d in fixture_dirs():
@@ -379,14 +381,13 @@ def test_short_read_junction_rows(tmp_path):
         assert "Novel junctions supported by short reads" in t
         assert "Multi-exon isoforms, every junction in short reads" in t
         assert "Short-read support: hidden" not in t
-    # ONT has no junctions column: only the short-read rows, and they are independent
+    # ONT: a separate short-read file, independent
     assert "sr.SJ.out.tab, 357,172 junctions in the file" in ont
     assert "FLAIR was not given this file, so this is independent support." in ont
-    assert "Junctions-file support: hidden, needs a junctions file" in ont
-    assert "Junctions in the junctions file" not in ont
     # PacBio: the short-read file is the junctions file itself, so the note says so
-    assert "Junctions in the junctions file" in pb
     assert "FLAIR was also given this file in" in pb and "partly built in" in pb
+    for t in (ont, pb):
+        assert "in the junctions file" not in t and "Junctions file:" not in t and "Junctions-file" not in t
     for sample in s:
         assert "Junctions supported by short reads" in s[sample]["diff"]["text"]   # metric row
 

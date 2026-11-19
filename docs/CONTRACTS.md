@@ -601,8 +601,9 @@ same evidence. A run's own runs.yaml junctions are not used here.
   "multi_exon", "all_supported", "by_category"}`. Supported = at least one read.
 - It is independent evidence only when the file comes from short reads (STAR on Illumina).
   A file made from the same long reads (intronProspector on the sample's BAM), or one FLAIR was
-  given to correct junctions, supports the runs partly by construction. The report says so and
-  names the file.
+  given to correct junctions, supports the runs partly by construction. Since every job's FLAIR
+  is given its junctions file (A41), the report does not show this block (A45); it stays in the
+  bundle.
 
 ### Short-read junction support (A45)
 The sample's `sr_junctions` column (section 1), staged as `refs/srsj/*` and passed as
@@ -616,21 +617,20 @@ The sample's `sr_junctions` column (section 1), staged as `refs/srsj/*` and pass
 - Same parsing and scoring as A43 (STAR or BED, strand ignored, supported = at least one read;
   for STAR, unique reads in column 7). `sr_junction_support` has the shape of
   `junction_support`.
-- Report: its own rows in the junction QC panel (junctions, known, novel, multi-exon isoforms
-  with every junction supported), a note naming the file, and the metric rows "Junctions
-  supported by short reads" (top-level) and "Multi-exon isoforms with every junction supported
-  by short reads". The note says the support is independent, unless the file has the md5 of the
+- Report: the only junction-support rows shown. Four rows in the junction QC panel (junctions,
+  known, novel, multi-exon isoforms with every junction supported), a note naming the file, and
+  the metric rows "Junctions supported by short reads" (top-level) and "Multi-exon isoforms with
+  every junction supported by short reads". `junction_support` (A43) is not shown. The note says the support is independent, unless the file has the md5 of the
   sample's `junctions` file or the name of the job's `inputs.junctions`; then it names those
   runs as partly self-supported.
 
 ### Report (A44)
 - Structure tab:
   - an ISM/NIC/NNC subcategory chart;
-  - a junction QC panel: all-canonical, RT-switching, junction-file support and short-read
-    support (A45).
+  - a junction QC panel: all-canonical, RT-switching and short-read support (A45; the
+    junction-file support of A43 is not shown).
 - Recovery tab: reference recovery by transcript length.
 - Diversity tab: FSM redundancy.
 - Ends tab: priming risk by group.
 - Metric-registry rows, each needing its key: ISM 3′ fragments (share of ISM), isoforms with all
-  junctions canonical, RT-switching junctions, junctions in the junctions file, multi-exon
-  isoforms fully supported, the two short-read rows (A45), references with more than one FSM.
+  junctions canonical, RT-switching junctions, the two short-read rows (A45), references with more than one FSM.

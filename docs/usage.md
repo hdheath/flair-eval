@@ -113,15 +113,11 @@ WTC11,,/data/WTC11.bam,hg38,,ont,dRNA
   FLAIR 2.x through `flair correct -j`, 3.0.1 and dev through their `--junction_*` option for that
   format ([details](flair_versions.md#2-assemble-transcriptome--collapse)). A run can use a
   different file with `junctions:` in runs.yaml.
-- The report also shows how many of each run's junctions are in the sample's `junctions` file
-  (always the samples.csv file, so runs compare on the same evidence). This is independent
-  evidence only when the file comes from short reads and FLAIR was not given it: junctions taken
-  from the same long reads (for example intronProspector on the BAM), or a file FLAIR used to
-  correct its reads, support the runs by construction.
 - Optional: `sr_junctions`, short-read splice junctions (STAR `SJ.out.tab` or BED, as above),
-  for scoring only. FLAIR never sees this file. The report shows it as its own rows ("Junctions
-  supported by short reads") next to the `junctions` file support. Use it when `junctions` holds
-  long-read junctions for FLAIR (for example intronProspector) and you want an independent check.
+  for scoring only. FLAIR never sees this file. The report shows how many of each run's junctions
+  it supports ("Junctions supported by short reads"). Support in the `junctions` file is not
+  shown, because FLAIR is given that file. If a run's own `junctions:` is the same short-read
+  file, the report says that run's support is partly built in.
   Adding it to an existing run and relaunching from the same checkout with `-resume` re-runs
   only the evaluation.
 - The columns `cage`, `pas` and `spikein_gtf` are accepted and checked, but no step uses them yet.
